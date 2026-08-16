@@ -833,7 +833,7 @@ func overviewTrendPoint(trend map[string]*orchestrationUsageTrendPoint, date str
 }
 
 func appendOverviewTrend(trend map[string]*orchestrationUsageTrendPoint, run store.OrchestrationRun, timeline []store.OrchestrationEvent, ledger []protocol.OrchestrationUsageEvent, syncs []store.OrchestrationUsageSync, timezoneOffset int) {
-	if len(syncs) > 0 {
+	if shouldUseOrchestrationUsageLedger(timeline, ledger, syncs) {
 		for _, event := range ledger {
 			at := event.OccurredAt
 			if at == 0 {
@@ -976,7 +976,7 @@ func buildOrchestrationRunStatsWithLedger(run store.OrchestrationRun, events []s
 	// These collections are part of the browser contract. Keep them as [] rather
 	// than null when a run has not produced usage yet.
 	stats := orchestrationRunStats{RunID: run.ID, FinishedAt: run.FinishedAt, StartedAt: orchestrationStatsStartTime(run, events), ByCLI: []orchestrationUsageStats{}}
-	if len(syncs) > 0 {
+	if shouldUseOrchestrationUsageLedger(events, ledger, syncs) {
 		return buildLedgerOrchestrationRunStats(run, events, ledger, syncs)
 	}
 	stats.AccountingStatus = "legacy-incomplete"
@@ -1065,6 +1065,36 @@ func buildOrchestrationRunStatsWithLedger(run store.OrchestrationRun, events []s
 	addDerivedTokenTotals(&stats)
 	finalizeOrchestrationRounds(&stats, rounds)
 	return stats
+}
+
+// shouldUseOrchestrationUsageLedger only prefers a local ledger when it is a
+// complete replacement for the per-turn snapshots. Isolated worker homes are
+// intentionally removed after a run; a later ledger scan then reports an
+// unavailable, empty result even though the bridge already persisted native
+// turn usage while the CLI was running.
+func shouldUseOrchestrationUsageLedger(timeline []store.OrchestrationEvent, ledger []protocol.OrchestrationUsageEvent, syncs []store.OrchestrationUsageSync) bool {
+	if len(syncs) == 0 {
+		return false
+	}
+	complete := true
+	for _, sync := range syncs {
+		if sync.Status != "complete" {
+			complete = false
+			break
+		}
+	}
+	if complete && len(ledger) > 0 {
+		return true
+	}
+	for _, event := range timeline {
+		if event.Kind == "turn.usage" && event.Data != nil {
+			return false
+		}
+	}
+	// No snapshots are available, so retain a partial ledger rather than
+	// discarding the only observed accounting data. An empty ledger is not a
+	// data source even when its sync records exist.
+	return len(ledger) > 0
 }
 
 func buildLedgerOrchestrationRunStats(run store.OrchestrationRun, timeline []store.OrchestrationEvent, events []protocol.OrchestrationUsageEvent, syncs []store.OrchestrationUsageSync) orchestrationRunStats {

@@ -86,6 +86,32 @@ func TestBuildLedgerOrchestrationRunStatsNormalizesCalls(t *testing.T) {
 	}
 }
 
+func TestBuildOrchestrationRunStatsFallsBackWhenLedgerSyncIsUnavailable(t *testing.T) {
+	run := store.OrchestrationRun{ID: "orc_isolated_fallback", CreatedAt: 100, FinishedAt: 110, Status: store.OrchestrationCompleted}
+	timeline := []store.OrchestrationEvent{{Kind: "turn.usage", CLI: "claude", Data: map[string]any{
+		"cli": "claude", "model": "claude-sonnet-5", "inputTokens": float64(100), "cacheReadTokens": float64(20), "outputTokens": float64(5), "native": true, "costKnown": true, "costSource": "provider", "estimatedCostUsd": .01,
+	}}}
+	stats := buildOrchestrationRunStatsWithLedger(run, timeline, nil, []store.OrchestrationUsageSync{{Status: "unavailable", Error: "isolated worker runtime is no longer available"}})
+	if stats.AccountingSource != "turn-snapshots" || stats.InputTokens != 100 || stats.CacheReadTokens != 20 || stats.OutputTokens != 5 || stats.TotalTokens != 125 || stats.CallCount != 1 {
+		t.Fatalf("stats = %#v", stats)
+	}
+}
+
+func TestAppendOverviewTrendFallsBackWhenLedgerSyncIsUnavailable(t *testing.T) {
+	trend := map[string]*orchestrationUsageTrendPoint{}
+	appendOverviewTrend(trend, store.OrchestrationRun{CreatedAt: 100}, []store.OrchestrationEvent{{Kind: "turn.usage", CLI: "claude", CreatedAt: 100, Data: map[string]any{
+		"cli": "claude", "model": "claude-sonnet-5", "inputTokens": float64(100), "outputTokens": float64(5), "costKnown": true, "estimatedCostUsd": .01,
+	}}}, nil, []store.OrchestrationUsageSync{{Status: "unavailable"}}, 0)
+	if len(trend) != 1 {
+		t.Fatalf("trend = %#v", trend)
+	}
+	for _, point := range trend {
+		if point.InputTokens != 100 || point.OutputTokens != 5 || point.TotalTokens != 105 || point.CallCount != 1 {
+			t.Fatalf("point = %#v", point)
+		}
+	}
+}
+
 func TestBuildLedgerOrchestrationRunStatsUsesFirstRunStartAcrossRounds(t *testing.T) {
 	run := store.OrchestrationRun{ID: "orc_ledger_rounds", CreatedAt: 100, FinishedAt: 130, Status: store.OrchestrationCompleted}
 	stats := buildOrchestrationRunStatsWithLedger(run, []store.OrchestrationEvent{

@@ -35,9 +35,13 @@ so day boundaries match the user's local calendar. Range filtering is applied
 to persisted usage-event timestamps, not just run creation timestamps.
 
 Both statistics endpoints serialize absent collection fields as empty arrays.
-The browser additionally treats malformed, missing, or non-finite historic
-usage values as zero/empty display values so a partial ledger cannot prevent
-the usage page from rendering.
+The native local ledger is preferred only when its sync is complete and has
+events. If an isolated worker has already cleaned up its private runtime, a
+subsequent ledger scan may be unavailable; the Hub then retains the native
+per-turn usage snapshots recorded during execution. The browser additionally
+treats malformed, missing, or non-finite historic usage values as zero/empty
+display values so a partial ledger cannot prevent the usage page from
+rendering.
 
 ## Implementation
 
