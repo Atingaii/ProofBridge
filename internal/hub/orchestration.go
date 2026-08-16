@@ -709,7 +709,7 @@ func (s *Server) handleUsageOverview(w http.ResponseWriter, r *http.Request, uid
 		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load usage overview")
 		return
 	}
-	overview := orchestrationUsageOverview{Days: days, TimezoneOffset: timezoneOffset, CostKnown: true}
+	overview := orchestrationUsageOverview{Days: days, TimezoneOffset: timezoneOffset, CostKnown: true, Trend: []orchestrationUsageTrendPoint{}, Items: []orchestrationUsageOverviewItem{}}
 	machineSet := map[string]bool{}
 	trend := map[string]*orchestrationUsageTrendPoint{}
 	for _, run := range runs {
@@ -973,7 +973,9 @@ func orchestrationStatsStartTime(run store.OrchestrationRun, events []store.Orch
 }
 
 func buildOrchestrationRunStatsWithLedger(run store.OrchestrationRun, events []store.OrchestrationEvent, ledger []protocol.OrchestrationUsageEvent, syncs []store.OrchestrationUsageSync) orchestrationRunStats {
-	stats := orchestrationRunStats{RunID: run.ID, FinishedAt: run.FinishedAt, StartedAt: orchestrationStatsStartTime(run, events)}
+	// These collections are part of the browser contract. Keep them as [] rather
+	// than null when a run has not produced usage yet.
+	stats := orchestrationRunStats{RunID: run.ID, FinishedAt: run.FinishedAt, StartedAt: orchestrationStatsStartTime(run, events), ByCLI: []orchestrationUsageStats{}}
 	if len(syncs) > 0 {
 		return buildLedgerOrchestrationRunStats(run, events, ledger, syncs)
 	}
@@ -1066,7 +1068,7 @@ func buildOrchestrationRunStatsWithLedger(run store.OrchestrationRun, events []s
 }
 
 func buildLedgerOrchestrationRunStats(run store.OrchestrationRun, timeline []store.OrchestrationEvent, events []protocol.OrchestrationUsageEvent, syncs []store.OrchestrationUsageSync) orchestrationRunStats {
-	stats := orchestrationRunStats{RunID: run.ID, FinishedAt: run.FinishedAt, StartedAt: orchestrationStatsStartTime(run, timeline), Native: true, AccountingStatus: "complete", AccountingSource: "local-cli-ledger", CostKnown: len(events) > 0}
+	stats := orchestrationRunStats{RunID: run.ID, FinishedAt: run.FinishedAt, StartedAt: orchestrationStatsStartTime(run, timeline), Native: true, AccountingStatus: "complete", AccountingSource: "local-cli-ledger", CostKnown: len(events) > 0, ByCLI: []orchestrationUsageStats{}}
 	if stats.StartedAt == 0 {
 		stats.StartedAt = run.CreatedAt
 	}

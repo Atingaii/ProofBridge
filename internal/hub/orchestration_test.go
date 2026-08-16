@@ -28,6 +28,25 @@ func TestBuildOrchestrationRunStatsAggregatesUsage(t *testing.T) {
 	}
 }
 
+func TestUsageStatsSerializeEmptyCollectionsAsArrays(t *testing.T) {
+	stats := buildOrchestrationRunStats(store.OrchestrationRun{ID: "orc_empty", CreatedAt: 100}, nil)
+	raw, err := json.Marshal(stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"byCli":[]`) {
+		t.Fatalf("empty usage breakdown serialized as non-array: %s", raw)
+	}
+
+	overview, err := json.Marshal(orchestrationUsageOverview{Trend: []orchestrationUsageTrendPoint{}, Items: []orchestrationUsageOverviewItem{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(overview), `"trend":[]`) || !strings.Contains(string(overview), `"items":[]`) {
+		t.Fatalf("empty overview collections serialized as non-arrays: %s", overview)
+	}
+}
+
 func TestBuildOrchestrationRunStatsPreservesUsageProvenance(t *testing.T) {
 	run := store.OrchestrationRun{ID: "orc_provenance", CreatedAt: 100, FinishedAt: 110, Status: store.OrchestrationCompleted}
 	stats := buildOrchestrationRunStats(run, []store.OrchestrationEvent{{Kind: "turn.usage", CLI: "codex", Data: map[string]any{

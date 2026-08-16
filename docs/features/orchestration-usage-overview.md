@@ -34,6 +34,11 @@ optional `days` query accepts `7`, `30`, `90`, or `0` (all history). The optiona
 so day boundaries match the user's local calendar. Range filtering is applied
 to persisted usage-event timestamps, not just run creation timestamps.
 
+Both statistics endpoints serialize absent collection fields as empty arrays.
+The browser additionally treats malformed, missing, or non-finite historic
+usage values as zero/empty display values so a partial ledger cannot prevent
+the usage page from rendering.
+
 ## Implementation
 
 1. Aggregate native ledger events in Hub, deriving round boundaries from persisted orchestration round-advance events.
@@ -46,6 +51,8 @@ to persisted usage-event timestamps, not just run creation timestamps.
 5. Keep legacy turn-snapshot fallback behavior and old API fields intact.
 6. Return all task projections in the initial stats response so task switching
    is browser-local and adds no polling, worker, or Redis load.
+7. Keep empty and incomplete historical records displayable; they may show zero
+   usage but must not trip the application error boundary.
 
 ## Exit gates
 
