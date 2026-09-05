@@ -208,6 +208,7 @@ func parseClaudeUsageLog(path string, session protocol.OrchestrationUsageSession
 	}
 	defer file.Close()
 	var events []protocol.OrchestrationUsageEvent
+	byMessage := make(map[string]int)
 	err = scanJSONLines(file, func(sequence int, raw []byte) {
 		var record struct {
 			Timestamp string `json:"timestamp"`
@@ -230,7 +231,21 @@ func parseClaudeUsageLog(path string, session protocol.OrchestrationUsageSession
 		if usage.Input+usage.CacheRead+usage.CacheWrite+usage.Output == 0 {
 			return
 		}
-		events = append(events, usageEvent(session, sequence, record.Timestamp, "anthropic", record.Message.Model, usage.Input, usage.CacheRead, usage.CacheWrite, usage.Output, 0))
+		event := usageEvent(session, sequence, record.Timestamp, "anthropic", record.Message.Model, usage.Input, usage.CacheRead, usage.CacheWrite, usage.Output, 0)
+		if id := record.Message.ID; id != "" {
+			if index, ok := byMessage[id]; ok {
+				// Text and tool blocks can repeat the same provider message.
+				// Preserve its identity and the most complete usage observation.
+				previous := &events[index]
+				previous.InputTokens = max(previous.InputTokens, event.InputTokens)
+				previous.CacheReadTokens = max(previous.CacheReadTokens, event.CacheReadTokens)
+				previous.CacheWriteTokens = max(previous.CacheWriteTokens, event.CacheWriteTokens)
+				previous.OutputTokens = max(previous.OutputTokens, event.OutputTokens)
+				return
+			}
+			byMessage[id] = len(events)
+		}
+		events = append(events, event)
 	})
 	return events, err
 }

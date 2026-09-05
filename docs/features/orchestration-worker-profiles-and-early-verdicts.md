@@ -87,7 +87,7 @@ The `claude-claude` pair and unanimous checker quorum extend this design in
    native resume and remove it after the session exits. Synchronize only native
    session/transcript records into ordinary `/resume` picker locations; never
    copy isolated configuration or credentials.
-4. After the durable final reviewer, record local evidence facts and run two
+4. After an intermediate round's durable reviewer, record local evidence facts and run two
    fresh Agent Verifiers using role 1 and role 2's bound presets. Validate
    their JSON decisions, emit the quorum before choosing the next round, and
    stop only on a two-Agent unanimous pass.

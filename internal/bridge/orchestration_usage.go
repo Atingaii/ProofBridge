@@ -110,8 +110,8 @@ func normalizeNativeUsage(cli, model string, raw json.RawMessage) (orchestration
 	usage := orchestrationUsage{Model: strings.TrimSpace(model), Native: true}
 	usage.InputTokens = get("input_tokens", "inputTokens")
 	usage.OutputTokens = get("output_tokens", "outputTokens")
-	usage.CacheReadTokens = get("cache_read_input_tokens", "cachedInputTokens", "cacheReadTokens")
-	usage.CacheWriteTokens = get("cache_creation_input_tokens", "cacheWriteInputTokens", "cacheWriteTokens")
+	usage.CacheReadTokens = get("cached_input_tokens", "cache_read_input_tokens", "cachedInputTokens", "cacheReadTokens")
+	usage.CacheWriteTokens = get("cache_write_input_tokens", "cache_creation_input_tokens", "cacheWriteInputTokens", "cacheWriteTokens")
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.CacheReadTokens == 0 && usage.CacheWriteTokens == 0 {
 		return orchestrationUsage{}, false
 	}

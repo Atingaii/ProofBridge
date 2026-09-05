@@ -182,8 +182,8 @@ Bridge updates only the current cwd entry in `~/.claude.json` so native Claude
 project metadata points at the Bridge session without touching unrelated
 projects, and materializes the same Claude-written transcript so Claude Code's
 interactive `/resume` picker can show it from the run cwd. It does not add
-model-driven proof strategy or remediation turns. After the durable graph's
-final reviewer, Bridge records local handoff, command, proof-checker, and
+model-driven proof strategy or remediation turns. After an intermediate round's
+durable reviewer, Bridge records local handoff, command, proof-checker, and
 reviewer-boundary facts, then starts two fresh, isolated Agent Verifier calls
 using role 1 and role 2's bound presets. They independently judge handoff
 completeness, command/proof evidence, and the reviewer boundary without seeing
@@ -191,6 +191,10 @@ one another's answer or entering the worker sessions. Recorded facts are
 evidence, not a Bridge-owned completion verdict. A visible `verifier.verdict`
 records the quorum; only unanimous Agent Verifier passes end unused rounds with
 `verified-early`, otherwise the Hub dispatches the next configured round.
+A normally completed final configured reviewer succeeds with `max-turns`,
+without another verifier or initial-plan comparison. This is budget completion,
+not a proof verdict; see
+[configured-round-completion-and-usage.md](features/configured-round-completion-and-usage.md).
 Formal-proof guidance is opt-in
 through the persisted `profile=formal-proof` run setting selected in the
 orchestration UI; the default profile does not activate proof guidance based on
@@ -259,7 +263,10 @@ stores those events idempotently in a separate ledger. Terminal runs trigger a
 sync automatically, while the owner-scoped statistics endpoint and retry route
 support historical backfill. Ledger statistics distinguish non-cached input,
 cache read/write, output, and reasoning; legacy snapshots remain visible but
-are explicitly incomplete. See
+are explicitly incomplete. Codex snapshots accumulate current-turn response
+deltas and ignore repeated notifications; snapshot statistics subtract cached
+Codex input before adding cache separately. Claude native records deduplicate
+by assistant message ID. See
 [docs/features/embedded-cli-usage-ledger.md](features/embedded-cli-usage-ledger.md).
 
 Bridge long-command observation is controlled by

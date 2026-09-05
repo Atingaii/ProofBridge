@@ -38,7 +38,10 @@ Both statistics endpoints serialize absent collection fields as empty arrays.
 The native local ledger is preferred only when its sync is complete and has
 events. If an isolated worker has already cleaned up its private runtime, a
 subsequent ledger scan may be unavailable; the Hub then retains the native
-per-turn usage snapshots recorded during execution. The browser additionally
+per-turn usage snapshots recorded during execution. Snapshot statistics use
+non-cached Codex input, group by CLI and model, and count available snapshots;
+see [configured-round-completion-and-usage.md](configured-round-completion-and-usage.md).
+The browser additionally
 treats malformed, missing, or non-finite historic usage values as zero/empty
 display values so a partial ledger cannot prevent the usage page from
 rendering.

@@ -857,11 +857,7 @@ func appendOverviewTrend(trend map[string]*orchestrationUsageTrendPoint, run sto
 		if event.Kind != "turn.usage" || event.Data == nil {
 			continue
 		}
-		usage := orchestrationUsageFromData(event.Data)
-		if usage.CLI == "" {
-			usage.CLI = event.CLI
-		}
-		usage.applyOfficialCatalogFallback()
+		usage := orchestrationSnapshotUsage(event)
 		point := overviewTrendPoint(trend, overviewDate(event.CreatedAt, timezoneOffset))
 		point.InputTokens += usage.InputTokens
 		point.OutputTokens += usage.OutputTokens
@@ -990,15 +986,12 @@ func buildOrchestrationRunStatsWithLedger(run store.OrchestrationRun, events []s
 		if event.Kind != "turn.usage" || event.Data == nil {
 			continue
 		}
-		usage := orchestrationUsageFromData(event.Data)
-		if usage.CLI == "" {
-			usage.CLI = event.CLI
-		}
+		usage := orchestrationSnapshotUsage(event)
 		if usage.CLI == "" {
 			usage.CLI = "unknown"
 		}
-		usage.applyOfficialCatalogFallback()
 		usageCount++
+		stats.CallCount++
 		stats.InputTokens += usage.InputTokens
 		stats.OutputTokens += usage.OutputTokens
 		stats.CacheReadTokens += usage.CacheReadTokens
@@ -1020,12 +1013,14 @@ func buildOrchestrationRunStatsWithLedger(run store.OrchestrationRun, events []s
 			}
 		}
 		stats.PricingModels = appendUnique(stats.PricingModels, usage.PricingModel)
-		item := byCLI[usage.CLI]
+		key := usage.CLI + "\x00" + usage.Model
+		item := byCLI[key]
 		newItem := item == nil
 		if item == nil {
 			item = &orchestrationUsageStats{CLI: usage.CLI, Model: usage.Model, Estimated: usage.Estimated, CostKnown: usage.CostKnown}
-			byCLI[usage.CLI] = item
+			byCLI[key] = item
 		}
+		item.CallCount++
 		item.InputTokens += usage.InputTokens
 		item.OutputTokens += usage.OutputTokens
 		item.CacheReadTokens += usage.CacheReadTokens
@@ -1254,6 +1249,21 @@ func (s *Server) handleOrchestrationUsageSyncResult(ctx context.Context, agentID
 	if err := s.store.ReplaceOrchestrationUsage(ctx, result); err != nil {
 		slog.Error("[hub] persist usage ledger failed", "run_id", result.RunID, "error", err)
 	}
+}
+
+// Snapshots preserve native provider inputs; ledger rows already exclude
+// cache reads. Normalize only snapshots, including historical records.
+func orchestrationSnapshotUsage(event store.OrchestrationEvent) orchestrationUsageStats {
+	usage := orchestrationUsageFromData(event.Data)
+	if usage.CLI == "" {
+		usage.CLI = event.CLI
+	}
+	// Catalog pricing expects the original provider convention.
+	usage.applyOfficialCatalogFallback()
+	if strings.EqualFold(usage.CLI, "codex") {
+		usage.InputTokens = max(int64(0), usage.InputTokens-usage.CacheReadTokens)
+	}
+	return usage
 }
 
 func orchestrationUsageFromData(data map[string]any) orchestrationUsageStats {

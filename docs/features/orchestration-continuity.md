@@ -131,14 +131,17 @@ context in the same `runID`.
   receive lightweight, browser-visible proof workflow reminders up front so the
   CLI records target obligations, build/scan/audit evidence, and blockers in
   its normal result.
-- After a durable final reviewer, Bridge records local evidence facts and runs
+- After an intermediate round's durable reviewer, Bridge records local evidence facts and runs
   two fresh Agent Verifiers with role 1 and role 2's bound presets. Each
   independently evaluates handoff completeness, command/proof evidence, and
   the reviewer boundary; neither can see the other's answer or enter the
   worker's native session. Bridge emits a visible `verifier.verdict`; only a
   two-Agent unanimous pass may set
   `run.end.data.terminalReason=verified-early` and end unused scheduled turns;
-  every other verdict leaves the relay schedule unchanged.
+  every other verdict leaves the relay schedule unchanged. A normally finished
+  final configured reviewer ends with `max-turns`, without another verifier or
+  initial-plan comparison. Follow-ups still reuse the same run ID; see
+  [configured-round-completion-and-usage.md](configured-round-completion-and-usage.md).
 - Uploaded orchestration file contents are sent to the Bridge with the current
   prompt, while `user.message` events persist only file metadata in
   `event.data.files` so the timeline can show what was attached without

@@ -3,13 +3,14 @@
 ## Goals
 
 - Make early orchestration completion depend on two independent Agent Verifiers
-  after the durable graph's final reviewer, rather than a Bridge-local semantic
+  after an intermediate round's durable reviewer, rather than a Bridge-local semantic
   gate.
 - Preserve local checker, command, handoff, and formal-proof observations as
   auditable facts supplied to those agents.
 - Continue through the configured collaboration rounds when the agents do not
-  unanimously confirm completion; only report an unresolved result after the
-  final configured round.
+  unanimously confirm completion. A normally completed final configured round
+  succeeds without another verifier or initial-plan comparison; see
+  [configured-round-completion-and-usage.md](configured-round-completion-and-usage.md).
 - Present planning and plan review as pre-collaboration stages, not as
   collaboration round numbers.
 - Remove the `strict-workspace` (automatic execution limited to the workspace)
@@ -37,11 +38,11 @@
 
 1. Collect local handoff, command, proof-checker, and reviewer-boundary facts
    for the verifier prompt without short-circuiting the Agent Verifier calls.
-2. Run the two role-bound verifier agents only after the durable `review`
-   node. Require both to pass for `verified-early`.
+2. Run the two role-bound verifier agents after an intermediate round's durable
+   `review` node. Require both to pass for `verified-early`.
 3. On a non-final round, emit ordinary task completion after a continuing
    verifier verdict so the Hub dispatches the next graph. On the final round,
-   emit an unresolved terminal result only after the verifier quorum continues.
+   skip the verifier barrier and emit successful completion with `max-turns`.
 4. Hide collaboration round metadata on `planner` and `plan-reviewer` timeline
    events and label graph navigation from actual round-bearing work graphs.
 5. Hide `strict-workspace` in the frontend selection list while preserving
@@ -49,13 +50,13 @@
 
 ## Exit Gates
 
-- Two Agent Verifiers run after every durable reviewer task, including when a
+- Two Agent Verifiers run after intermediate durable reviewer tasks, even when a
   local fact is missing.
 - Missing formal checker evidence advances an intermediate round instead of
   ending the run immediately.
 - An early successful end requires two Agent Verifier passes.
-- A final unresolved reviewer verdict ends only after the configured last
-  round.
+- A normally completed final reviewer succeeds without a verifier. Genuine
+  execution errors and cancellation retain their terminal states.
 - Planning and plan review never display as `Round 1/N`.
 - Frontend build, focused Bridge tests, task-graph tests, full Go tests, doc
   lint, and experimental deployment health checks pass.

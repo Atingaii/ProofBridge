@@ -1683,14 +1683,14 @@ func TestDurableTaskTerminalReleasesCodexWriterBeforeDelivery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if event.Kind == "run.error" {
+			if event.Kind == "run.end" || event.Kind == "run.error" {
 				terminal, ok = event, true
 			}
 		case <-deadline:
-			t.Fatal("timed out waiting for durable reviewer failure")
+			t.Fatal("timed out waiting for durable reviewer completion")
 		}
 	}
-	if !ok || terminal.Task == nil || terminal.Task.AttemptID != "ota_writer" {
+	if !ok || terminal.Kind != "run.end" || terminal.Task == nil || terminal.Task.AttemptID != "ota_writer" {
 		t.Fatalf("durable terminal event = %#v", terminal)
 	}
 	manager.mu.Lock()

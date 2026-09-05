@@ -52,7 +52,12 @@ total tokens = non-cached input + cache read + cache write + output
 Reasoning is displayed separately because it is part of output. Cumulative
 token snapshots are converted to non-negative deltas; response-level events
 are used directly when present. Unknown records are ignored rather than
-invented. No raw log text or source path crosses the reverse WebSocket.
+invented. Claude assistant text/tool blocks sharing a message ID contribute
+one usage record, retaining the largest observed counters. Live Codex
+app-server snapshots accumulate current-turn response deltas and suppress
+duplicate notifications; snapshot fallback subtracts cached input exactly once.
+See [configured-round-completion-and-usage.md](configured-round-completion-and-usage.md).
+No raw log text or source path crosses the reverse WebSocket.
 
 Cost remains an API-list-price equivalent. It is calculated only from a strict
 provider and model catalog match (or an explicit provider-reported cost), and

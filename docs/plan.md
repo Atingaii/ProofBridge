@@ -63,11 +63,14 @@ Let a single user talk from any browser to Codex CLI running on a private machin
   `claude-b` sessions. Native sessions are reused across turns so the
   user can `resume` them from the workspace. The Bridge only relays worker
   output and turn context; it does not inject remediation into worker sessions.
-  After the durable final reviewer, two fresh Agent Verifiers use the role
+  After an intermediate round's durable reviewer, two fresh Agent Verifiers use the role
   presets to assess the recorded handoff and evidence. Local checker facts are
   supplied to them but do not short-circuit review. A run ends early only when
   both agents accept the structured, independently evidenced final handoff;
-  otherwise it continues through the configured rounds.
+  otherwise it continues through intermediate configured rounds. A normally
+  completed final configured reviewer succeeds without another verifier or
+  initial-plan comparison; see
+  [configured-round-completion-and-usage.md](features/configured-round-completion-and-usage.md).
   Saved CLI presets can be pinned independently to `claude`, `codex-a`,
   `codex-b`, `claude-a`, and `claude-b` worker slots without changing
   machine-wide configuration.

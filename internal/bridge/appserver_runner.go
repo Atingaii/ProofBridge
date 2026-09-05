@@ -416,6 +416,7 @@ func (s *appServerTurnScope) matchesNonTerminal(ctx context.Context, msg appServ
 
 func (r *CodexAppServerRunner) readEvents(ctx context.Context, client *appServerClient, req RunnerRequest, scope *appServerTurnScope, onUpdate func(update RunnerUpdate), done chan<- appServerTurnResult) {
 	var result RunnerResult
+	var tokenUsage appServerUsageAccumulator
 	var text strings.Builder
 	var pendingFailedTool *RunnerToolEvent
 	var unscopedEmptyError error
@@ -563,14 +564,12 @@ func (r *CodexAppServerRunner) readEvents(ctx context.Context, client *appServer
 				if !scope.matchesNonTerminal(ctx, msg) {
 					continue
 				}
-				var payload any
 				if msg.Method == "thread/tokenUsage/updated" {
-					payload = msg.Params["tokenUsage"]
-				} else {
-					payload = msg.Params
-				}
-				if payload != nil {
-					if raw, marshalErr := json.Marshal(payload); marshalErr == nil && len(raw) > 0 {
+					if raw := tokenUsage.observe(msg.Params["tokenUsage"]); len(raw) > 0 {
+						result.Usage = raw
+					}
+				} else if !tokenUsage.observed {
+					if raw, marshalErr := json.Marshal(msg.Params); marshalErr == nil && len(raw) > 0 {
 						result.Usage = raw
 					}
 				}

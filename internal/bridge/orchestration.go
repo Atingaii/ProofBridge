@@ -1087,6 +1087,13 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 			RunEndData:  m.relayRunEndData(cli, workerSlot, workerPair, sessionState, runCWD),
 			Data:        relayTurnEndData(cli, workerSlot, sessionState),
 		})
+		if turnStatus == "success" && configuredReviewerRoundsComplete(payload) {
+			// The user-selected execution budget is authoritative. Planning
+			// markers and verifier opinions cannot turn normal exhaustion into
+			// an execution error. This is not an independent proof verdict.
+			terminalReason = "max-turns"
+			break
+		}
 		shouldRunVerifier := turnStatus == "success" && shouldRunAgentVerifier(payload)
 		if shouldRunVerifier {
 			verdict, verifierAgents := m.evaluateAgentVerifierQuorum(ctx, payload, mode, profile, workerPair, firstCLI, history)
@@ -1121,24 +1128,6 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 		}
 	}
 	finalContent := relayTerminalContent(history)
-	if payload.TaskGraph != nil && len(payload.TaskGraph.Tasks) == 1 {
-		task := payload.TaskGraph.Tasks[0]
-		finalRound := payload.TaskGraph.MaxRounds <= 0 || payload.TaskGraph.Round >= payload.TaskGraph.MaxRounds
-		if task.Role == store.TaskRoleReviewer && finalRound && terminalReason != "verified-early" {
-			reason := fmt.Sprintf("configured collaboration rounds exhausted after round %d; Agent Verifiers did not unanimously confirm completion", payload.TaskGraph.Round)
-			if verifierVerdict != nil && verifierVerdict.Reason != "" {
-				reason += ": " + verifierVerdict.Reason
-			}
-			m.emit(payload.RunID, protocol.OrchestrationEventPayload{
-				Kind:          "run.error",
-				Status:        store.OrchestrationFailed,
-				Error:         reason,
-				Content:       finalContent,
-				RunConclusion: runConclusionForStatus(store.OrchestrationFailed, reason, history),
-			})
-			return
-		}
-	}
 	finalRunEndData := m.runEndDataWithNativeResumeForSession(&protocol.RunEndData{
 		WorkerPair:         workerPair,
 		CodexThreadID:      sessionState.CodexThreadID,
@@ -1176,6 +1165,11 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 
 func shouldRunAgentVerifier(payload protocol.OrchestrationStartPayload) bool {
 	return payload.TaskGraph != nil && len(payload.TaskGraph.Tasks) == 1 && payload.TaskGraph.Tasks[0].Role == store.TaskRoleReviewer
+}
+
+func configuredReviewerRoundsComplete(payload protocol.OrchestrationStartPayload) bool {
+	return shouldRunAgentVerifier(payload) &&
+		(payload.TaskGraph.MaxRounds <= 0 || payload.TaskGraph.Round >= payload.TaskGraph.MaxRounds)
 }
 
 func durableTaskHasFormalCheck(history []orchestrationTurn) bool {

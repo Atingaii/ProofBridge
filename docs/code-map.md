@@ -23,6 +23,7 @@ This is the detailed "I want to change X, where do I edit?" source. Keep
 | Orchestration plan/progress workspace | `internal/hub/task_graph.go:handleOrchestrationProgress`, `internal/hub/task_graph.go:reduceOrchestrationPlan`, `frontend/src/app/components/OrchestrationProofProgress.tsx:OrchestrationProofProgress`, `frontend/src/app/components/OrchestrationProgressMap.tsx:OrchestrationProgressMap`, `frontend/src/app/pages/OrchestrationWorkspace.tsx` |
 | Orchestration cancel-before-delete state machine | `internal/store/store.go:RequestDeleteOrchestrationRun`, `internal/store/store.go:UpdateOrchestrationRunStatusIfAllowed`, `internal/store/task_graph.go:CreateNextOrchestrationTaskGraph`, `internal/hub/orchestration.go:handleDeleteOrchestration` |
 | Orchestration runtime/usage statistics | `internal/hub/orchestration.go:handleOrchestrationStats`, `internal/bridge/usage_ledger.go:scanOrchestrationUsage`, `internal/store/orchestration_usage.go:ReplaceOrchestrationUsage`, `internal/usagepricing/catalog.go:EstimateNormalized`, `frontend/src/app/pages/OrchestrationStatsPage.tsx` |
+| Configured-round completion and snapshot accounting | `internal/bridge/orchestration.go:configuredReviewerRoundsComplete`, `internal/bridge/appserver_usage.go:appServerUsageAccumulator`, `internal/hub/orchestration.go:orchestrationSnapshotUsage`, `docs/features/configured-round-completion-and-usage.md` |
 | Administrator activity/usage dashboard | `internal/hub/admin.go:handleAdminUsage`, `internal/hub/admin.go:handleAdminUserUsage`, `internal/store/admin_analytics.go:AdminUsageSnapshot`, `internal/store/admin_analytics.go:AdminUserDetailSnapshot`, `frontend/src/app/pages/AdminUsagePage.tsx`, `frontend/src/app/pages/AdminUserUsagePage.tsx` |
 | Runner abstraction | `internal/bridge/runner.go`, `internal/bridge/appserver_runner.go`, `internal/bridge/acp_runner.go`, `internal/bridge/acp_client.go`, `internal/bridge/session.go` |
 | Strict workspace child isolation | `internal/bridge/command_process.go:configureStrictWorkspaceCommand`, `internal/bridge/strict_workspace_linux.go:RunStrictWorkspaceSandbox`, `internal/bridge/strict_workspace_paths.go:strictWorkspaceReadOnlyPaths` |
@@ -340,10 +341,12 @@ This is the detailed "I want to change X, where do I edit?" source. Keep
    `internal/bridge/orchestration_relay.go:relayCanConverge` permits only an
    evidenced reviewer/critic turn to finish below the configured turn ceiling.
    `internal/bridge/orchestration_verifier.go:evaluateAgentVerifierQuorum`
-   runs two isolated role-preset judgments after recording
+   runs two isolated role-preset judgments on intermediate rounds after recording
    `internal/bridge/orchestration_verifier.go:collectOrchestrationVerifierFacts`;
    the facts are visible evidence rather than a local completion gate, and the
-   quorum emits the visible early-stop verdict.
+   quorum emits the visible early-stop verdict. A normally finished final
+   reviewer instead succeeds without another verifier, through
+   `internal/bridge/orchestration.go:configuredReviewerRoundsComplete`.
 9. `internal/bridge/orchestration_relay.go:runRelayCLI`,
    `internal/bridge/orchestration_codex.go:runCodexInteractive`, and
    `internal/bridge/orchestration_claude.go:runClaudeInteractive` preserve the
