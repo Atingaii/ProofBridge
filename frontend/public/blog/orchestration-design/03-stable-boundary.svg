@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="t d">
+<title id="t">以证据决定结束或修订</title>
+<desc id="d">小黑把证据砝码放上歪斜的秤，足够时通往通过的门打开，不足时缺口落入下一轮桶。</desc>
+<rect width="1600" height="900" fill="#fff"/>
+<g fill="none" stroke="#151515" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M760 280 L760 620"/><path d="M605 341 C703 328 831 328 929 342"/><path d="M768 339 L705 438"/><path d="M768 339 L831 438"/>
+  <path d="M649 438 C694 452 744 452 788 438"/><path d="M801 438 C847 452 894 452 938 438"/><path d="M707 620 C741 636 781 637 817 620"/>
+  <path d="M570 674 C660 651 858 650 950 674"/>
+  <path d="M1014 303 L1207 303 L1207 603 L1014 603Z"/><path d="M1050 603 L1050 351 L1175 351 L1175 603"/><path d="M1180 477 C1184 477 1188 477 1192 477"/>
+  <path d="M392 603 C435 577 477 565 525 560"/><path d="M946 560 C979 566 1000 575 1016 590"/><path d="M529 560 C548 544 567 531 587 521"/>
+</g>
+<g fill="#101010">
+  <path d="M366 504 C342 482 348 442 373 420 C398 399 438 404 458 431 C477 456 463 492 440 510 C418 527 385 523 366 504Z"/>
+  <circle cx="390" cy="449" r="7" fill="#fff"/><circle cx="420" cy="451" r="7" fill="#fff"/>
+</g>
+<g fill="none" stroke="#151515" stroke-width="5" stroke-linecap="round"><path d="M389 513 L377 587 M428 513 L440 580"/><path d="M378 547 L337 575 M440 544 L493 559"/></g>
+<g><path d="M617 397 L661 397 L670 438 L608 438Z" fill="#2466d1" opacity=".9"/><path d="M676 383 L716 383 L725 438 L669 438Z" fill="#151515" opacity=".92"/><path d="M826 414 L858 414 L865 438 L819 438Z" fill="#e76732" opacity=".92"/></g>
+<g fill="none" stroke="#e76732" stroke-width="6" stroke-linecap="round"><path d="M938 438 C974 431 992 420 1015 397"/><path d="M1237 455 C1290 455 1326 474 1362 504"/><path d="M586 521 C558 497 536 475 522 451"/></g>
+<g fill="#e76732"><path d="M1009 388 l20 6 -12 18 z"/><path d="M1355 494 l19 18 -25 3 z"/><path d="M515 462 l2 -27 19 18 z"/></g>
+<g font-family="Arial,'PingFang SC','Microsoft YaHei',sans-serif" font-size="28" font-weight="600">
+  <text x="578" y="363" fill="#2466d1" transform="rotate(-3 578 363)">证据</text><text x="1056" y="331" fill="#151515">PASS</text>
+  <text x="1265" y="548" fill="#2466d1" transform="rotate(4 1265 548)">有依据再结束</text><text x="420" y="414" fill="#e76732" transform="rotate(-5 420 414)">缺口 → 下一轮</text>
+</g>
+<g fill="none" stroke="#2466d1" stroke-width="3" opacity=".65"><path d="M1272 626 C1322 650 1357 676 1388 712"/></g>
+</svg>

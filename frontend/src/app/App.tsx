@@ -6,6 +6,7 @@ import { initialLanguage, uiText, type Language } from './lib/i18n';
 
 // Page modules are independent interaction surfaces. Loading them on demand
 // keeps initial login and workspace navigation responsive on slower networks.
+const BlogOrchestrationDesignPage = lazy(() => import('./pages/BlogOrchestrationDesignPage').then(({ BlogOrchestrationDesignPage }) => ({ default: BlogOrchestrationDesignPage })));
 const ConversationSnapshotPage = lazy(() => import('./pages/ConversationSnapshotPage').then(({ ConversationSnapshotPage }) => ({ default: ConversationSnapshotPage })));
 const HelpPage = lazy(() => import('./pages/HelpPage').then(({ HelpPage }) => ({ default: HelpPage })));
 const LoginScreen = lazy(() => import('./pages/LoginScreen').then(({ LoginScreen }) => ({ default: LoginScreen })));
@@ -36,6 +37,7 @@ export default function App() {
   const isShareRoute = path.startsWith('/share/');
   const isHelpRoute = path === '/help' || path === '/help/' || path === '/hlep' || path === '/hlep/';
   const isUpdatesRoute = path === '/updates' || path === '/updates/';
+  const isBlogOrchestrationRoute = path === '/blog/orchestration-design' || path === '/blog/orchestration-design/';
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDarkMode);
@@ -48,7 +50,7 @@ export default function App() {
   }, [language]);
 
   useEffect(() => {
-    if (isShareRoute || isHelpRoute || isUpdatesRoute) {
+    if (isShareRoute || isHelpRoute || isUpdatesRoute || isBlogOrchestrationRoute) {
       setBooting(false);
       return;
     }
@@ -56,7 +58,7 @@ export default function App() {
       .then((data) => setUser(data.user))
       .catch(() => setUser(null))
       .finally(() => setBooting(false));
-  }, [isHelpRoute, isShareRoute, isUpdatesRoute]);
+  }, [isBlogOrchestrationRoute, isHelpRoute, isShareRoute, isUpdatesRoute]);
 
   useEffect(() => {
     const handlePop = () => setPath(window.location.pathname);
@@ -97,6 +99,8 @@ export default function App() {
     page = <HelpPage language={language} setLanguage={setLanguage} isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} />;
   } else if (isUpdatesRoute) {
     page = <UpdatesPage language={language} setLanguage={setLanguage} isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} />;
+  } else if (isBlogOrchestrationRoute) {
+    page = <BlogOrchestrationDesignPage />;
   } else if (!user) {
     page = <LoginScreen onLogin={setUser} language={language} setLanguage={setLanguage} t={t} />;
   } else if (isSnapshotRoute) {
