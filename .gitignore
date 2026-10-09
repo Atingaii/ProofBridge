@@ -10,3 +10,8 @@ docs/private/
 frontend/node_modules/
 frontend/dist/
 internal/web/.static.nobody-backup-*/
+
+# Keep local task evidence and personal journals out of source publication.
+.trellis/tasks/
+.trellis/workspace/
+garden-gpt-image-2/
