@@ -76,7 +76,7 @@ func TestSecurityHeaders(t *testing.T) {
 func TestStaticHandlerSPAFallbackRoutes(t *testing.T) {
 	s := &Server{}
 
-	for _, path := range []string{"/conversation-snapshot", "/share/shr_example"} {
+	for _, path := range []string{"/conversation-snapshot", "/share/shr_example", "/blog/orchestration-design", "/blog/orchestration-design/"} {
 		rr := httptest.NewRecorder()
 		s.staticHandler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
 

@@ -533,6 +533,7 @@ func startNohupBridge(ctx context.Context, opts linkOptions) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start background bridge: %w", err)
 	}
+	pid := cmd.Process.Pid
 	if err := cmd.Process.Release(); err != nil {
 		return fmt.Errorf("release background bridge process: %w", err)
 	}
@@ -540,17 +541,17 @@ func startNohupBridge(ctx context.Context, opts linkOptions) error {
 	if pidPath == "" {
 		pidPath = filepath.Join(opts.ServiceDir, opts.Hash+".pid")
 	}
-	if err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", cmd.Process.Pid)), 0o600); err != nil {
-		if process, findErr := os.FindProcess(cmd.Process.Pid); findErr == nil {
+	if err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", pid)), 0o600); err != nil {
+		if process, findErr := os.FindProcess(pid); findErr == nil {
 			_ = process.Kill()
 		}
 		return fmt.Errorf("record background bridge pid: %w", err)
 	}
 	confirmed := waitForBridgeConnected(opts.LogPath, 10*time.Second)
 	if confirmed {
-		fmt.Printf("codex-bridge connected in background: pid=%d log=%s\n", cmd.Process.Pid, opts.LogPath)
+		fmt.Printf("codex-bridge connected in background: pid=%d log=%s\n", pid, opts.LogPath)
 	} else {
-		fmt.Fprintf(os.Stderr, "codex-bridge started in background but Hub connection is not confirmed: pid=%d log=%s\n", cmd.Process.Pid, opts.LogPath)
+		fmt.Fprintf(os.Stderr, "codex-bridge started in background but Hub connection is not confirmed: pid=%d log=%s\n", pid, opts.LogPath)
 		printTail(opts.LogPath, 40)
 	}
 	return nil

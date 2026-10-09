@@ -68,6 +68,65 @@ func TestClaimReadyTaskIsAtomic(t *testing.T) {
 	}
 }
 
+func TestIndependentCompletionClosesOnlyEligibleGraph(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		role          string
+		verdict       string
+		active        bool
+		wantCompleted bool
+	}{
+		{"worker pass", TaskRoleWorker, "pass", false, true},
+		{"integrator pass", TaskRoleIntegrator, "pass", false, true},
+		{"planner ignored", TaskRolePlanner, "pass", false, false},
+		{"plan reviewer ignored", TaskRolePlanReviewer, "pass", false, false},
+		{"failed verification", TaskRoleWorker, "continue", false, false},
+		{"another worker active", TaskRoleWorker, "pass", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := openTestStore(t)
+			graph := createTestTaskGraph(t, st)
+			if _, err := st.db.ExecContext(ctx, `UPDATE orchestration_tasks SET role=? WHERE id=?`, tc.role, graph.Tasks[0].ID); err != nil {
+				t.Fatal(err)
+			}
+			if tc.active {
+				if _, err := st.db.ExecContext(ctx, `UPDATE orchestration_task_graphs SET parallel_limit=2 WHERE id=?`, graph.ID); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, ok, err := st.ClaimReadyTask(ctx, graph.Tasks[1].ID, ""); err != nil || !ok {
+					t.Fatalf("claim sibling: %v %v", ok, err)
+				}
+			}
+			task, attempt, ok, err := st.ClaimReadyTask(ctx, graph.Tasks[0].ID, "")
+			if err != nil || !ok {
+				t.Fatalf("claim: %v %v", ok, err)
+			}
+			evidence := map[string]any{"runEnd": &protocol.RunEndData{TerminalReason: "verified-early", VerifierVerdict: &protocol.VerifierVerdict{Status: tc.verdict}}}
+			if ok, err := st.UpdateTaskAttempt(ctx, task.ID, "stale-attempt", task.PayloadDigest, TaskSucceeded, evidence, ""); err != nil || ok {
+				t.Fatalf("stale attempt accepted: %v %v", ok, err)
+			}
+			if ok, err := st.UpdateTaskAttempt(ctx, task.ID, attempt.ID, task.PayloadDigest, TaskSucceeded, evidence, ""); err != nil || !ok {
+				t.Fatalf("finish: %v %v", ok, err)
+			}
+			updated, err := st.TaskGraphByRun(ctx, graph.RunID)
+			if err != nil || (updated.Status == TaskGraphCompleted) != tc.wantCompleted {
+				t.Fatalf("graph=%#v err=%v", updated, err)
+			}
+			if tc.wantCompleted {
+				for _, next := range updated.Tasks[1:] {
+					if next.Status != TaskCanceled || next.CurrentAttemptID != "" {
+						t.Fatalf("successor was executed: %#v", next)
+					}
+					if _, _, ok, err := st.ClaimReadyTask(ctx, next.ID, ""); err != nil || ok {
+						t.Fatalf("claim after completion: %v %v", ok, err)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestTaskGraphRequiresReviewerAndPreservesEvidence(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t)

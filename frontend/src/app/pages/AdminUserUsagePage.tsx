@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ChevronRight, Coins, FileText, Layers3, MessageSquare, Monitor, RefreshCw, Search, ShieldCheck, Workflow } from 'lucide-react';
+import { beginStatsRequest, StatsTimeoutError } from '../lib/statsRequest';
 import { api } from '../lib/api';
+import { useStatsRequest } from '../lib/useStatsRequest';
 import type { AdminConversationContent, AdminConversationContentItem, AdminConversationUsage, AdminUserUsageDetail } from '../lib/types';
 import type { UIText } from '../lib/i18n';
 import { Button, Input } from '../components/ui';
@@ -23,42 +25,20 @@ function statusStyle(status: string) {
 }
 
 export function AdminUserUsagePage({ userID, t, navigate }: { userID: string; t: UIText; navigate: (path: string) => void }) {
-  const [detail, setDetail] = useState<AdminUserUsageDetail | null>(null);
   const [range, setRange] = useState<Range>(30);
   const [kind, setKind] = useState<Kind>('all');
   const [query, setQuery] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [selected, setSelected] = useState<AdminConversationUsage | null>(null);
-  const [content, setContent] = useState<AdminConversationContent | null>(null);
-  const [contentLoading, setContentLoading] = useState(false);
-  const [contentError, setContentError] = useState('');
-
-  const load = async () => {
-    setLoading(true); setError('');
-    try {
-      const timezoneOffset = new Date().getTimezoneOffset();
-      const data = await api<{ detail: AdminUserUsageDetail }>(`/api/admin/users/${encodeURIComponent(userID)}/usage?days=${range}&timezoneOffset=${timezoneOffset}`);
-      setDetail(data.detail);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t.failedLoadOrchestration);
-    } finally {
-      setLoading(false);
-    }
-  };
-  useEffect(() => { void load(); }, [range, userID]);
-
-  const openConversation = async (item: AdminConversationUsage) => {
-    setSelected(item); setContent(null); setContentError(''); setContentLoading(true);
-    try {
-      const data = await api<{ conversation: AdminConversationContent }>(`/api/admin/users/${encodeURIComponent(userID)}/conversations/${encodeURIComponent(item.kind)}/${encodeURIComponent(item.id)}`);
-      setContent(data.conversation);
-    } catch (err) {
-      setContentError(err instanceof Error ? err.message : t.failedLoadOrchestration);
-    } finally {
-      setContentLoading(false);
-    }
-  };
+  const [selection, setSelection] = useState<{ userID: string; item: AdminConversationUsage } | null>(null);
+  const selected = selection?.userID === userID ? selection.item : null;
+  const timeoutText = t.task === '任务' ? '统计请求超时，请重试。' : 'Statistics request timed out. Please retry.';
+  const loadingText = t.task === '任务' ? '正在加载统计…' : 'Loading statistics…';
+  const fetchDetail = useCallback(async (signal: AbortSignal) => {
+    const timezoneOffset = new Date().getTimezoneOffset();
+    const data = await api<{ detail: AdminUserUsageDetail }>(`/api/admin/users/${encodeURIComponent(userID)}/usage?days=${range}&timezoneOffset=${timezoneOffset}`, { signal });
+    return data.detail;
+  }, [range, userID]);
+  const { data: detail, loading, error, reload: load } = useStatsRequest(`admin-user:${userID}:${range}`, fetchDetail, t.failedLoadOrchestration, timeoutText);
+  const openConversation = (item: AdminConversationUsage) => setSelection({ userID, item });
 
   const conversations = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -69,18 +49,18 @@ export function AdminUserUsagePage({ userID, t, navigate }: { userID: string; t:
   const ranges: { value: Range; label: string }[] = [{ value: 7, label: t.last7Days }, { value: 30, label: t.last30Days }, { value: 90, label: t.last90Days }, { value: 0, label: t.allTime }];
   const kinds: { value: Kind; label: string }[] = [{ value: 'all', label: t.allConversations }, { value: 'chat', label: t.chatConversations }, { value: 'orchestration', label: t.orchestrationConversations }];
 
-  return <div className="min-h-screen overflow-x-hidden bg-background text-foreground">
+  return <div className="phone-page min-h-screen overflow-x-hidden bg-background text-foreground">
     <header className="flex min-h-14 items-center justify-between gap-3 border-b border-border px-4 py-2 md:px-8">
       <div className="flex min-w-0 items-center gap-3"><ShieldCheck className="h-5 w-5 shrink-0 text-primary" /><div className="min-w-0"><h1 className="truncate text-sm font-semibold">{t.userConversationDetails}</h1><p className="truncate text-xs text-muted-foreground">{detail?.username || userID}</p></div></div>
       <div className="flex shrink-0 items-center gap-2"><Button variant="ghost" size="icon" onClick={() => void load()} disabled={loading} aria-label={t.refresh} title={t.refresh}><RefreshCw className={loading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} /></Button><Button variant="secondary" size="sm" onClick={() => navigate('/admin/usage')}><ArrowLeft className="mr-1.5 h-3.5 w-3.5" /><span className="hidden sm:inline">{t.backToAdminDashboard}</span></Button></div>
     </header>
     <main className="mx-auto max-w-7xl space-y-5 p-4 md:p-8">
-      {error && <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
+      {error && <div role="alert" className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"><span>{error}</span><Button variant="secondary" size="sm" onClick={load}>{t.retry}</Button></div>}
       <section className="flex flex-col gap-4 border-b border-border pb-5 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0"><p className="text-xs font-medium uppercase text-muted-foreground">{t.adminDashboard}</p><h2 className="mt-1 truncate text-xl font-semibold">{detail?.username || t.userConversationDetails}</h2><p className="mt-1 text-sm text-muted-foreground">{t.userConversationDetailsSubtitle}</p></div>
         <Control label={t.timeRange}>{ranges.map((item) => <Choice key={item.value} active={range === item.value} onClick={() => setRange(item.value)}>{item.label}</Choice>)}</Control>
       </section>
-      {loading && !detail ? <div className="flex justify-center p-16"><RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" /></div> : detail ? <>
+      {loading && !detail ? <div role="status" aria-label={loadingText} className="flex items-center justify-center gap-2 p-16 text-sm text-muted-foreground"><RefreshCw className="h-5 w-5 animate-spin" />{loadingText}</div> : detail ? <>
         <section className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
           <Summary icon={MessageSquare} label={t.sessionsMetric} value={chats.toLocaleString()} detail={t.chatConversations} />
           <Summary icon={Workflow} label={t.orchestrationRunsMetric} value={orchestrations.toLocaleString()} detail={t.orchestrationConversations} />
@@ -96,19 +76,85 @@ export function AdminUserUsagePage({ userID, t, navigate }: { userID: string; t:
         </section>
       </> : null}
     </main>
-    <Sheet open={selected !== null} onOpenChange={(open) => { if (!open) { setSelected(null); setContent(null); setContentError(''); } }}>
+    <Sheet open={selected !== null} onOpenChange={(open) => { if (!open) setSelection(null); }}>
       <SheetContent className="w-[min(94vw,760px)] gap-0 sm:max-w-[760px]">
         <SheetHeader className="border-b border-border pr-12">
           <SheetTitle className="truncate text-base">{selected?.title || t.conversationContent}</SheetTitle>
           <SheetDescription>{t.conversationContentSubtitle}</SheetDescription>
         </SheetHeader>
         <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
-          {contentLoading && <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"><RefreshCw className="h-4 w-4 animate-spin" />{t.loadingConversationContent}</div>}
-          {contentError && <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{contentError}</div>}
-          {content && <ConversationContentView content={content} t={t} />}
+          {selected && <ConversationContentRequest key={`${userID}:${selected.kind}:${selected.id}`} userID={userID} item={selected} t={t} />}
         </div>
       </SheetContent>
     </Sheet>
+  </div>;
+}
+
+function ConversationContentRequest({ userID, item, t }: { userID: string; item: AdminConversationUsage; t: UIText }) {
+  const [pages, setPages] = useState<{ key: string; content: AdminConversationContent }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const rootRef = useRef<HTMLDivElement>(null);
+  const oldestRef = useRef<AdminConversationContent | null>(null);
+  const requestRef = useRef<ReturnType<typeof beginStatsRequest<AdminConversationContent>> | null>(null);
+  const mountedRef = useRef(false);
+  const zh = t.task === '任务';
+  const load = useCallback(() => {
+    if (requestRef.current) return;
+    const previous = oldestRef.current;
+    const params = new URLSearchParams({ limit: '200' });
+    if (previous) {
+      if (!previous.hasMoreBefore) return;
+      if (item.kind === 'orchestration' && (previous.nextBeforeSeq || 0) > 0) params.set('beforeSeq', String(previous.nextBeforeSeq));
+      else if (item.kind === 'chat' && Number.isFinite(previous.nextBeforeCreatedAt) && previous.nextBeforeId) {
+        params.set('beforeCreatedAt', String(previous.nextBeforeCreatedAt));
+        params.set('beforeId', previous.nextBeforeId);
+      } else { setError(zh ? '历史分页游标不可用，请关闭后重新打开。' : 'History cursor is unavailable. Close and reopen this conversation.'); return; }
+    }
+    const container = rootRef.current?.parentElement;
+    const scrollHeight = container?.scrollHeight || 0;
+    const scrollTop = container?.scrollTop || 0;
+    setLoading(true); setError('');
+    const request = beginStatsRequest(async signal => {
+      const data = await api<{ conversation: AdminConversationContent }>(`/api/admin/users/${encodeURIComponent(userID)}/conversations/${encodeURIComponent(item.kind)}/${encodeURIComponent(item.id)}?${params}`, { signal });
+      return data.conversation;
+    });
+    requestRef.current = request;
+    void request.promise.then(content => {
+      if (!mountedRef.current || requestRef.current !== request) return;
+      if (previous && content.hasMoreBefore && (item.kind === 'orchestration'
+        ? (content.nextBeforeSeq || 0) >= (previous.nextBeforeSeq || 0)
+        : content.nextBeforeCreatedAt === previous.nextBeforeCreatedAt && content.nextBeforeId === previous.nextBeforeId)) {
+        throw new Error(zh ? '历史分页未推进，请重试。' : 'History cursor did not advance. Please retry.');
+      }
+      oldestRef.current = content;
+      setPages(current => [{ key: params.toString(), content }, ...current]);
+      if (previous) window.requestAnimationFrame(() => {
+        if (!mountedRef.current || !container) return;
+        container.scrollTop = scrollTop + Math.max(0, container.scrollHeight - scrollHeight);
+      });
+    }).catch(reason => {
+      if (!mountedRef.current || requestRef.current !== request) return;
+      const timedOut = reason instanceof StatsTimeoutError || (reason instanceof Error && 'status' in reason && reason.status === 504);
+      setError(timedOut ? (zh ? '对话内容加载超时，请重试。' : 'Conversation request timed out. Please retry.') : reason instanceof Error ? reason.message : t.failedLoadOrchestration);
+    }).finally(() => {
+      if (!mountedRef.current || requestRef.current !== request) return;
+      requestRef.current = null; setLoading(false);
+    });
+  }, [userID, item.kind, item.id, zh, t.failedLoadOrchestration]);
+  useEffect(() => {
+    mountedRef.current = true; load();
+    return () => { mountedRef.current = false; requestRef.current?.cancel(); requestRef.current = null; };
+  }, [load]);
+  const latest = pages[pages.length - 1]?.content;
+  return <div ref={rootRef} className="space-y-4">
+    {pages.length > 0 && <p className="text-xs text-muted-foreground">{zh ? '按页展示对话记录；同一轮内容可能分布在多个历史片段中。' : 'History is shown in pages; one turn may span several history fragments.'}</p>}
+    {oldestRef.current?.hasMoreBefore && <Button variant="secondary" size="sm" disabled={loading} onClick={load}>{loading ? t.loadingEarlierEvents : t.loadEarlierEvents}</Button>}
+    {loading && <div role="status" className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground"><RefreshCw className="h-4 w-4 animate-spin" />{t.loadingConversationContent}</div>}
+    {error && <div role="alert" className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"><span>{error}</span><Button variant="secondary" size="sm" disabled={loading} onClick={load}>{t.retry}</Button></div>}
+    {latest && !latest.prompt && !pages.some(page => page.content.items.length > 0) && <p className="text-sm text-muted-foreground">{oldestRef.current?.hasMoreBefore ? (zh ? '当前页没有可展示内容，可继续加载更早记录。' : 'This page has no displayable content. Earlier history is available.') : t.noConversationContent}</p>}
+    {latest?.prompt && <ConversationContentView content={{ ...latest, items: [] }} t={t} />}
+    {pages.filter(page => page.content.items.length > 0).map(page => <ConversationContentView key={page.key} content={{ ...page.content, prompt: undefined }} t={t} />)}
   </div>;
 }
 

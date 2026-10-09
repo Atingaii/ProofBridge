@@ -5,7 +5,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -41,10 +44,18 @@ type formalProofHarnessResult struct {
 	NotesPath     string
 	Assistant     string
 	Created       bool
+	Followup      bool
 	Extracted     []string
 	Copied        []string
 	Prompt        string
 	BootstrapNote string
+}
+
+type formalProofPromptMarker struct {
+	SchemaVersion string `json:"schemaVersion"`
+	Digest        string `json:"digest"`
+	Initial       bool   `json:"initial"`
+	Applied       bool   `json:"applied"`
 }
 
 type formalProofHarnessFile struct {
@@ -68,36 +79,110 @@ func prepareFormalProofHarness(cfg *config.Config, payload protocol.Orchestratio
 	if err := os.MkdirAll(filepath.Dir(notesPath), 0o700); err != nil {
 		return result, fmt.Errorf("create formal-proof notes directory %q: %w", filepath.Dir(notesPath), err)
 	}
-	result.Created = !formalProofNotesExists(notesPath)
-	decoded, err := decodeFormalProofHarnessFiles(cfg, payload.Files)
+	markerPath := formalProofPromptMarkerPath(projectDir, payload)
+	digest := formalProofPromptDigest(payload)
+	marker, existed, err := readFormalProofPromptMarker(markerPath)
 	if err != nil {
 		return result, err
 	}
-	if result.Created || payload.Resume {
+	if existed && marker.Digest != digest {
+		return result, errors.New("formal-proof prompt identity changed for the same run and prompt sequence")
+	}
+	if !existed {
+		marker = formalProofPromptMarker{SchemaVersion: "formal-proof-prompt-v1", Digest: digest, Initial: !formalProofNotesExists(notesPath)}
+		if err := writeFormalProofPromptMarker(markerPath, marker); err != nil {
+			return result, err
+		}
+	}
+	result.Created = !existed && marker.Initial
+	result.Followup = !marker.Initial
+	if !marker.Applied {
+		decoded, err := decodeFormalProofHarnessFiles(cfg, payload.Files)
+		if err != nil {
+			return result, err
+		}
 		if err := materializeFormalProofProjectFiles(projectDir, decoded, &result); err != nil {
 			return result, err
 		}
+		result.Assistant = detectProofAssistantForTask(projectDir, exactOrchestrationTaskPrompt(payload))
+		if result.Assistant == "" {
+			result.Assistant = "unknown"
+		}
+		if marker.Initial {
+			if err := writeFormalProofNotes(payload, result, decoded); err != nil {
+				return result, err
+			}
+		} else if err := appendFormalProofFollowup(payload, result); err != nil {
+			return result, err
+		}
+		marker.Applied = true
+		if err := writeFormalProofPromptMarker(markerPath, marker); err != nil {
+			return result, err
+		}
+	} else if !formalProofNotesExists(notesPath) {
+		return result, errors.New("formal-proof notes disappeared after prompt preparation")
 	}
-	result.Assistant = detectProofAssistantForTask(projectDir, payload.Prompt)
+	result.Assistant = detectProofAssistantForTask(projectDir, exactOrchestrationTaskPrompt(payload))
 	if result.Assistant == "" {
 		result.Assistant = "unknown"
 	}
-	if result.Created {
-		if err := writeFormalProofNotes(payload, result, decoded); err != nil {
-			return result, err
-		}
-	} else if payload.Resume {
-		if err := appendFormalProofFollowup(payload, result); err != nil {
-			return result, err
-		}
-	}
-	result.Prompt = formalProofHarnessPrompt(payload.Prompt, result, payload.Resume)
+	result.Prompt = formalProofHarnessPrompt(payload.Prompt, result, result.Followup)
 	if result.Created {
 		result.BootstrapNote = fmt.Sprintf("Formal-proof notes created at %s. Source project and CLI working directory: %s.", notesPath, projectDir)
 	} else {
 		result.BootstrapNote = fmt.Sprintf("Formal-proof project reused at %s. Latest request was appended to %s.", projectDir, notesPath)
 	}
 	return result, nil
+}
+
+func exactOrchestrationTaskPrompt(payload protocol.OrchestrationStartPayload) string {
+	if prompt := strings.TrimSpace(payload.TaskPrompt); prompt != "" {
+		return prompt
+	}
+	return strings.TrimSpace(payload.Prompt)
+}
+
+func formalProofPromptMarkerPath(projectDir string, payload protocol.OrchestrationStartPayload) string {
+	identity := strconv.FormatInt(payload.PromptSeq, 10)
+	if payload.PromptSeq <= 0 {
+		sum := sha256.Sum256([]byte(exactOrchestrationTaskPrompt(payload)))
+		identity = "legacy-" + hex.EncodeToString(sum[:8])
+	}
+	return filepath.Join(projectDir, ".codex-bridge", "proof-prompts", safeFileName(payload.RunID), identity+".json")
+}
+
+func formalProofPromptDigest(payload protocol.OrchestrationStartPayload) string {
+	h := sha256.New()
+	_, _ = io.WriteString(h, strings.TrimSpace(payload.RunID)+"\n")
+	_, _ = io.WriteString(h, strconv.FormatInt(payload.PromptSeq, 10)+"\n")
+	_, _ = io.WriteString(h, exactOrchestrationTaskPrompt(payload)+"\n")
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func readFormalProofPromptMarker(path string) (formalProofPromptMarker, bool, error) {
+	var marker formalProofPromptMarker
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return marker, false, nil
+	}
+	if err != nil {
+		return marker, false, err
+	}
+	if err := json.Unmarshal(raw, &marker); err != nil || marker.SchemaVersion != "formal-proof-prompt-v1" || marker.Digest == "" {
+		return marker, false, errors.New("formal-proof prompt marker is invalid")
+	}
+	return marker, true, nil
+}
+
+func writeFormalProofPromptMarker(path string, marker formalProofPromptMarker) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(marker)
+	if err != nil {
+		return err
+	}
+	return writeFormalProofNotesAtomic(path, append(raw, '\n'))
 }
 
 func formalProofProjectDir(baseCWD string) string {
@@ -171,7 +256,7 @@ func materializeFormalProofProjectFiles(projectDir string, files []formalProofHa
 			}
 			result.Extracted = append(result.Extracted, entries...)
 		default:
-			target := uniqueFormalProofProjectPath(projectDir, name)
+			target := reusableFormalProofProjectPath(projectDir, name, file.Raw)
 			if err := os.WriteFile(target, file.Raw, 0o600); err != nil {
 				return fmt.Errorf("write project file %q: %w", file.Name, err)
 			}
@@ -182,6 +267,22 @@ func materializeFormalProofProjectFiles(projectDir string, files []formalProofHa
 	sort.Strings(result.Copied)
 	sort.Strings(result.Extracted)
 	return nil
+}
+
+func reusableFormalProofProjectPath(projectDir, name string, raw []byte) string {
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	for i := 1; ; i++ {
+		candidateName := name
+		if i > 1 {
+			candidateName = fmt.Sprintf("%s-%d%s", stem, i, ext)
+		}
+		candidate := filepath.Join(projectDir, candidateName)
+		existing, err := os.ReadFile(candidate)
+		if errors.Is(err, os.ErrNotExist) || (err == nil && bytes.Equal(existing, raw)) {
+			return candidate
+		}
+	}
 }
 
 func formalProofLooksLikeZip(file formalProofHarnessFile) bool {
@@ -339,7 +440,7 @@ func writeFormalProofNotes(payload protocol.OrchestrationStartPayload, result fo
 	b.WriteString("# Formal Proof Notes\n\n")
 	b.WriteString("这是一份轻量、持续更新的证明任务记录。只记录跨轮次真正有用的信息，不需要维护额外状态文件或运行生成的检查脚本。\n\n")
 	b.WriteString("## 原始任务\n\n```text\n")
-	b.WriteString(strings.TrimSpace(payload.Prompt))
+	b.WriteString(exactOrchestrationTaskPrompt(payload))
 	b.WriteString("\n```\n\n")
 	b.WriteString("## 工作区\n\n- 项目目录：`project/`\n- 检测到的证明系统：`")
 	b.WriteString(result.Assistant)
@@ -380,9 +481,15 @@ func appendFormalProofFollowup(payload protocol.OrchestrationStartPayload, resul
 	if seq <= 0 {
 		seq = int64(total + 1)
 	}
+	sequence := strconv.FormatInt(seq, 10)
+	for _, followup := range followups {
+		if followup.Sequence == sequence {
+			return nil
+		}
+	}
 	followups = append(followups, formalProofFollowup{
-		Sequence: strconv.FormatInt(seq, 10),
-		Prompt:   trimForPrompt(strings.TrimSpace(payload.Prompt), formalProofFollowupPromptLimit),
+		Sequence: sequence,
+		Prompt:   trimForPrompt(exactOrchestrationTaskPrompt(payload), formalProofFollowupPromptLimit),
 	})
 	total++
 	if len(followups) > formalProofFollowupWindow {

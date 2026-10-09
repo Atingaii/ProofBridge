@@ -353,12 +353,21 @@ func TestCodexAppServerRunnerRepeatedNativeReconnectProgressHasFixedDeadline(t *
 	runner := NewCodexAppServerRunner(&cfg)
 	runner.nativeReconnectGracePeriod = 120 * time.Millisecond
 
-	started := time.Now()
-	_, err := runner.Prompt(context.Background(), RunnerRequest{Content: "do not remain running"}, func(RunnerUpdate) {})
+	// Measure the reconnect window rather than Python process startup, which
+	// varies with host load and is outside the native reconnect deadline.
+	var reconnectStarted time.Time
+	_, err := runner.Prompt(context.Background(), RunnerRequest{Content: "do not remain running"}, func(update RunnerUpdate) {
+		if update.Notice != nil && update.Notice.Category == "codex-native-reconnect-progress" && reconnectStarted.IsZero() {
+			reconnectStarted = time.Now()
+		}
+	})
 	if err == nil || !strings.Contains(err.Error(), "native reconnect did not recover") {
 		t.Fatalf("native reconnect error = %v", err)
 	}
-	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+	if reconnectStarted.IsZero() {
+		t.Fatal("no native reconnect progress observed")
+	}
+	if elapsed := time.Since(reconnectStarted); elapsed > 500*time.Millisecond {
 		t.Fatalf("repeated reconnect progress extended fixed deadline to %s", elapsed)
 	}
 }

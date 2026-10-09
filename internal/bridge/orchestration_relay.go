@@ -28,6 +28,14 @@ type orchestrationTurn struct {
 }
 
 func (m *OrchestrationManager) emitTurnUsage(runID string, record orchestrationTurn) {
+	if len(record.Usage.ByModel) > 0 {
+		for _, usage := range record.Usage.ByModel {
+			part := record
+			part.Usage = usage
+			m.emitTurnUsage(runID, part)
+		}
+		return
+	}
 	usage := record.Usage
 	m.emit(runID, protocol.OrchestrationEventPayload{
 		Kind:   "turn.usage",
@@ -36,6 +44,7 @@ func (m *OrchestrationManager) emitTurnUsage(runID string, record orchestrationT
 		CLI:    record.CLI,
 		Data: map[string]any{
 			"cli":              record.CLI,
+			"workerSlot":       record.WorkerSlot,
 			"model":            usage.Model,
 			"inputTokens":      usage.InputTokens,
 			"outputTokens":     usage.OutputTokens,
@@ -855,12 +864,21 @@ func composeRelayPromptWithWorkerSlot(mode, firstCLI, profile, userPrompt, conte
 func composeRelayPromptWithTaskScope(mode, firstCLI, profile, userPrompt, contextSummary string, resume bool, role, cli, workerSlot string, turn, maxTurns int, history []orchestrationTurn, taskScope *durableTaskPromptScope) string {
 	profile = normalizeOrchestrationProfile(profile)
 	profileActive := registry.UsesSpecialRules(profile)
+	roundMode := "collaboration"
+	if mode == "debate" {
+		roundMode = "debate"
+	}
 	var b strings.Builder
 	b.WriteString("ProofBridge is relaying this browser orchestration like a human handoff between local CLIs. Treat this as a real user instruction, use your normal capabilities, and do not wait for Bridge to validate strategy choices.\n\n")
 	b.WriteString(orchestrationLanguageRule)
 	b.WriteString("\n\n")
 	if taskScope != nil {
 		b.WriteString(durableTaskRoleContract(*taskScope))
+		if mode == "debate" {
+			b.WriteString("\nDebate contract: develop falsifiable claims, test the strongest counterargument and counterexamples, then adjudicate using observed evidence. Carry unresolved objections forward; do not manufacture disagreement or repeat refuted claims.")
+		} else {
+			b.WriteString("\nCollaboration contract: build on the current implementation, close remaining gaps, and independently verify changes. Carry unresolved defects forward; do not restart completed work or repeat passing checks without new evidence.")
+		}
 		b.WriteString("\n")
 		b.WriteString("Maximize useful progress during this assignment: inspect the real workspace, make all safe in-scope changes you can justify, and run proportionate checks. Continue through viable approaches when a command fails or one approach stalls; one failure, one long checker run, or one incomplete slice is not a reason to stop. Hand off an unresolved blocker only after the materially same obstacle recurs without new evidence and alternative paths no longer produce useful progress.\n\n")
 	} else {
@@ -876,7 +894,11 @@ func composeRelayPromptWithTaskScope(mode, firstCLI, profile, userPrompt, contex
 		b.WriteString("\n")
 	}
 	if taskScope != nil {
-		b.WriteString(fmt.Sprintf("This is collaboration round %d of %d, durable node %q. The internal runner envelope is one assignment only; it does not make this the first or final collaboration round. Start from the current workspace and supplied evidence rather than restarting a baseline scan.\n\n", taskScope.Round, taskScope.MaxRounds, taskScope.Name))
+		if taskScope.MaxRounds == 0 {
+			b.WriteString(fmt.Sprintf("Dynamic collaboration, durable node %q. There is no fixed round limit. Complete this assignment and hand off evidence; independent verification determines completion after review. Start from the current workspace and supplied evidence.\n\n", taskScope.Name))
+		} else {
+			b.WriteString(fmt.Sprintf("This is %s round %d of %d, durable node %q. The internal runner envelope is one assignment only; it does not make this the first or final %s round. Start from the current workspace and supplied evidence rather than restarting a baseline scan.\n\n", roundMode, taskScope.Round, taskScope.MaxRounds, taskScope.Name, roundMode))
+		}
 	} else if turn == 1 {
 		b.WriteString("You are the first CLI handling the user's task. Your visible result will be handed to another CLI afterward, so include the important files changed, commands run, blockers, and useful next context in your final response.\n\n")
 	} else {
@@ -889,6 +911,8 @@ func composeRelayPromptWithTaskScope(mode, firstCLI, profile, userPrompt, contex
 		} else {
 			b.WriteString("This is the final configured round's independent review. End with a user-ready section titled \"最终结论：\" or \"最终测试结果：\" that synthesizes actual command evidence, distinguishes verified facts from assumptions, and names remaining risks. Do not claim completion unless the original goal is actually resolved.\n\n")
 		}
+	} else if taskScope != nil && taskScope.Role == store.TaskRoleReviewer {
+		b.WriteString("This is an intermediate independent review. If the original task is complete, write a user-ready 最终结论 with the actual evidence and next=none; risks=none. Independent verification will decide whether to end early. Otherwise write a 交接总结 naming the remaining actionable gaps for the next round. Do not declare success until the original task and any subsequent user instructions are resolved.\n\n")
 	} else if taskScope != nil {
 		b.WriteString("A later durable node or collaboration round is scheduled after this assignment. End with a concise Chinese \"交接总结：\" that gives the next engineer the exact goal state, changes made, commands and results, remaining blocker if any, approaches already attempted, assumptions ruled out, and one executable next entry point. Do not write a user-final conclusion or imply that no later peer will run.\n\n")
 	} else if turn == maxTurns {
@@ -924,7 +948,11 @@ func composeRelayPromptWithTaskScope(mode, firstCLI, profile, userPrompt, contex
 		b.WriteString("\n")
 	}
 	if taskScope != nil {
-		b.WriteString(fmt.Sprintf("Collaboration round: %d of %d. Durable node: %s. Current CLI: %s/%s.\n\n", taskScope.Round, taskScope.MaxRounds, taskScope.Name, role, cli))
+		if taskScope.MaxRounds == 0 {
+			b.WriteString(fmt.Sprintf("Dynamic collaboration. Durable node: %s. Current CLI: %s/%s.\n\n", taskScope.Name, role, cli))
+		} else {
+			b.WriteString(fmt.Sprintf("%s round: %d of %d. Durable node: %s. Current CLI: %s/%s.\n\n", strings.ToUpper(roundMode[:1])+roundMode[1:], taskScope.Round, taskScope.MaxRounds, taskScope.Name, role, cli))
+		}
 	} else {
 		b.WriteString(fmt.Sprintf("Relay turn: %d of %d. Mode: %s. First CLI: %s. Current CLI: %s/%s.\n\n", turn, maxTurns, mode, normalizeRelayFirstCLI(firstCLI), role, cli))
 	}
@@ -968,14 +996,17 @@ func durableTaskRoleContract(scope durableTaskPromptScope) string {
 func durableTaskMachineHandoffContract(scope durableTaskPromptScope) string {
 	to := "peer"
 	intent := "continue"
-	if scope.finalReviewer() {
+	if scope.Role == store.TaskRoleReviewer {
 		to = "user"
+		if !scope.finalReviewer() {
+			to = "user or peer"
+		}
 		intent = "final"
 	}
 	return "After the visible summary, append exactly two compact machine-readable lines:\n" +
 		"Msg: to=<" + to + ">; intent=<" + intent + ", review, revise, or continue>; need=<single requested result or none>\n" +
 		"Handoff: status=<needs_next, blocked, or resolved>; changed=<files or none>; verified=<exact commands and results or none>; next=<single executable action or none>; risks=<exact blocker, repeated attempts, ruled-out assumptions, and remaining risk or none>\n" +
-		"Use blocked only after the materially same blocker repeated without new evidence. Use resolved/to=user/intent=final only for the final Reviewer when independent evidence shows the original goal is complete. Intermediate resolved means this node finished its assignment and still hands control to the next peer."
+		"Use blocked only after the materially same blocker repeated without new evidence. Intermediate reviewers use to=peer/intent=continue when task gaps remain. Use resolved/to=user/intent=final only for a Reviewer when independent evidence shows the original goal is complete, including intermediate rounds. Independent verification decides early completion. Other nodes hand control to the next peer even when their assignment is resolved."
 }
 
 func relayRoutingNote(scheduledRole string, packet orchestrationRelayPacket) string {

@@ -27,11 +27,34 @@ export type BridgeCapabilities = {
   approvalPolicy?: string;
   chat?: Record<string, BridgeCLICapability | undefined>;
   orchestration?: Record<string, BridgeCLICapability | undefined>;
+  nativeUserInput?: Record<string, NativeUserInputCapability | undefined>;
   acp?: ACPCapability;
   metadata?: Record<string, string | undefined>;
   durableTaskGraph?: boolean;
+  orchestrationLiveInput?: number;
 	usageLedger?: boolean;
+  usageModelRecovery?: number;
 	configSwitcher?: CLIConfigSwitcherCapability;
+	tbci?: TBCICapability;
+};
+
+export type NativeUserInputCapability = {
+  version: number;
+  available: boolean;
+  blocking?: boolean;
+  nonBlocking?: boolean;
+  permissionModes?: string[];
+  reason?: string;
+};
+
+export type TBCICapability = {
+	available: boolean;
+	managed?: boolean;
+	state?: string;
+	platform?: string;
+	version?: string;
+	artifactSha256?: string;
+	reason?: string;
 };
 
 export type CLIConfigSwitcherCapability = {
@@ -39,6 +62,15 @@ export type CLIConfigSwitcherCapability = {
 	publicKey: string;
 	keyId: string;
 	clis: Array<'codex' | 'claude'>;
+};
+
+// Native official model metadata from the selected endpoint, separate from provider presets.
+export type OfficialCLIModel = {
+  model: string;
+  displayName: string;
+  supportedReasoningEfforts: string[];
+  defaultReasoningEffort?: string;
+  isDefault?: boolean;
 };
 
 export type EncryptedSecret = {
@@ -130,8 +162,22 @@ export type OrchestrationFile = {
 
 export type NativeContextCompaction = 'off' | 'after-turn';
 export type WorkerPair = 'claude-codex' | 'codex-codex' | 'claude-claude';
+export type VerificationMode = 'agent' | 'tbci';
+
+export type OrchestrationPromptMessage = {
+  id: string;
+  runId: string;
+  prompt: string;
+  deliveryMode: 'queue' | 'immediate';
+  status: 'queued' | 'sending' | 'delivered' | 'failed';
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+};
 
 export type OrchestrationRun = {
+  archivedAt?: number;
+  executionMode?: 'bounded' | 'dynamic';
   id: string;
   agentId: string;
   title: string;
@@ -139,6 +185,7 @@ export type OrchestrationRun = {
   workerPair?: WorkerPair;
   firstCli?: 'claude' | 'codex';
   profile?: 'default' | 'formal-proof';
+  verificationMode?: VerificationMode;
   nativeContextCompaction?: NativeContextCompaction;
   prompt: string;
   cwd?: string;
@@ -152,6 +199,8 @@ export type OrchestrationRun = {
 };
 
 export type OrchestrationUsageStats = {
+  modelSource?: string;
+  workerSlot?: string;
   cli: string;
   model?: string;
   inputTokens: number;
@@ -169,6 +218,7 @@ export type OrchestrationUsageStats = {
 };
 
 export type OrchestrationRoundStats = {
+  byWorker?: OrchestrationUsageStats[];
   round: number;
   inputTokens: number;
   outputTokens: number;
@@ -179,6 +229,9 @@ export type OrchestrationRoundStats = {
 };
 
 export type OrchestrationRunStatsBase = {
+  modelRecoveryStatus?: 'upgrade-required' | 'offline' | 'pending' | 'unresolved';
+  byWorker?: OrchestrationUsageStats[];
+  catalogUpdatedAt?: number;
   runId: string;
   startedAt?: number;
   finishedAt?: number;
@@ -257,6 +310,11 @@ export type OrchestrationUsageOverview = {
   costKnown: boolean;
   trend: OrchestrationUsageTrendPoint[];
   items: OrchestrationUsageOverviewItem[];
+};
+
+export type OrchestrationUsageOverviewPage = {
+  overview: OrchestrationUsageOverview;
+  page: { hasMore: boolean; nextCursor?: string; scannedRuns: number };
 };
 
 export type AdminUsageTrendPoint = {
@@ -365,6 +423,10 @@ export type AdminConversationContent = {
   title: string;
   prompt?: string;
   items: AdminConversationContentItem[];
+  hasMoreBefore?: boolean;
+  nextBeforeSeq?: number;
+  nextBeforeCreatedAt?: number;
+  nextBeforeId?: string;
 };
 
 export type OrchestrationEvent = {
@@ -514,6 +576,7 @@ export type RunStartData = {
   maxRounds?: number;
   promptSeq?: number;
   profile?: string;
+  verificationMode?: VerificationMode;
   nativeContextCompaction?: NativeContextCompaction;
 };
 
@@ -547,13 +610,14 @@ export type RunEndData = {
   claudeNativeResume?: NativeResumeInfo;
   terminalReason?: string;
   verifierVerdict?: VerifierVerdict;
+  completionObservation?: { round: number; taskDigest?: string; sourceDigest?: string; usageKey?: string; outputTokens?: number; blockerKey?: string; plateau?: boolean };
 };
 
 export type VerifierVerdict = {
   status?: string;
   reason?: string;
   evidence?: string[];
-  checkers?: Array<{ name?: string; status?: string; reason?: string }>;
+  checkers?: Array<{ name?: string; status?: string; reason?: string; code?: string; target?: string; evidence?: string }>;
 };
 
 export type NativeResumeInfo = {
@@ -579,6 +643,7 @@ export type BridgeNoteData = {
 
 export type RunConclusion = {
   outcome: 'satisfied' | 'unsatisfied' | 'blocked' | 'canceled' | 'errored' | string;
+  verificationStatus?: 'pass' | 'continue' | 'unknown' | string;
   summary: string;
   buildOrAuditCommands?: string[];
   unmetObligations?: string[];
@@ -614,6 +679,93 @@ export type ApprovalRequest = {
 };
 
 export type ApprovalStatus = 'pending' | 'accepted' | 'declined' | 'canceled';
+
+export type UserInputOption = { id: string; label: string; description?: string };
+export type UserInputQuestion = {
+  id: string;
+  header?: string;
+  question: string;
+  options?: UserInputOption[];
+  selectionMode: 'single' | 'multiple';
+  allowCustom?: boolean;
+  secret?: boolean;
+};
+export type UserInputRequest = {
+  requestId: string;
+  runId: string;
+  executionId: string;
+  instanceId?: string;
+  workerId?: string;
+  turnId?: string;
+  cli: string;
+  blocking: boolean;
+  questions: UserInputQuestion[];
+  revision: number;
+};
+export type UserInputAnswer = { optionIds?: string[]; customText?: string };
+export type UserInputReceipt = {
+  requestId: string;
+  runId: string;
+  executionId: string;
+  instanceId: string;
+  submissionId: string;
+  outcome: 'delivered' | 'not_sent' | 'unknown';
+  revision: number;
+};
+export type UserInputStatus = {
+  requestId: string;
+  runId: string;
+  executionId?: string;
+  instanceId?: string;
+  submissionId?: string;
+  status: 'queued' | 'delivered' | 'closed' | 'rejected';
+  lifecycle?: 'open' | 'closed';
+  source?: 'bridge' | 'hub';
+  phase?: 'route' | 'validate' | 'queue' | 'reconcile';
+  receipt?: UserInputReceipt;
+  reason?: string;
+  revision: number;
+};
+// Query failures are separate from request lifecycle and delivery statuses.
+export type UserInputSyncError = {
+  requestId: '';
+  runId: string;
+  syncId: string;
+  source: 'hub';
+  phase: 'route';
+  status: 'rejected';
+  revision: 0;
+  reason: string;
+};
+export type UserInputSnapshot = {
+  runId: string;
+  syncId: string;
+  instanceId?: string;
+  revision: number;
+  requests: UserInputRequest[];
+  statuses?: UserInputStatus[];
+  closed?: UserInputStatus[];
+  receipts?: UserInputReceipt[];
+  reconciliations?: UserInputStatus[];
+  reconcileError?: string;
+};
+export type UserInputPendingSubmission = {
+  userId: string;
+  runId: string;
+  requestId: string;
+  submissionId: string;
+  executionId: string;
+  instanceId: string;
+  createdAt: number;
+};
+export type UserInputItem = {
+  request: UserInputRequest;
+  status: 'pending' | 'submitting' | 'confirming' | 'delivered';
+  submissionId?: string;
+  receipt?: UserInputReceipt;
+  error?: string;
+  revision: number;
+};
 
 export type ChatItem =
   | { id: string; type: 'message'; role: 'user' | 'assistant' | 'system'; content: string; createdAt?: number }
@@ -663,6 +815,7 @@ export type OrchestrationVisibleEvent =
       key: string;
       runId: string;
       kind: string;
+      category?: string;
       role?: string;
       cli?: string;
       taskName?: string;
@@ -682,6 +835,7 @@ export type OrchestrationVisibleEvent =
       key: string;
       runId: string;
       kind: string;
+      category?: string;
       role?: string;
       cli?: string;
       taskName?: string;
@@ -700,6 +854,7 @@ export type OrchestrationVisibleEvent =
       key: string;
       runId: string;
       kind: string;
+      category?: string;
       role?: string;
       cli?: string;
       taskName?: string;
@@ -767,12 +922,14 @@ export type PublicMessage = {
 };
 
 export type PublicOrchestrationRun = {
+  executionMode?: 'bounded' | 'dynamic';
   id: string;
   title: string;
   mode: 'collaboration' | 'debate';
   workerPair?: WorkerPair;
   firstCli?: 'claude' | 'codex';
   profile?: 'default' | 'formal-proof';
+  verificationMode?: VerificationMode;
   nativeContextCompaction?: NativeContextCompaction;
   prompt: string;
   cwd?: string;

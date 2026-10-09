@@ -127,6 +127,9 @@ func TestPublicOrchestrationShareSanitizesRunAndEventData(t *testing.T) {
 	s, st, userID, agentID := newOrchestrationTestServer(t)
 	ctx := context.Background()
 	run := createOrchestrationRun(t, st, userID, agentID)
+	if err := st.UpdateOrchestrationRunSettings(ctx, run.ID, agentID, run.Mode, run.WorkerPair, run.FirstCLI, "formal-proof", protocol.VerificationModeTBCI, run.CWD, run.NativeContextCompaction, run.MaxTurns, run.Files); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.AddOrchestrationEvent(ctx, store.OrchestrationEvent{
 		RunID:   run.ID,
 		Kind:    "command.end",
@@ -167,11 +170,12 @@ func TestPublicOrchestrationShareSanitizesRunAndEventData(t *testing.T) {
 		Source: "bridge",
 		Status: store.OrchestrationCompleted,
 		RunEndData: &protocol.RunEndData{
-			WorkerPair:      "claude-codex",
-			TerminalReason:  "verified-early",
-			VerifierVerdict: &protocol.VerifierVerdict{Status: "pass", Reason: "independent reviewer confirmed the result", Evidence: []string{"successful command evidence"}},
-			CodexThreadID:   "thread-secret-1",
-			ClaudeSessionID: "claude-session-secret",
+			WorkerPair:            "claude-codex",
+			TerminalReason:        "verified-early",
+			CompletionObservation: &protocol.CompletionObservation{Round: 1, SourceDigest: "private-source-digest"},
+			VerifierVerdict:       &protocol.VerifierVerdict{Status: "pass", Reason: "independent reviewer confirmed the result", Evidence: []string{"successful command evidence"}},
+			CodexThreadID:         "thread-secret-1",
+			ClaudeSessionID:       "claude-session-secret",
 			NativeResume: []protocol.NativeResumeInfo{{
 				CLI:            "claude",
 				ID:             "claude-session-secret",
@@ -198,12 +202,13 @@ func TestPublicOrchestrationShareSanitizesRunAndEventData(t *testing.T) {
 		"userId", "agentId", "secret", "do-not-share", "file-body-secret",
 		"thread-secret-1", "claude-session-secret", "/root/secret-project",
 		"transcript.jsonl", "--resume",
+		"completionObservation", "private-source-digest",
 	} {
 		if strings.Contains(raw, forbidden) {
 			t.Fatalf("public orchestration share leaked %q: %s", forbidden, raw)
 		}
 	}
-	for _, want := range []string{"go test ./...", "Model.thy", `"events"`, `"turn.end"`, "claude exited mid-turn", "claude-codex", `"durationMs":2250`, "verified-early", "independent reviewer confirmed the result"} {
+	for _, want := range []string{"go test ./...", "Model.thy", `"events"`, `"turn.end"`, "claude exited mid-turn", "claude-codex", `"durationMs":2250`, "verified-early", "independent reviewer confirmed the result", `"verificationMode":"tbci"`} {
 		if !strings.Contains(raw, want) {
 			t.Fatalf("public orchestration share missing %q: %s", want, raw)
 		}

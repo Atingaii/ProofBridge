@@ -104,6 +104,43 @@ func TestAdminUsageRouteRequiresAdministrator(t *testing.T) {
 	if body["overview"] == nil {
 		t.Fatalf("missing overview: %s", got.Body.String())
 	}
+	cfg.Auth.AdminUsernames = []string{" MEMBER ", ""}
+	if got := request(member.ID); got.Code != http.StatusOK {
+		t.Fatalf("additional administrator status = %d", got.Code)
+	}
+	if got := request(admin.ID); got.Code != http.StatusOK {
+		t.Fatalf("bootstrap administrator lost access: %d", got.Code)
+	}
+	if !s.decorateUser(member).IsAdmin {
+		t.Fatal("additional administrator missing from user metadata")
+	}
+	cfg.Auth.AdminUsernames = nil
+	if got := request(member.ID); got.Code != http.StatusForbidden {
+		t.Fatalf("removed administrator status = %d", got.Code)
+	}
+}
+
+func TestAdditionalAdministratorMembership(t *testing.T) {
+	cfg := config.Default()
+	cfg.Auth.BootstrapUsername = ""
+	cfg.Auth.AdminUsernames = []string{" Operator ", "", "  "}
+	cfg.Hub.FeatureRollouts = map[string]string{"strict-workspace": "admin"}
+	s := NewServer(&cfg, nil, BuildInfo{})
+	for _, tc := range []struct {
+		username string
+		want     bool
+	}{
+		{"admin", true}, {"ADMIN", true}, {"operator", true},
+		{"member", false}, {"operator2", false}, {"", false}, {" ", false},
+	} {
+		u := store.User{Username: tc.username}
+		if got := s.decorateUser(u).IsAdmin; got != tc.want {
+			t.Errorf("metadata %q admin = %v, want %v", tc.username, got, tc.want)
+		}
+		if got := s.featureEnabled("strict-workspace", u); got != tc.want {
+			t.Errorf("rollout %q enabled = %v, want %v", tc.username, got, tc.want)
+		}
+	}
 }
 
 func TestAdminConversationContentRequiresAdministratorAndChecksOwnership(t *testing.T) {
@@ -245,7 +282,7 @@ func TestAdminConversationContentRequiresAdministratorAndChecksOwnership(t *test
 
 func TestNormalizeAdminUsageEventChatCodexSeparatesCachedInput(t *testing.T) {
 	usage, ok := normalizeAdminUsageEvent(store.AdminUsageEvent{CLI: "codex", UsageJSON: `{"input_tokens":100,"cached_input_tokens":80,"output_tokens":5}`})
-	if !ok || usage.InputTokens != 20 || usage.CacheTokens != 80 || usage.OutputTokens != 5 || usage.TotalTokens != 105 || !usage.CostKnown {
+	if !ok || usage.InputTokens != 20 || usage.CacheTokens != 80 || usage.OutputTokens != 5 || usage.TotalTokens != 105 || usage.CostKnown {
 		t.Fatalf("unexpected normalized usage: %#v ok=%v", usage, ok)
 	}
 }

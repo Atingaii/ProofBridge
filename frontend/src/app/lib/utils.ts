@@ -313,7 +313,7 @@ export function orchestrationTimelineItems(events: OrchestrationVisibleEvent[], 
 
 export function orchestrationTimelineGroups(
   items: OrchestrationTimelineItem[],
-  run?: Pick<OrchestrationRun | PublicOrchestrationRun, 'id' | 'status' | 'maxTurns'> | null,
+  run?: Pick<OrchestrationRun | PublicOrchestrationRun, 'id' | 'status' | 'maxTurns' | 'executionMode'> | null,
   events: OrchestrationEvent[] = [],
 ): OrchestrationTimelineGroup[] {
   const groups: OrchestrationTimelineGroup[] = [];
@@ -328,7 +328,8 @@ export function orchestrationTimelineGroups(
     let group = turnGroups.get(key);
     if (!group) {
       const parsedTurnInfo = parseOrchestrationTurnInfo(meta.turnId);
-      const turnInfo = meta.turnInfo || (typeof parsedTurnInfo.ordinal === 'number' && run?.maxTurns ? { ...parsedTurnInfo, total: run.maxTurns } : parsedTurnInfo);
+      const rawTurnInfo = meta.turnInfo || (typeof parsedTurnInfo.ordinal === 'number' && run?.maxTurns ? { ...parsedTurnInfo, total: run.maxTurns } : parsedTurnInfo);
+      const turnInfo = run?.executionMode === 'dynamic' ? { ...rawTurnInfo, total: undefined } : rawTurnInfo;
       group = {
         type: 'turn',
         key,
@@ -637,13 +638,41 @@ export function orchestrationTurnLabel(info: OrchestrationTurnInfo, t: UIText) {
   return `${t.turnPrefix} ${info.ordinal}${suffix}`;
 }
 
+export function orchestrationParticipantLabel(cli?: string, workerSlot?: string) {
+  const slot = (workerSlot || '').trim();
+  const match = slot.match(/^(verifier:)?(codex|claude)(?:-([ab]))?$/i);
+  if (match) {
+    const name = match[2].toLowerCase() === 'codex' ? 'Codex' : 'Claude';
+    return `${name}${match[3] ? ` ${match[3].toUpperCase()}` : ''}${match[1] ? ' · Verifier' : ''}`;
+  }
+  const name = cli === 'codex' ? 'Codex' : cli === 'claude' ? 'Claude' : cli || '';
+  return [name, slot].filter(Boolean).join(' · ');
+}
+
 export function visibleOrchestrationEvents(events: OrchestrationEvent[], runId: string, run?: OrchestrationRun | PublicOrchestrationRun | null, t?: UIText): OrchestrationVisibleEvent[] {
   const ordered = finalizeClosedCommandSegments(mergeOrchestrationDeltaEvents(
     mergeOrchestrationToolEvents(events.filter((event) => event.runId === runId).slice().sort(compareOrchestrationEvents))
       .filter((event) => !isEmptyPagesReadFailureEvent(event))
   ));
   const turnDeltaContent = orchestrationTurnDeltaContentByKey(ordered);
+  const startedTurns = new Set(ordered.filter((event) => event.kind === 'turn.start').map(orchestrationTurnKey));
+  // A latest-page boundary can bisect a turn. Its final answer is authoritative;
+  // keeping only the available deltas would otherwise show a misleading tail.
+  const boundaryAnswers = new Set(ordered.filter((event) => event.kind === 'turn.end'
+    && !startedTurns.has(orchestrationTurnKey(event)) && cleanOrchestrationDisplayContent(event.content)).map(orchestrationTurnKey));
   const visible: OrchestrationVisibleEvent[] = [];
+  // Starts may be hidden from the timeline, but own the stable worker identity.
+  const turnMeta = new Map<string, ReturnType<typeof orchestrationVisibleTaskMeta>>();
+  for (const event of ordered) {
+    if (!event.turnId) continue;
+    const meta = orchestrationVisibleTaskMeta(event);
+    const previous = turnMeta.get(event.turnId);
+    turnMeta.set(event.turnId, {
+      taskName: previous?.taskName || meta.taskName,
+      workerSlot: previous?.workerSlot || meta.workerSlot,
+      turnInfo: previous?.turnInfo || meta.turnInfo,
+    });
+  }
   let segmentVisibleStart = 0;
 
   ordered.forEach((event, index) => {
@@ -672,6 +701,7 @@ export function visibleOrchestrationEvents(events: OrchestrationEvent[], runId: 
     }
 
     if (event.kind === 'turn.delta') {
+      if (boundaryAnswers.has(orchestrationTurnKey(event)) && !isBridgeRelayNotice(event)) return;
       const content = cleanOrchestrationDisplayContent(event.content);
       if (!content) return;
       visible.push({
@@ -715,6 +745,29 @@ export function visibleOrchestrationEvents(events: OrchestrationEvent[], runId: 
       return;
     }
 
+    if (event.kind === 'bridge.note' && event.bridgeNoteData?.category === 'tbci-verification') {
+      const content = cleanOrchestrationDisplayContent(event.content || event.error);
+      if (!content) return;
+      visible.push({
+        type: 'message',
+        key: orchestrationEventKey(event, index),
+        runId: event.runId,
+        kind: event.kind,
+        category: event.bridgeNoteData?.category || (typeof event.data?.category === 'string' ? event.data.category : undefined),
+        role: 'verifier',
+        cli: 'bridge',
+        ...orchestrationVisibleTaskMeta(event),
+        turnId: event.turnId,
+        content,
+        status: event.status || 'warning',
+        error: event.error,
+        createdAt: event.createdAt,
+        timelineOrder: event.timelineOrder,
+        commands: [],
+      });
+      return;
+    }
+
     if (event.kind.startsWith('command.')) {
       const content = orchestrationCommandSummary(event);
       visible.push({
@@ -742,7 +795,7 @@ export function visibleOrchestrationEvents(events: OrchestrationEvent[], runId: 
     if (event.kind === 'turn.end') {
       const content = turnEndDisplayContent(
         cleanOrchestrationDisplayContent(event.content),
-        turnDeltaContent.get(orchestrationTurnKey(event)) || ''
+        boundaryAnswers.has(orchestrationTurnKey(event)) ? '' : turnDeltaContent.get(orchestrationTurnKey(event)) || ''
       );
       if (content) {
         visible.push({
@@ -834,7 +887,11 @@ export function visibleOrchestrationEvents(events: OrchestrationEvent[], runId: 
     }
 
   });
-  return visible;
+  return visible.map((event) => {
+    const meta = event.turnId ? turnMeta.get(event.turnId) : undefined;
+    return { ...event, taskName: event.taskName || meta?.taskName,
+      workerSlot: event.workerSlot || meta?.workerSlot, turnInfo: event.turnInfo || meta?.turnInfo };
+  });
 }
 
 function isInternalOrchestrationBootstrapEvent(event: OrchestrationEvent) {

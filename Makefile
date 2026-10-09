@@ -1,8 +1,11 @@
 GO ?= go
 BINARY ?= bin/codex-bridge
 PREFIX ?= /usr/local
+DOWNLOAD_DIR ?= bin/downloads
+VERSION ?= dev
+BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
-.PHONY: help tidy frontend build build-all portable-package test benchmark-formal-proof doc-lint run-hub run-bridge install clean docker
+.PHONY: help tidy frontend build build-all bridge-downloads portable-package test benchmark-formal-proof doc-lint run-hub run-bridge install clean docker
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -18,6 +21,14 @@ build: ## Build the Go binary (assumes frontend is already built)
 	CGO_ENABLED=0 $(GO) build -ldflags "-s -w" -o $(BINARY) .
 
 build-all: frontend build ## Build the frontend then the Go binary
+
+bridge-downloads: ## Build Linux and macOS amd64/arm64 endpoint binaries sequentially
+	mkdir -p "$(DOWNLOAD_DIR)"
+	@for platform in linux darwin; do for arch in amd64 arm64; do \
+		CGO_ENABLED=0 GOOS=$$platform GOARCH=$$arch $(GO) build -p 1 \
+			-ldflags "-s -w -X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME)" \
+			-o "$(DOWNLOAD_DIR)/codex-bridge-$$platform-$$arch" . || exit $$?; \
+	done; done
 
 portable-package: ## Build a self-contained Linux amd64 tar.gz under dist/
 	./scripts/build-portable-package.sh

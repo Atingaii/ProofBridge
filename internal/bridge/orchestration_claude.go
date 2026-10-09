@@ -93,6 +93,7 @@ type claudeStreamNudge struct {
 }
 
 type claudeScanOptions struct {
+	LiveInput           *claudeLiveInput
 	Input               io.Writer
 	CanNudge            bool
 	NudgeAfter          time.Duration
@@ -161,12 +162,12 @@ func (m *OrchestrationManager) runClaudeInteractiveSlot(ctx context.Context, pay
 			},
 		})
 	}
+	if claude.approvalServer != nil {
+		claude.approvalServer.updateTurn(turnID, role)
+	}
 	if err := writeClaudeStreamUserMessage(claude.stdin, prompt); err != nil {
 		m.resetClaudeSessionIfDead(session, workerSlot, claude, payload.RunID)
 		return "", nil, claude.mode, err
-	}
-	if claude.approvalServer != nil {
-		claude.approvalServer.updateTurn(turnID, role)
 	}
 	timeouts := newExplicitTimeoutWatchdogs(m, payload.RunID, turnID, role, "claude", func() {
 		if claude.cmd != nil && claude.cmd.Process != nil {
@@ -174,8 +175,15 @@ func (m *OrchestrationManager) runClaudeInteractiveSlot(ctx context.Context, pay
 		}
 	})
 	defer timeouts.Close()
+	live := newClaudeLiveInput(m.liveInputFor(payload.RunID), claude.stdin)
+	live.wakeAfterFailedInput = func() { _ = claude.stdin.Close() }
+	liveCtx, cancelLive := context.WithCancel(ctx)
+	defer cancelLive()
+	defer live.close()
+	go live.run(liveCtx)
 	observer := m.longCommandObserverConfig()
 	content, tools, err := m.scanClaudeJSONLWithOptions(claude.stdout, payload.RunID, turnID, role, claudeScanOptions{
+		LiveInput:           live,
 		Input:               claude.stdin,
 		CanNudge:            observer.Enabled && observerAppliesTo(observer, "claude"),
 		LongCommandObserver: observer,
@@ -255,7 +263,7 @@ func (m *OrchestrationManager) ensureClaudeInteractiveSessionLocked(ctx context.
 	resume := state.claudeStarted(workerSlot)
 	args := m.claudeArgsWithStreamInputForSlot(payload, workerSlot, state.claudeSessionID(workerSlot), resume)
 	// Don't set --name, let Claude CLI use default project name based on cwd
-	approvalServer, releaseApprovalServer, err := m.prepareClaudeApprovalServer(ctx, payload, "", "")
+	approvalServer, releaseApprovalServer, err := m.prepareClaudeApprovalServer(ctx, payload, "", "", workerSlot)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +304,7 @@ func (m *OrchestrationManager) ensureClaudeInteractiveSessionLocked(ctx context.
 	}
 	claude := &orchestrationClaudeSession{
 		cmd:            cmd,
-		stdin:          stdin,
+		stdin:          &lockedClaudeInput{WriteCloser: stdin},
 		stdout:         bufio.NewReaderSize(stdout, 64*1024),
 		stderr:         stderr,
 		sessionID:      state.claudeSessionID(workerSlot),
@@ -314,7 +322,7 @@ func (m *OrchestrationManager) ensureClaudeInteractiveSessionLocked(ctx context.
 }
 
 func (m *OrchestrationManager) runClaudeWithSession(ctx context.Context, payload protocol.OrchestrationStartPayload, turnID, role, prompt, sessionID string, resume bool) (string, []RunnerToolEvent, string, error) {
-	approvalServer, releaseApprovalServer, err := m.prepareClaudeApprovalServer(ctx, payload, turnID, role)
+	approvalServer, releaseApprovalServer, err := m.prepareClaudeApprovalServer(ctx, payload, turnID, role, orchestrationClaudeDefaultSlot)
 	if err != nil {
 		return "", nil, "", err
 	}
@@ -454,10 +462,13 @@ type claudeApprovalServer struct {
 	configPath string
 	mu         sync.Mutex
 	requester  orchestrationApprovalRequester
+	userInput  orchestrationUserInputRequester
 }
 
-func (m *OrchestrationManager) prepareClaudeApprovalServer(ctx context.Context, payload protocol.OrchestrationStartPayload, turnID, role string) (*claudeApprovalServer, func(), error) {
-	if !m.shouldBridgeClaudeApproval() {
+func (m *OrchestrationManager) prepareClaudeApprovalServer(ctx context.Context, payload protocol.OrchestrationStartPayload, turnID, role, workerSlot string) (*claudeApprovalServer, func(), error) {
+	mode := approvalMode(m.cfg)
+	supportedUserInput := payload.NativeUserInput && payload.NativeUserInputProtocolVersion == 3 && (mode == "review-required" || mode == "auto-execute") && supportedClaudeUserInputVersion(m.claudePath())
+	if !m.shouldBridgeClaudeApproval() && !supportedUserInput {
 		return nil, func() {}, nil
 	}
 	tmpDir, err := os.MkdirTemp("", "codex-bridge-claude-approval-*")
@@ -482,7 +493,17 @@ func (m *OrchestrationManager) prepareClaudeApprovalServer(ctx context.Context, 
 		cli:     "claude",
 		cwd:     m.cwd(payload),
 	}
+	runID := m.executionFor(payload.RunID).runID
+	if runID == "" {
+		runID = payload.RunID
+	}
 	server := &claudeApprovalServer{requester: requester}
+	if supportedUserInput {
+		server.userInput = orchestrationUserInputRequester{
+			manager: m, runID: runID, executionID: payload.RunID,
+			workerID: normalizeClaudeWorkerSlot(workerSlot), turnID: turnID, cli: "claude",
+		}
+	}
 	go serveClaudeApprovalSocket(serverCtx, listener, server)
 
 	exe, err := os.Executable()
@@ -530,6 +551,7 @@ func (s *claudeApprovalServer) updateTurn(turnID, role string) {
 	s.mu.Lock()
 	s.requester.turnID = turnID
 	s.requester.role = role
+	s.userInput.turnID = turnID
 	s.mu.Unlock()
 }
 
@@ -597,9 +619,11 @@ func (m *OrchestrationManager) withClaudeApprovalArgs(args []string, configPath 
 		insertAt--
 	}
 	extra := []string{
-		"--permission-mode", "default",
 		"--mcp-config", configPath,
 		"--permission-prompt-tool", "mcp__codex_bridge__browser_approval",
+	}
+	if m.shouldBridgeClaudeApproval() {
+		extra = append([]string{"--permission-mode", "default"}, extra...)
 	}
 	next := make([]string, 0, len(args)+len(extra))
 	next = append(next, args[:insertAt]...)
@@ -613,9 +637,11 @@ func (m *OrchestrationManager) withClaudeStreamApprovalArgs(args []string, confi
 		return args
 	}
 	extra := []string{
-		"--permission-mode", "default",
 		"--mcp-config", configPath,
 		"--permission-prompt-tool", "mcp__codex_bridge__browser_approval",
+	}
+	if m.shouldBridgeClaudeApproval() {
+		extra = append([]string{"--permission-mode", "default"}, extra...)
 	}
 	next := make([]string, 0, len(args)+len(extra))
 	next = append(next, args...)
@@ -657,9 +683,10 @@ type claudeApprovalSocketRequest struct {
 }
 
 type claudeApprovalSocketResponse struct {
-	RequestID string `json:"requestId,omitempty"`
-	Decision  string `json:"decision,omitempty"`
-	Error     string `json:"error,omitempty"`
+	RequestID    string          `json:"requestId,omitempty"`
+	Decision     string          `json:"decision,omitempty"`
+	Error        string          `json:"error,omitempty"`
+	UpdatedInput json.RawMessage `json:"updatedInput,omitempty"`
 }
 
 func serveClaudeApprovalSocket(ctx context.Context, listener net.Listener, server *claudeApprovalServer) {
@@ -682,7 +709,8 @@ func serveClaudeApprovalSocket(ctx context.Context, listener net.Listener, serve
 
 func handleClaudeApprovalSocketConn(ctx context.Context, conn net.Conn, server *claudeApprovalServer) {
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Minute))
+	stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopClose()
 	var req claudeApprovalSocketRequest
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
 		_ = json.NewEncoder(conn).Encode(claudeApprovalSocketResponse{Error: err.Error()})
@@ -692,6 +720,11 @@ func handleClaudeApprovalSocketConn(ctx context.Context, conn net.Conn, server *
 	if len(raw) == 0 {
 		raw = json.RawMessage(`{}`)
 	}
+	if req.ToolName == "AskUserQuestion" {
+		handleClaudeUserInputSocketConn(ctx, conn, server, req)
+		return
+	}
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Minute))
 	payload := protocol.ApprovalRequestPayload{
 		RequestID: req.RequestID,
 		Kind:      req.Kind,
@@ -722,6 +755,55 @@ func handleClaudeApprovalSocketConn(ctx context.Context, conn net.Conn, server *
 	_ = json.NewEncoder(conn).Encode(claudeApprovalSocketResponse{RequestID: res.RequestID, Decision: res.Decision})
 }
 
+func handleClaudeUserInputSocketConn(ctx context.Context, conn net.Conn, server *claudeApprovalServer, req claudeApprovalSocketRequest) {
+	requester := server.userInputForPayload()
+	questions, original, err := decodeClaudeUserInput(req.Input)
+	if err != nil || requester.manager == nil {
+		_ = json.NewEncoder(conn).Encode(claudeApprovalSocketResponse{RequestID: req.RequestID, Error: "Claude native user input is unavailable or unsupported"})
+		return
+	}
+	delivered := make(chan struct{})
+	id, err := requester.RegisterUserInput(ctx, true, questions, func(deliveryCtx context.Context, response protocol.UserInputResponsePayload) error {
+		updated, err := claudeUserInputResult(questions, original, response.Answers)
+		if err != nil {
+			return err
+		}
+		if err := deliveryCtx.Err(); err != nil {
+			return err
+		}
+		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		stopWrite := context.AfterFunc(deliveryCtx, func() { _ = conn.Close() })
+		defer stopWrite()
+		if err := json.NewEncoder(conn).Encode(claudeApprovalSocketResponse{
+			RequestID: req.RequestID, Decision: "accept", UpdatedInput: updated,
+		}); err != nil {
+			return err
+		}
+		if err := deliveryCtx.Err(); err != nil {
+			return err
+		}
+		_ = conn.SetWriteDeadline(time.Time{})
+		close(delivered)
+		return nil
+	})
+	if err != nil {
+		_ = json.NewEncoder(conn).Encode(claudeApprovalSocketResponse{RequestID: req.RequestID, Error: "Claude native user input could not be registered"})
+		return
+	}
+	defer requester.CloseUserInput(id, "native permission callback ended")
+	// Observe MCP child disconnect without imposing a browser decision timeout.
+	disconnected := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, conn)
+		close(disconnected)
+	}()
+	select {
+	case <-delivered:
+	case <-disconnected:
+	case <-ctx.Done():
+	}
+}
+
 func (s *claudeApprovalServer) requesterForPayload() orchestrationApprovalRequester {
 	if s == nil {
 		return orchestrationApprovalRequester{}
@@ -729,6 +811,15 @@ func (s *claudeApprovalServer) requesterForPayload() orchestrationApprovalReques
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.requester
+}
+
+func (s *claudeApprovalServer) userInputForPayload() orchestrationUserInputRequester {
+	if s == nil {
+		return orchestrationUserInputRequester{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.userInput
 }
 
 func claudeApprovalCommand(toolName string, raw json.RawMessage) string {
@@ -813,6 +904,12 @@ func (m *OrchestrationManager) scanClaudeJSONLWithOptions(stdout io.Reader, runI
 	}
 	var content strings.Builder
 	receivedResult := false
+	var usageObservations claudeUsageObservations
+	defer func() {
+		if !receivedResult {
+			m.recordNativeUsage(turnID, "claude", firstNonEmpty(options.Model, claudeBridgeModel(m.cfg)), usageObservations.payload(nil))
+		}
+	}()
 	var tools []RunnerToolEvent
 	toolCommands := make(map[string]string)
 	toolStarts := make(map[string]time.Time)
@@ -979,8 +1076,16 @@ func (m *OrchestrationManager) scanClaudeJSONLWithOptions(stdout io.Reader, runI
 			continue
 		}
 		typ, _ := msg["type"].(string)
+		liveDone, liveErr := options.LiveInput.observe(msg)
+		if liveErr != nil {
+			return content.String(), tools, liveErr
+		}
+		if (typ == "command_lifecycle" || typ == "control_response") && liveDone {
+			return strings.TrimSpace(content.String()), tools, nil
+		}
 		switch typ {
 		case "assistant":
+			usageObservations.observe(msg)
 			if message := firstString(msg, "error"); message != "" {
 				return content.String(), tools, errors.New(message)
 			}
@@ -998,15 +1103,7 @@ func (m *OrchestrationManager) scanClaudeJSONLWithOptions(stdout io.Reader, runI
 			}
 		case "result":
 			receivedResult = true
-			usagePayload := map[string]any{}
-			for _, key := range []string{"usage", "modelUsage", "costUSD"} {
-				if value, ok := msg[key]; ok {
-					usagePayload[key] = value
-				}
-			}
-			if raw, marshalErr := json.Marshal(usagePayload); marshalErr == nil {
-				m.recordNativeUsage(turnID, "claude", firstNonEmpty(options.Model, claudeBridgeModel(m.cfg)), raw)
-			}
+			m.recordNativeUsage(turnID, "claude", firstNonEmpty(options.Model, claudeBridgeModel(m.cfg)), usageObservations.payload(msg))
 			if isErr, _ := msg["is_error"].(bool); isErr {
 				if text := firstString(msg, "result", "error"); text != "" {
 					return content.String(), tools, errors.New(text)
@@ -1030,7 +1127,7 @@ func (m *OrchestrationManager) scanClaudeJSONLWithOptions(stdout io.Reader, runI
 			if pendingFailedTool != nil {
 				return strings.TrimSpace(content.String()), tools, failedToolWithoutFollowupError("claude", *pendingFailedTool)
 			}
-			if options.ReturnAfterResult {
+			if options.ReturnAfterResult && (options.LiveInput == nil || liveDone) {
 				return strings.TrimSpace(content.String()), tools, nil
 			}
 			closeStreamInput("")

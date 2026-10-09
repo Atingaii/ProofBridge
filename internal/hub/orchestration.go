@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/tencent/codex-bridge/internal/modelcatalog"
 	"github.com/tencent/codex-bridge/internal/protocol"
 	"github.com/tencent/codex-bridge/internal/rollout"
 	"github.com/tencent/codex-bridge/internal/serverutil"
@@ -21,57 +22,49 @@ import (
 )
 
 type orchestrationCreateRequest struct {
-	AgentID                 string                       `json:"agentId"`
-	Title                   string                       `json:"title"`
-	Mode                    string                       `json:"mode"`
-	WorkerPair              string                       `json:"workerPair"`
-	FirstCLI                string                       `json:"firstCli"`
-	Profile                 string                       `json:"profile"`
-	NativeContextCompaction string                       `json:"nativeContextCompaction"`
-	Prompt                  string                       `json:"prompt"`
-	CWD                     string                       `json:"cwd"`
-	MaxTurns                int                          `json:"maxTurns"`
-	Files                   []protocol.AttachmentPayload `json:"files"`
-	WorkerProfilePresetIDs  map[string]string            `json:"workerProfilePresetIds"`
-	WorkerProfileEfforts    map[string]string            `json:"workerProfileEfforts"`
+	ExecutionMode                string                       `json:"executionMode"`
+	NativeUserInputClientVersion int                          `json:"nativeUserInputClientVersion"`
+	AgentID                      string                       `json:"agentId"`
+	Title                        string                       `json:"title"`
+	Mode                         string                       `json:"mode"`
+	WorkerPair                   string                       `json:"workerPair"`
+	FirstCLI                     string                       `json:"firstCli"`
+	Profile                      string                       `json:"profile"`
+	VerificationMode             string                       `json:"verificationMode"`
+	NativeContextCompaction      string                       `json:"nativeContextCompaction"`
+	Prompt                       string                       `json:"prompt"`
+	CWD                          string                       `json:"cwd"`
+	MaxTurns                     int                          `json:"maxTurns"`
+	Files                        []protocol.AttachmentPayload `json:"files"`
+	WorkerProfilePresetIDs       map[string]string            `json:"workerProfilePresetIds"`
+	WorkerProfileEfforts         map[string]string            `json:"workerProfileEfforts"`
+	WorkerProfileModels          map[string]string            `json:"workerProfileModels"`
 }
 
+const officialLoginPresetID = "__official__"
+
 type orchestrationStartRequest struct {
-	AgentID                 string
-	Title                   string
-	Mode                    string
-	WorkerPair              string
-	FirstCLI                string
-	Profile                 string
-	NativeContextCompaction string
-	Prompt                  string
-	CWD                     string
-	MaxTurns                int
-	MaxTurnsRequested       int
-	Files                   []protocol.AttachmentPayload
-	PlanWorkspace           bool
-	WorkerProfiles          map[string]protocol.WorkerProfileBinding
-	WorkerProfileEfforts    map[string]string
+	ExecutionMode                string
+	NativeUserInputClientVersion int
+	AgentID                      string
+	Title                        string
+	Mode                         string
+	WorkerPair                   string
+	FirstCLI                     string
+	Profile                      string
+	VerificationMode             string
+	NativeContextCompaction      string
+	Prompt                       string
+	CWD                          string
+	MaxTurns                     int
+	MaxTurnsRequested            int
+	Files                        []protocol.AttachmentPayload
+	PlanWorkspace                bool
+	WorkerProfiles               map[string]protocol.WorkerProfileBinding
+	WorkerProfileEfforts         map[string]string
 }
 
 const orchestrationCancelAckTimeout = 5 * time.Second
-
-func (s *Server) handleListOrchestrations(w http.ResponseWriter, r *http.Request, uid string) {
-	limit := boundedQueryLimit(r, "limit", 50, 200)
-	agentID := strings.TrimSpace(r.URL.Query().Get("agentId"))
-	var runs []store.OrchestrationRun
-	var err error
-	if agentID != "" {
-		runs, err = s.store.ListOrchestrationRunsByAgent(r.Context(), uid, agentID, limit)
-	} else {
-		runs, err = s.store.ListOrchestrationRuns(r.Context(), uid, limit)
-	}
-	if err != nil {
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to list orchestration runs")
-		return
-	}
-	serverutil.WriteJSON(w, http.StatusOK, map[string]any{"runs": runs})
-}
 
 func (s *Server) handleCreateOrchestration(w http.ResponseWriter, r *http.Request, uid string) {
 	var req orchestrationCreateRequest
@@ -81,18 +74,21 @@ func (s *Server) handleCreateOrchestration(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	startReq := orchestrationStartRequest{
-		AgentID:                 req.AgentID,
-		Title:                   req.Title,
-		Mode:                    req.Mode,
-		WorkerPair:              req.WorkerPair,
-		FirstCLI:                req.FirstCLI,
-		Profile:                 req.Profile,
-		NativeContextCompaction: req.NativeContextCompaction,
-		Prompt:                  req.Prompt,
-		CWD:                     req.CWD,
-		MaxTurns:                req.MaxTurns,
-		Files:                   req.Files,
-		WorkerProfiles:          nil,
+		ExecutionMode:                req.ExecutionMode,
+		NativeUserInputClientVersion: req.NativeUserInputClientVersion,
+		AgentID:                      req.AgentID,
+		Title:                        req.Title,
+		Mode:                         req.Mode,
+		WorkerPair:                   req.WorkerPair,
+		FirstCLI:                     req.FirstCLI,
+		Profile:                      req.Profile,
+		VerificationMode:             req.VerificationMode,
+		NativeContextCompaction:      req.NativeContextCompaction,
+		Prompt:                       req.Prompt,
+		CWD:                          req.CWD,
+		MaxTurns:                     req.MaxTurns,
+		Files:                        req.Files,
+		WorkerProfiles:               nil,
 	}
 	if user, err := s.store.UserByID(r.Context(), uid); err == nil {
 		startReq.PlanWorkspace = s.featureEnabled(rollout.FeatureOrchestrationPlanWorkspace, user)
@@ -110,8 +106,16 @@ func (s *Server) handleCreateOrchestration(w http.ResponseWriter, r *http.Reques
 		serverutil.WriteError(w, status, "BAD_AGENT", err.Error())
 		return
 	}
+	if normalized.ExecutionMode == "dynamic" && !s.durableTaskGraphEnabled(agentID) {
+		serverutil.WriteError(w, http.StatusConflict, "ORCHESTRATION_CAPABILITY_UNAVAILABLE", "dynamic orchestration requires a durable-task-graph Bridge")
+		return
+	}
 	if err := s.validateOrchestrationCapabilities(agentID, normalized.WorkerPair); err != nil {
 		serverutil.WriteError(w, http.StatusConflict, "ORCHESTRATION_CAPABILITY_UNAVAILABLE", err.Error())
+		return
+	}
+	if err := s.validateVerificationCapability(agentID, normalized.Profile, normalized.VerificationMode); err != nil {
+		serverutil.WriteError(w, http.StatusConflict, "VERIFICATION_CAPABILITY_UNAVAILABLE", err.Error())
 		return
 	}
 	if len(req.WorkerProfilePresetIDs) > 0 {
@@ -120,21 +124,26 @@ func (s *Server) handleCreateOrchestration(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	profiles, err := s.resolveWorkerProfiles(r.Context(), uid, agentID, normalized.WorkerPair, req.WorkerProfilePresetIDs, req.WorkerProfileEfforts)
+
+	if !s.authorizeOfficialWorkerRequest(w, r, uid, req) {
+		return
+	}
+	profiles, err := s.resolveWorkerProfiles(r.Context(), uid, agentID, normalized.WorkerPair, req.WorkerProfilePresetIDs, req.WorkerProfileEfforts, req.WorkerProfileModels)
 	if err != nil {
-		serverutil.WriteError(w, http.StatusBadRequest, "BAD_WORKER_PROFILE", err.Error())
+		s.writeWorkerProfileError(w, err)
 		return
 	}
 	normalized.WorkerProfiles = profiles
 	files := orchestrationFileMeta(normalized.Files)
 	run, err := s.store.CreateOrchestrationRun(r.Context(), store.CreateOrchestrationRunParams{
-		UserID:                  uid,
+		ExecutionMode: normalized.ExecutionMode, UserID: uid,
 		AgentID:                 agentID,
 		Title:                   normalized.Title,
 		Mode:                    normalized.Mode,
 		WorkerPair:              normalized.WorkerPair,
 		FirstCLI:                normalized.FirstCLI,
 		Profile:                 normalized.Profile,
+		VerificationMode:        normalized.VerificationMode,
 		NativeContextCompaction: normalized.NativeContextCompaction,
 		Prompt:                  normalized.Prompt,
 		CWD:                     normalized.CWD,
@@ -155,6 +164,8 @@ func (s *Server) handleCreateOrchestration(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleContinueOrchestration(w http.ResponseWriter, r *http.Request, uid string) {
+	s.orchestrationInputMu.Lock()
+	defer s.orchestrationInputMu.Unlock()
 	runID := r.PathValue("runID")
 	run, err := s.store.OrchestrationRunByID(r.Context(), runID, uid)
 	if err != nil {
@@ -165,8 +176,11 @@ func (s *Server) handleContinueOrchestration(w http.ResponseWriter, r *http.Requ
 		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load orchestration run")
 		return
 	}
+	if orchestrationTerminalStatus(run.Status) && s.handleTerminalOrchestrationMessage(w, r, run) {
+		return
+	}
 	if !orchestrationTerminalStatus(run.Status) {
-		serverutil.WriteError(w, http.StatusConflict, "RUN_ACTIVE", "orchestration run is still active")
+		s.handleActiveOrchestrationMessage(w, r, run)
 		return
 	}
 	var req orchestrationCreateRequest
@@ -176,19 +190,28 @@ func (s *Server) handleContinueOrchestration(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	startReq := orchestrationStartRequest{
-		AgentID:                 req.AgentID,
-		Title:                   req.Title,
-		Mode:                    req.Mode,
-		WorkerPair:              req.WorkerPair,
-		FirstCLI:                req.FirstCLI,
-		Profile:                 req.Profile,
-		NativeContextCompaction: req.NativeContextCompaction,
-		Prompt:                  req.Prompt,
-		CWD:                     req.CWD,
-		MaxTurns:                req.MaxTurns,
-		Files:                   req.Files,
-		WorkerProfiles:          nil,
+		ExecutionMode:                req.ExecutionMode,
+		NativeUserInputClientVersion: req.NativeUserInputClientVersion,
+		AgentID:                      req.AgentID,
+		Title:                        req.Title,
+		Mode:                         req.Mode,
+		WorkerPair:                   req.WorkerPair,
+		FirstCLI:                     req.FirstCLI,
+		Profile:                      req.Profile,
+		VerificationMode:             req.VerificationMode,
+		NativeContextCompaction:      req.NativeContextCompaction,
+		Prompt:                       req.Prompt,
+		CWD:                          req.CWD,
+		MaxTurns:                     req.MaxTurns,
+		Files:                        req.Files,
+		WorkerProfiles:               nil,
 	}
+	// Execution policy belongs to the original run and cannot change on follow-up.
+	if req.ExecutionMode != "" && req.ExecutionMode != run.ExecutionMode {
+		serverutil.WriteError(w, http.StatusBadRequest, "BAD_EXECUTION_MODE", "follow-up must retain the original execution mode")
+		return
+	}
+	startReq.ExecutionMode = run.ExecutionMode
 	previousProfiles, profilesErr := s.store.OrchestrationWorkerProfiles(r.Context(), run.ID)
 	if profilesErr != nil {
 		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load orchestration worker profiles")
@@ -224,6 +247,9 @@ func (s *Server) handleContinueOrchestration(w http.ResponseWriter, r *http.Requ
 	if startReq.Profile == "" {
 		startReq.Profile = run.Profile
 	}
+	if startReq.VerificationMode == "" {
+		startReq.VerificationMode = run.VerificationMode
+	}
 	if startReq.NativeContextCompaction == "" {
 		startReq.NativeContextCompaction = run.NativeContextCompaction
 	}
@@ -246,16 +272,27 @@ func (s *Server) handleContinueOrchestration(w http.ResponseWriter, r *http.Requ
 		serverutil.WriteError(w, status, "BAD_AGENT", err.Error())
 		return
 	}
+	if normalized.ExecutionMode == "dynamic" && !s.durableTaskGraphEnabled(agentID) {
+		serverutil.WriteError(w, http.StatusConflict, "ORCHESTRATION_CAPABILITY_UNAVAILABLE", "dynamic orchestration requires a durable-task-graph Bridge")
+		return
+	}
 	if err := s.validateOrchestrationCapabilities(agentID, normalized.WorkerPair); err != nil {
 		serverutil.WriteError(w, http.StatusConflict, "ORCHESTRATION_CAPABILITY_UNAVAILABLE", err.Error())
+		return
+	}
+	if err := s.validateVerificationCapability(agentID, normalized.Profile, normalized.VerificationMode); err != nil {
+		serverutil.WriteError(w, http.StatusConflict, "VERIFICATION_CAPABILITY_UNAVAILABLE", err.Error())
+		return
+	}
+	if !s.authorizeOfficialWorkerRequest(w, r, uid, req) {
 		return
 	}
 	if req.WorkerProfilePresetIDs == nil {
 		normalized.WorkerProfiles = previousProfiles
 	} else {
-		profiles, err := s.resolveWorkerProfiles(r.Context(), uid, agentID, normalized.WorkerPair, req.WorkerProfilePresetIDs, req.WorkerProfileEfforts)
+		profiles, err := s.resolveWorkerProfiles(r.Context(), uid, agentID, normalized.WorkerPair, req.WorkerProfilePresetIDs, req.WorkerProfileEfforts, req.WorkerProfileModels)
 		if err != nil {
-			serverutil.WriteError(w, http.StatusBadRequest, "BAD_WORKER_PROFILE", err.Error())
+			s.writeWorkerProfileError(w, err)
 			return
 		}
 		normalized.WorkerProfiles = profiles
@@ -263,6 +300,12 @@ func (s *Server) handleContinueOrchestration(w http.ResponseWriter, r *http.Requ
 	if len(normalized.WorkerProfiles) > 0 {
 		if err := s.validateIsolatedWorkerProfileCapability(agentID); err != nil {
 			serverutil.WriteError(w, http.StatusConflict, "ORCHESTRATION_CAPABILITY_UNAVAILABLE", err.Error())
+			return
+		}
+	}
+	if hasExplicitOfficialWorkerParameters(normalized.WorkerProfiles) {
+		if err := s.validateOfficialWorkerCapability(agentID); err != nil {
+			s.writeWorkerProfileError(w, err)
 			return
 		}
 	}
@@ -284,7 +327,7 @@ func (s *Server) handleContinueOrchestration(w http.ResponseWriter, r *http.Requ
 		serverutil.WriteError(w, http.StatusConflict, "RUN_ACTIVE", "orchestration run is still active")
 		return
 	}
-	if err := s.store.UpdateOrchestrationRunSettings(r.Context(), run.ID, agentID, normalized.Mode, normalized.WorkerPair, normalized.FirstCLI, normalized.Profile, normalized.CWD, normalized.NativeContextCompaction, normalized.MaxTurns, files); err != nil {
+	if err := s.store.UpdateOrchestrationRunSettings(r.Context(), run.ID, agentID, normalized.Mode, normalized.WorkerPair, normalized.FirstCLI, normalized.Profile, normalized.VerificationMode, normalized.CWD, normalized.NativeContextCompaction, normalized.MaxTurns, files); err != nil {
 		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to update orchestration run")
 		return
 	}
@@ -299,6 +342,7 @@ func (s *Server) handleContinueOrchestration(w http.ResponseWriter, r *http.Requ
 	run.WorkerPair = normalized.WorkerPair
 	run.FirstCLI = normalized.FirstCLI
 	run.Profile = normalized.Profile
+	run.VerificationMode = normalized.VerificationMode
 	run.NativeContextCompaction = normalized.NativeContextCompaction
 	run.CWD = normalized.CWD
 	run.MaxTurns = normalized.MaxTurns
@@ -308,6 +352,7 @@ func (s *Server) handleContinueOrchestration(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	run.Status = store.OrchestrationRunning
+	run.ArchivedAt = 0
 	run.Error = ""
 	run.FinishedAt = 0
 	serverutil.WriteJSON(w, http.StatusOK, map[string]any{"run": run})
@@ -315,8 +360,11 @@ func (s *Server) handleContinueOrchestration(w http.ResponseWriter, r *http.Requ
 
 // resolveWorkerProfiles authorizes the encrypted preset snapshot for only the
 // worker slots used by this run. Hub deliberately does not decrypt it.
-func (s *Server) resolveWorkerProfiles(ctx context.Context, userID, agentID, workerPair string, requested map[string]string, requestedEfforts map[string]string) (map[string]protocol.WorkerProfileBinding, error) {
+func (s *Server) resolveWorkerProfiles(ctx context.Context, userID, agentID, workerPair string, requested map[string]string, requestedEfforts map[string]string, requestedModels map[string]string) (map[string]protocol.WorkerProfileBinding, error) {
 	if len(requested) == 0 {
+		if len(requestedModels) > 0 {
+			return nil, errors.New("official model overrides require selected worker profiles")
+		}
 		return nil, nil
 	}
 	expected := map[string]string{"claude": "claude", "codex": "codex"}
@@ -361,6 +409,31 @@ func (s *Server) resolveWorkerProfiles(ctx context.Context, userID, agentID, wor
 		}
 		selectedEfforts[slot] = effort
 	}
+	selectedModels, err := normalizeOfficialWorkerModels(requestedModels, selectedPresets)
+	if err != nil {
+		return nil, err
+	}
+	needsOfficialCatalog := len(selectedModels) > 0
+	for slot, effort := range selectedEfforts {
+		if selectedPresets[slot] != officialLoginPresetID {
+			continue
+		}
+		if !officialCodexWorkerSlot(slot) || selectedModels[slot] == "" {
+			return nil, fmt.Errorf("worker slot %q requires an explicit official Codex model before selecting reasoning effort %q", slot, effort)
+		}
+		needsOfficialCatalog = true
+	}
+	var officialModels map[string]protocol.OfficialCLIModelMetadata
+	if needsOfficialCatalog {
+		models, err := s.loadOfficialCLIModels(ctx, agentID)
+		if err != nil {
+			return nil, err
+		}
+		officialModels = make(map[string]protocol.OfficialCLIModelMetadata, len(models))
+		for _, model := range models {
+			officialModels[model.Model] = model
+		}
+	}
 	connection, online := s.pool.AgentConnectionInfo(agentID)
 	if !online || connection.Capabilities == nil || connection.Capabilities.ConfigSwitcher == nil {
 		return nil, errors.New("selected CLI endpoint does not support encrypted model profiles")
@@ -369,6 +442,28 @@ func (s *Server) resolveWorkerProfiles(ctx context.Context, userID, agentID, wor
 	profiles := make(map[string]protocol.WorkerProfileBinding, len(selectedPresets))
 	for slot, presetID := range selectedPresets {
 		wantCLI := expected[slot]
+		if presetID == officialLoginPresetID {
+			binding := protocol.WorkerProfileBinding{PresetID: officialLoginPresetID, CLI: wantCLI, Name: "Official login", OfficialLogin: true}
+			if modelID := selectedModels[slot]; modelID != "" {
+				metadata, ok := officialModels[modelID]
+				if !ok {
+					return nil, fmt.Errorf("worker slot %q selects unknown official Codex model %q", slot, modelID)
+				}
+				effort := selectedEfforts[slot]
+				if effort == "" {
+					effort = metadata.DefaultReasoningEffort
+				}
+				if effort != "" && !containsString(metadata.SupportedReasoningEfforts, effort) {
+					return nil, fmt.Errorf("worker slot %q selects unsupported reasoning effort %q for official model %q", slot, effort, modelID)
+				}
+				binding.Model = modelID
+				binding.ReasoningEffort = effort
+				binding.ReasoningLevels = append([]string(nil), metadata.SupportedReasoningEfforts...)
+				binding.ReasoningDefault = metadata.DefaultReasoningEffort
+			}
+			profiles[slot] = binding
+			continue
+		}
 		preset, err := s.store.CLIConfigPresetByID(ctx, presetID, userID, agentID)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, fmt.Errorf("model preset %q was not found for the selected endpoint", presetID)
@@ -434,6 +529,19 @@ func (s *Server) normalizeOrchestrationStart(w http.ResponseWriter, req orchestr
 		req.FirstCLI = "claude"
 	}
 	req.Profile = normalizeOrchestrationProfile(req.Profile)
+	req.VerificationMode = protocol.NormalizeVerificationMode(req.VerificationMode)
+	if req.VerificationMode == protocol.VerificationModeTBCI && req.Profile != "formal-proof" {
+		serverutil.WriteError(w, http.StatusBadRequest, "BAD_VERIFICATION_MODE", "TBCI verification requires the formal-proof profile")
+		return req, false
+	}
+	req.ExecutionMode = strings.TrimSpace(req.ExecutionMode)
+	if req.ExecutionMode == "" {
+		req.ExecutionMode = "bounded"
+	}
+	if req.ExecutionMode != "bounded" && req.ExecutionMode != "dynamic" {
+		serverutil.WriteError(w, http.StatusBadRequest, "BAD_EXECUTION_MODE", "executionMode must be bounded or dynamic")
+		return req, false
+	}
 	req.NativeContextCompaction = protocol.NormalizeNativeContextCompaction(req.NativeContextCompaction)
 	if req.MaxTurns <= 0 {
 		req.MaxTurns = 2
@@ -441,6 +549,10 @@ func (s *Server) normalizeOrchestrationStart(w http.ResponseWriter, req orchestr
 	req.MaxTurnsRequested = req.MaxTurns
 	if req.MaxTurns > 12 {
 		req.MaxTurns = 12
+	}
+	if req.ExecutionMode == "dynamic" {
+		req.MaxTurns = 0
+		req.MaxTurnsRequested = 0
 	}
 	if err := s.validateOrchestrationFiles(req.Files); err != nil {
 		serverutil.WriteError(w, http.StatusBadRequest, "BAD_FILE", err.Error())
@@ -450,8 +562,10 @@ func (s *Server) normalizeOrchestrationStart(w http.ResponseWriter, req orchestr
 }
 
 type orchestrationUsageStats struct {
+	WorkerSlot       string  `json:"workerSlot,omitempty"`
 	CLI              string  `json:"cli"`
 	Model            string  `json:"model"`
+	ModelSource      string  `json:"modelSource,omitempty"`
 	InputTokens      int64   `json:"inputTokens"`
 	OutputTokens     int64   `json:"outputTokens"`
 	CacheReadTokens  int64   `json:"cacheReadTokens"`
@@ -467,43 +581,47 @@ type orchestrationUsageStats struct {
 }
 
 type orchestrationRoundStats struct {
-	Round            int     `json:"round"`
-	InputTokens      int64   `json:"inputTokens"`
-	OutputTokens     int64   `json:"outputTokens"`
-	CacheTokens      int64   `json:"cacheTokens"`
-	TotalTokens      int64   `json:"totalTokens"`
-	EstimatedCostUSD float64 `json:"estimatedCostUsd"`
-	CallCount        int     `json:"callCount"`
-}
-
-type orchestrationRunStats struct {
-	RunID            string                    `json:"runId"`
-	StartedAt        int64                     `json:"startedAt,omitempty"`
-	FinishedAt       int64                     `json:"finishedAt,omitempty"`
-	RuntimeSeconds   int64                     `json:"runtimeSeconds"`
+	ByWorker         []orchestrationUsageStats `json:"byWorker"`
+	Round            int                       `json:"round"`
 	InputTokens      int64                     `json:"inputTokens"`
 	OutputTokens     int64                     `json:"outputTokens"`
-	CacheReadTokens  int64                     `json:"cacheReadTokens"`
-	CacheWriteTokens int64                     `json:"cacheWriteTokens"`
 	CacheTokens      int64                     `json:"cacheTokens"`
 	TotalTokens      int64                     `json:"totalTokens"`
 	EstimatedCostUSD float64                   `json:"estimatedCostUsd"`
-	Estimated        bool                      `json:"estimated"`
-	Native           bool                      `json:"native"`
-	CostKnown        bool                      `json:"costKnown"`
-	CostSource       string                    `json:"costSource"`
-	PricingModels    []string                  `json:"pricingModels,omitempty"`
-	ByCLI            []orchestrationUsageStats `json:"byCli"`
-	ReasoningTokens  int64                     `json:"reasoningTokens,omitempty"`
-	CallCount        int                       `json:"callCount,omitempty"`
-	AccountingStatus string                    `json:"accountingStatus"`
-	AccountingSource string                    `json:"accountingSource"`
-	ScannedAt        int64                     `json:"scannedAt,omitempty"`
-	Rounds           []orchestrationRoundStats `json:"rounds,omitempty"`
-	TaskNumber       int                       `json:"taskNumber,omitempty"`
-	PromptSeq        int64                     `json:"promptSeq,omitempty"`
-	Prompt           string                    `json:"prompt,omitempty"`
-	Tasks            []orchestrationRunStats   `json:"tasks,omitempty"`
+	CallCount        int                       `json:"callCount"`
+}
+
+type orchestrationRunStats struct {
+	ModelRecoveryStatus string                    `json:"modelRecoveryStatus,omitempty"`
+	CatalogUpdatedAt    int64                     `json:"catalogUpdatedAt,omitempty"`
+	ByWorker            []orchestrationUsageStats `json:"byWorker"`
+	RunID               string                    `json:"runId"`
+	StartedAt           int64                     `json:"startedAt,omitempty"`
+	FinishedAt          int64                     `json:"finishedAt,omitempty"`
+	RuntimeSeconds      int64                     `json:"runtimeSeconds"`
+	InputTokens         int64                     `json:"inputTokens"`
+	OutputTokens        int64                     `json:"outputTokens"`
+	CacheReadTokens     int64                     `json:"cacheReadTokens"`
+	CacheWriteTokens    int64                     `json:"cacheWriteTokens"`
+	CacheTokens         int64                     `json:"cacheTokens"`
+	TotalTokens         int64                     `json:"totalTokens"`
+	EstimatedCostUSD    float64                   `json:"estimatedCostUsd"`
+	Estimated           bool                      `json:"estimated"`
+	Native              bool                      `json:"native"`
+	CostKnown           bool                      `json:"costKnown"`
+	CostSource          string                    `json:"costSource"`
+	PricingModels       []string                  `json:"pricingModels,omitempty"`
+	ByCLI               []orchestrationUsageStats `json:"byCli"`
+	ReasoningTokens     int64                     `json:"reasoningTokens,omitempty"`
+	CallCount           int                       `json:"callCount,omitempty"`
+	AccountingStatus    string                    `json:"accountingStatus"`
+	AccountingSource    string                    `json:"accountingSource"`
+	ScannedAt           int64                     `json:"scannedAt,omitempty"`
+	Rounds              []orchestrationRoundStats `json:"rounds,omitempty"`
+	TaskNumber          int                       `json:"taskNumber,omitempty"`
+	PromptSeq           int64                     `json:"promptSeq,omitempty"`
+	Prompt              string                    `json:"prompt,omitempty"`
+	Tasks               []orchestrationRunStats   `json:"tasks,omitempty"`
 }
 
 type orchestrationUsageOverviewItem struct {
@@ -628,7 +746,7 @@ func appendRoundUsage(rounds map[int]*orchestrationRoundStats, round int, input,
 	}
 	item := rounds[round]
 	if item == nil {
-		item = &orchestrationRoundStats{Round: round}
+		item = &orchestrationRoundStats{Round: round, ByWorker: []orchestrationUsageStats{}}
 		rounds[round] = item
 	}
 	item.InputTokens += input
@@ -641,7 +759,7 @@ func appendRoundUsage(rounds map[int]*orchestrationRoundStats, round int, input,
 func initializeOrchestrationRounds(rounds map[int]*orchestrationRoundStats, boundaries []orchestrationRoundBoundary) {
 	for _, boundary := range boundaries {
 		if boundary.round > 0 && rounds[boundary.round] == nil {
-			rounds[boundary.round] = &orchestrationRoundStats{Round: boundary.round}
+			rounds[boundary.round] = &orchestrationRoundStats{Round: boundary.round, ByWorker: []orchestrationUsageStats{}}
 		}
 	}
 }
@@ -661,70 +779,119 @@ func finalizeOrchestrationRounds(stats *orchestrationRunStats, rounds map[int]*o
 }
 
 func (s *Server) handleOrchestrationStats(w http.ResponseWriter, r *http.Request, uid string) {
+	ctx, cancel := context.WithTimeout(r.Context(), orchestrationStatsTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
 	run, err := s.store.OrchestrationRunByID(r.Context(), r.PathValue("runID"), uid)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			serverutil.WriteError(w, http.StatusNotFound, "NOT_FOUND", "orchestration run not found")
 			return
 		}
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load orchestration run")
+		writeUsageReadError(w, r, "failed to load orchestration run")
 		return
 	}
 	events, err := s.store.ListOrchestrationUsageTimeline(r.Context(), run.ID)
 	if err != nil {
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load orchestration statistics")
+		writeUsageReadError(w, r, "failed to load orchestration statistics")
 		return
 	}
 	ledger, err := s.store.ListOrchestrationUsageEvents(r.Context(), run.ID)
 	if err != nil {
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load usage ledger")
+		writeUsageReadError(w, r, "failed to load usage ledger")
 		return
 	}
 	syncs, err := s.store.ListOrchestrationUsageSyncs(r.Context(), run.ID)
 	if err != nil {
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load usage sync state")
+		writeUsageReadError(w, r, "failed to load usage sync state")
 		return
 	}
-	if len(syncs) == 0 && orchestrationTerminalStatus(run.Status) {
-		_ = s.requestOrchestrationUsageSync(run, events)
+
+	graphs, graphErr := s.store.ListTaskGraphMetadataByRun(r.Context(), run.ID)
+	if graphErr != nil {
+		writeUsageReadError(w, r, "failed to load orchestration task boundaries")
+		return
+	}
+	events = enrichVerifierUsage(enrichSnapshotModelsFromLedger(enrichOrchestrationUsageTimeline(events, graphs), ledger), graphs)
+	hints := planningUsageRecoveryHints(events, graphs)
+	now := time.Now().Unix()
+	if orchestrationTerminalStatus(run.Status) && (historicalUsageSyncDue(syncs, now) || (s.supportsModelRecovery(run.AgentID) && modelRecoveryDue(hints, syncs, now))) {
+		_ = s.requestOrchestrationUsageSync(r.Context(), run, events)
 	}
 	stats := buildOrchestrationRunStatsWithLedger(run, events, ledger, syncs)
-	graphs, graphErr := s.store.ListTaskGraphsByRun(r.Context(), run.ID)
-	if graphErr != nil {
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load orchestration task boundaries")
+	stats.Tasks = buildOrchestrationTaskStats(run, events, ledger, syncs, graphs)
+	stats.ModelRecoveryStatus = s.modelRecoveryStatus(run.AgentID, hints, syncs, now)
+	stats.CatalogUpdatedAt = modelcatalog.Default.UpdatedAt()
+	if r.Context().Err() != nil {
+		writeUsageReadError(w, r, "statistics request interrupted")
 		return
 	}
-	stats.Tasks = buildOrchestrationTaskStats(run, events, ledger, syncs, graphs)
 	serverutil.WriteJSON(w, http.StatusOK, map[string]any{"stats": stats})
 }
 
 func (s *Server) handleUsageOverview(w http.ResponseWriter, r *http.Request, uid string) {
+	ctx, cancel := context.WithTimeout(r.Context(), orchestrationStatsTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
 	days, timezoneOffset, cutoff, err := usageOverviewRange(r)
 	if err != nil {
 		serverutil.WriteError(w, http.StatusBadRequest, "BAD_RANGE", err.Error())
 		return
 	}
-	runs, err := s.store.ListAllOrchestrationRuns(r.Context(), uid)
+	pageRequest, err := parseUsageOverviewPage(r, days, timezoneOffset, cutoff)
 	if err != nil {
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load usage overview")
+		serverutil.WriteError(w, http.StatusBadRequest, "BAD_QUERY", err.Error())
+		return
+	}
+	var runs []store.OrchestrationRun
+	var page *usageOverviewPage
+	if pageRequest == nil {
+		runs, err = s.store.ListAllOrchestrationRuns(r.Context(), uid)
+	} else {
+		var history store.OrchestrationHistoryPage
+		history, err = s.store.ListOrchestrationHistory(r.Context(), uid, store.OrchestrationHistoryFilter{
+			Archived: "all", Limit: pageRequest.Limit, Cursor: pageRequest.History,
+		})
+		runs = history.Runs
+		page = pageRequest.response(history.NextCursor, len(runs))
+		cutoff = pageRequest.Cutoff
+	}
+	if err != nil {
+		if errors.Is(err, store.ErrInvalidOrchestrationHistory) {
+			serverutil.WriteError(w, http.StatusBadRequest, "BAD_QUERY", "invalid usage overview cursor")
+			return
+		}
+		writeUsageReadError(w, r, "failed to load usage overview")
 		return
 	}
 	overview := orchestrationUsageOverview{Days: days, TimezoneOffset: timezoneOffset, CostKnown: true, Trend: []orchestrationUsageTrendPoint{}, Items: []orchestrationUsageOverviewItem{}}
 	machineSet := map[string]bool{}
 	trend := map[string]*orchestrationUsageTrendPoint{}
+	// Runs often share an endpoint. Keep this cache request-local so ownership,
+	// deletion and endpoint metadata are refreshed on every overview request.
+	agents := map[string]*store.Agent{}
 	for _, run := range runs {
 		events, eventErr := s.store.ListOrchestrationUsageTimeline(r.Context(), run.ID)
 		if eventErr != nil {
-			continue
+			writeUsageReadError(w, r, "failed to load usage timeline")
+			return
 		}
 		ledger, ledgerErr := s.store.ListOrchestrationUsageEvents(r.Context(), run.ID)
 		if ledgerErr != nil {
-			ledger = nil
+			writeUsageReadError(w, r, "failed to load usage ledger")
+			return
 		}
 		syncs, syncErr := s.store.ListOrchestrationUsageSyncs(r.Context(), run.ID)
 		if syncErr != nil {
-			syncs = nil
+			writeUsageReadError(w, r, "failed to load usage sync state")
+			return
 		}
+		graphs, graphErr := s.store.ListTaskGraphMetadataByRun(r.Context(), run.ID)
+		if graphErr != nil {
+			writeUsageReadError(w, r, "failed to load orchestration task boundaries")
+			return
+		}
+		events = enrichVerifierUsage(enrichSnapshotModelsFromLedger(enrichOrchestrationUsageTimeline(events, graphs), ledger), graphs)
 		filteredEvents := filterOverviewTimeline(events, cutoff)
 		filteredLedger := filterOverviewLedger(run, ledger, cutoff)
 		stats := buildOrchestrationRunStatsWithLedger(run, filteredEvents, filteredLedger, syncs)
@@ -732,9 +899,20 @@ func (s *Server) handleUsageOverview(w http.ResponseWriter, r *http.Request, uid
 			continue
 		}
 		appendOverviewTrend(trend, run, filteredEvents, filteredLedger, syncs, timezoneOffset)
-		agent, agentErr := s.store.AgentByIDForUser(r.Context(), run.AgentID, uid, false)
+		agent, loaded := agents[run.AgentID]
+		if !loaded {
+			endpoint, agentErr := s.store.AgentByIDForUser(r.Context(), run.AgentID, uid, false)
+			if agentErr != nil && !errors.Is(agentErr, store.ErrNotFound) {
+				writeUsageReadError(w, r, "failed to load usage endpoint")
+				return
+			}
+			if agentErr == nil {
+				agent = &endpoint
+			}
+			agents[run.AgentID] = agent
+		}
 		machineID, machineName, hostname := run.AgentID, run.AgentID, ""
-		if agentErr == nil {
+		if agent != nil {
 			machineID, machineName, hostname = agent.MachineID, agent.Name, agent.Hostname
 		}
 		machineSet[machineID] = true
@@ -761,7 +939,15 @@ func (s *Server) handleUsageOverview(w http.ResponseWriter, r *http.Request, uid
 	if overview.Runs == 0 {
 		overview.CostKnown = false
 	}
-	serverutil.WriteJSON(w, http.StatusOK, map[string]any{"overview": overview})
+	if r.Context().Err() != nil {
+		writeUsageReadError(w, r, "statistics request interrupted")
+		return
+	}
+	response := map[string]any{"overview": overview}
+	if page != nil {
+		response["page"] = page
+	}
+	serverutil.WriteJSON(w, http.StatusOK, response)
 }
 
 func usageOverviewRange(r *http.Request) (days, timezoneOffset int, cutoff int64, err error) {
@@ -864,7 +1050,7 @@ func appendOverviewTrend(trend map[string]*orchestrationUsageTrendPoint, run sto
 		point.CacheTokens += usage.CacheReadTokens + usage.CacheWriteTokens
 		point.TotalTokens += usage.InputTokens + usage.OutputTokens + usage.CacheReadTokens + usage.CacheWriteTokens
 		point.EstimatedCostUSD += usage.EstimatedCostUSD
-		point.CallCount++
+		point.CallCount += snapshotUsageCallCount(usage)
 		if !usage.CostKnown {
 			point.CostKnown = false
 		}
@@ -969,9 +1155,11 @@ func orchestrationStatsStartTime(run store.OrchestrationRun, events []store.Orch
 }
 
 func buildOrchestrationRunStatsWithLedger(run store.OrchestrationRun, events []store.OrchestrationEvent, ledger []protocol.OrchestrationUsageEvent, syncs []store.OrchestrationUsageSync) orchestrationRunStats {
+	events = enrichOrchestrationUsageTimeline(events, nil)
+	events = enrichVerifierUsage(enrichSnapshotModelsFromLedger(events, ledger), nil)
 	// These collections are part of the browser contract. Keep them as [] rather
 	// than null when a run has not produced usage yet.
-	stats := orchestrationRunStats{RunID: run.ID, FinishedAt: run.FinishedAt, StartedAt: orchestrationStatsStartTime(run, events), ByCLI: []orchestrationUsageStats{}}
+	stats := orchestrationRunStats{RunID: run.ID, FinishedAt: run.FinishedAt, StartedAt: orchestrationStatsStartTime(run, events), ByCLI: []orchestrationUsageStats{}, ByWorker: []orchestrationUsageStats{}}
 	if shouldUseOrchestrationUsageLedger(events, ledger, syncs) {
 		return buildLedgerOrchestrationRunStats(run, events, ledger, syncs)
 	}
@@ -991,12 +1179,19 @@ func buildOrchestrationRunStatsWithLedger(run store.OrchestrationRun, events []s
 			usage.CLI = "unknown"
 		}
 		usageCount++
-		stats.CallCount++
+		calls := snapshotUsageCallCount(usage)
+		stats.CallCount += calls
 		stats.InputTokens += usage.InputTokens
 		stats.OutputTokens += usage.OutputTokens
 		stats.CacheReadTokens += usage.CacheReadTokens
 		stats.CacheWriteTokens += usage.CacheWriteTokens
-		appendRoundUsage(rounds, orchestrationRoundForTime(boundaries, event.CreatedAt), usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens, 1)
+		round := usageRoundNumber(event.Data)
+		if round == 0 {
+			round = orchestrationRoundForTime(boundaries, event.CreatedAt)
+		}
+		appendRoundUsage(rounds, round, usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens, calls)
+		usage.CallCount = calls
+		appendParticipantRound(&stats, rounds, round, usage)
 		stats.EstimatedCostUSD += usage.EstimatedCostUSD
 		stats.Estimated = stats.Estimated || usage.Estimated
 		stats.Native = stats.Native || usage.Native
@@ -1020,7 +1215,7 @@ func buildOrchestrationRunStatsWithLedger(run store.OrchestrationRun, events []s
 			item = &orchestrationUsageStats{CLI: usage.CLI, Model: usage.Model, Estimated: usage.Estimated, CostKnown: usage.CostKnown}
 			byCLI[key] = item
 		}
-		item.CallCount++
+		item.CallCount += calls
 		item.InputTokens += usage.InputTokens
 		item.OutputTokens += usage.OutputTokens
 		item.CacheReadTokens += usage.CacheReadTokens
@@ -1068,6 +1263,7 @@ func buildOrchestrationRunStatsWithLedger(run store.OrchestrationRun, events []s
 // unavailable, empty result even though the bridge already persisted native
 // turn usage while the CLI was running.
 func shouldUseOrchestrationUsageLedger(timeline []store.OrchestrationEvent, ledger []protocol.OrchestrationUsageEvent, syncs []store.OrchestrationUsageSync) bool {
+	syncs = accountingUsageSyncs(syncs)
 	if len(syncs) == 0 {
 		return false
 	}
@@ -1076,6 +1272,13 @@ func shouldUseOrchestrationUsageLedger(timeline []store.OrchestrationEvent, ledg
 		if sync.Status != "complete" {
 			complete = false
 			break
+		}
+	}
+	// Worker-session logs do not cover independent verifier invocations or
+	// provider billing amounts. Replacing these snapshots would lose usage/cost.
+	for _, event := range timeline {
+		if event.Kind == "turn.usage" && (event.Role == "verifier" || (event.Data != nil && event.Data["costSource"] == "provider")) {
+			return false
 		}
 	}
 	if complete && len(ledger) > 0 {
@@ -1093,7 +1296,8 @@ func shouldUseOrchestrationUsageLedger(timeline []store.OrchestrationEvent, ledg
 }
 
 func buildLedgerOrchestrationRunStats(run store.OrchestrationRun, timeline []store.OrchestrationEvent, events []protocol.OrchestrationUsageEvent, syncs []store.OrchestrationUsageSync) orchestrationRunStats {
-	stats := orchestrationRunStats{RunID: run.ID, FinishedAt: run.FinishedAt, StartedAt: orchestrationStatsStartTime(run, timeline), Native: true, AccountingStatus: "complete", AccountingSource: "local-cli-ledger", CostKnown: len(events) > 0, ByCLI: []orchestrationUsageStats{}}
+	syncs = accountingUsageSyncs(syncs)
+	stats := orchestrationRunStats{RunID: run.ID, FinishedAt: run.FinishedAt, StartedAt: orchestrationStatsStartTime(run, timeline), Native: true, AccountingStatus: "complete", AccountingSource: "local-cli-ledger", CostKnown: len(events) > 0, ByCLI: []orchestrationUsageStats{}, ByWorker: []orchestrationUsageStats{}}
 	if stats.StartedAt == 0 {
 		stats.StartedAt = run.CreatedAt
 	}
@@ -1123,7 +1327,8 @@ func buildLedgerOrchestrationRunStats(run store.OrchestrationRun, timeline []sto
 		stats.OutputTokens += event.OutputTokens
 		stats.ReasoningTokens += event.ReasoningTokens
 		stats.CallCount++
-		appendRoundUsage(rounds, orchestrationRoundForTime(boundaries, event.OccurredAt), event.InputTokens, event.OutputTokens, event.CacheReadTokens, event.CacheWriteTokens, 1)
+		round := workerLedgerRound(timeline, boundaries, event)
+		appendRoundUsage(rounds, round, event.InputTokens, event.OutputTokens, event.CacheReadTokens, event.CacheWriteTokens, 1)
 		key := event.CLI + "\x00" + event.Model
 		item := byCLI[key]
 		if item == nil {
@@ -1136,11 +1341,16 @@ func buildLedgerOrchestrationRunStats(run store.OrchestrationRun, timeline []sto
 		item.OutputTokens += event.OutputTokens
 		item.ReasoningTokens += event.ReasoningTokens
 		item.CallCount++
+		worker := orchestrationUsageStats{CLI: event.CLI, WorkerSlot: event.WorkerSlot, Model: event.Model, Native: true, InputTokens: event.InputTokens, OutputTokens: event.OutputTokens, CacheReadTokens: event.CacheReadTokens, CacheWriteTokens: event.CacheWriteTokens, ReasoningTokens: event.ReasoningTokens, CallCount: 1}
 		// Pricing is resolved from the concrete model, not the transport provider.
 		// Local relays commonly report provider=custom while still using a model
 		// with a known public catalog price. Unknown models remain unpriced.
 		quote, ok := usagepricing.EstimateNormalized(event.CLI, event.Model, event.InputTokens, event.OutputTokens, event.CacheReadTokens, event.CacheWriteTokens)
 		if ok {
+			worker.CostKnown = true
+			worker.EstimatedCostUSD = quote.CostUSD
+			worker.CostSource = quote.Source
+			worker.PricingModel = quote.PricingModel
 			stats.EstimatedCostUSD += quote.CostUSD
 			item.EstimatedCostUSD += quote.CostUSD
 			stats.PricingModels = appendUnique(stats.PricingModels, quote.PricingModel)
@@ -1155,6 +1365,7 @@ func buildLedgerOrchestrationRunStats(run store.OrchestrationRun, timeline []sto
 			stats.CostKnown = false
 			item.CostKnown = false
 		}
+		appendParticipantRound(&stats, rounds, round, worker)
 	}
 	if len(events) == 0 {
 		stats.CostKnown = false
@@ -1168,47 +1379,112 @@ func buildLedgerOrchestrationRunStats(run store.OrchestrationRun, timeline []sto
 }
 
 func (s *Server) handleOrchestrationUsageSync(w http.ResponseWriter, r *http.Request, uid string) {
+	ctx, cancel := context.WithTimeout(r.Context(), orchestrationStatsTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
 	run, err := s.store.OrchestrationRunByID(r.Context(), r.PathValue("runID"), uid)
 	if err != nil {
-		serverutil.WriteError(w, http.StatusNotFound, "NOT_FOUND", "orchestration run not found")
+		if errors.Is(err, store.ErrNotFound) {
+			serverutil.WriteError(w, http.StatusNotFound, "NOT_FOUND", "orchestration run not found")
+			return
+		}
+		writeUsageReadError(w, r, "failed to load orchestration run")
 		return
 	}
 	events, err := s.store.ListOrchestrationUsageTimeline(r.Context(), run.ID)
 	if err != nil {
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load orchestration run")
+		writeUsageReadError(w, r, "failed to load orchestration run")
 		return
 	}
-	if err := s.requestOrchestrationUsageSync(run, events); err != nil {
+	if err := s.requestOrchestrationUsageSync(r.Context(), run, events); err != nil {
+		if r.Context().Err() != nil {
+			writeUsageReadError(w, r, "statistics request interrupted")
+			return
+		}
 		serverutil.WriteError(w, http.StatusConflict, "AGENT_OFFLINE", err.Error())
 		return
 	}
 	serverutil.WriteJSON(w, http.StatusAccepted, map[string]any{"status": "syncing"})
 }
 
-func (s *Server) requestOrchestrationUsageSync(run store.OrchestrationRun, events []store.OrchestrationEvent) error {
+func (s *Server) requestOrchestrationUsageSync(ctx context.Context, run store.OrchestrationRun, events []store.OrchestrationEvent) error {
 	if !s.pool.AgentSupportsUsageLedger(run.AgentID) {
 		return errors.New("connected Bridge does not support the local usage ledger")
 	}
-	profiles, err := s.store.OrchestrationWorkerProfiles(context.Background(), run.ID)
+	profiles, err := s.store.OrchestrationWorkerProfiles(ctx, run.ID)
 	if err != nil {
 		return fmt.Errorf("load worker profile bindings: %w", err)
 	}
 	sessions := orchestrationUsageSessions(run, events, profiles)
-	if len(sessions) == 0 {
-		return errors.New("native session metadata unavailable")
+	graphs, err := s.store.ListTaskGraphMetadataByRun(ctx, run.ID)
+	if err != nil {
+		return err
 	}
-	return s.pool.SendToAgent(run.AgentID, protocol.MustEnvelope(protocol.TypeOrchestrationUsageSyncRequest, "", protocol.OrchestrationUsageSyncRequest{RunID: run.ID, Sessions: sessions}))
+	recovery := planningUsageRecoveryHints(events, graphs)
+	if !s.supportsModelRecovery(run.AgentID) {
+		recovery = nil
+	}
+	if len(sessions) == 0 && len(recovery) == 0 {
+		return errors.New("native session metadata unavailable; update the Bridge to enable historical model recovery")
+	}
+	if !s.reserveUsageSync(run.ID, time.Now()) {
+		return nil
+	}
+	err = s.pool.SendToAgent(run.AgentID, protocol.MustEnvelope(protocol.TypeOrchestrationUsageSyncRequest, "", protocol.OrchestrationUsageSyncRequest{RunID: run.ID, Sessions: sessions, Recovery: recovery}))
+	if err != nil {
+		s.releaseUsageSync(run.ID)
+	}
+	return err
 }
 
 func orchestrationUsageSessions(run store.OrchestrationRun, events []store.OrchestrationEvent, profiles map[string]protocol.WorkerProfileBinding) []protocol.OrchestrationUsageSession {
 	seen := map[string]bool{}
 	var sessions []protocol.OrchestrationUsageSession
+	// Structured per-slot maps are stronger evidence than legacy resume labels,
+	// which copied the last worker ID into both A and B. Include old task ends:
+	// the run's current maps only retain the latest native sessions.
+	knownOwners := map[string]string{}
+	conflictingOwners := map[string]bool{}
+	remember := func(cli string, ids map[string]string) {
+		for slot, id := range ids {
+			key := cli + "\x00" + strings.TrimSpace(id)
+			if owner, ok := knownOwners[key]; ok && owner != slot {
+				conflictingOwners[key] = true
+			}
+			knownOwners[key] = slot
+		}
+	}
+	remember("codex", run.CodexThreadIDs)
+	remember("claude", run.ClaudeSessionIDs)
+	for _, event := range events {
+		if event.RunEndData != nil {
+			remember("codex", event.RunEndData.CodexThreadIDs)
+			remember("claude", event.RunEndData.ClaudeSessionIDs)
+		}
+	}
 	add := func(cli, slot, id string) {
 		id = strings.TrimSpace(id)
+		if cli == "codex-a" || cli == "codex-b" || cli == "claude-a" || cli == "claude-b" {
+			if slot == "" {
+				slot = cli
+			}
+			cli = strings.Split(cli, "-")[0]
+		}
+		if slot != "verifier" && (run.WorkerPair == "codex-codex" && cli == "claude" || run.WorkerPair == "claude-claude" && cli == "codex") {
+			return
+		}
+		ownerKey := cli + "\x00" + id
+		if conflictingOwners[ownerKey] {
+			return
+		}
+		if owner, known := knownOwners[ownerKey]; known && owner != slot {
+			return
+		}
 		key := cli + "\x00" + slot + "\x00" + id
 		if id != "" && !seen[key] {
 			seen[key] = true
-			_, isolated := profiles[slot]
+			profile, bound := profiles[slot]
+			isolated := bound && !profile.OfficialLogin
 			sessions = append(sessions, protocol.OrchestrationUsageSession{CLI: cli, WorkerSlot: slot, SessionID: id, Isolated: isolated})
 		}
 	}
@@ -1225,6 +1501,9 @@ func orchestrationUsageSessions(run store.OrchestrationRun, events []store.Orche
 		if event.RunEndData == nil {
 			continue
 		}
+		for slot, id := range event.RunEndData.CodexThreadIDs {
+			add("codex", slot, id)
+		}
 		add("claude", "claude", event.RunEndData.ClaudeSessionID)
 		for slot, id := range event.RunEndData.ClaudeSessionIDs {
 			add("claude", slot, id)
@@ -1233,7 +1512,48 @@ func orchestrationUsageSessions(run store.OrchestrationRun, events []store.Orche
 			add(native.CLI, native.WorkerSlot, native.ID)
 		}
 	}
-	return sessions
+	turnSlots := map[string]string{}
+	for _, event := range events {
+		if event.Kind == "turn.start" {
+			slot := usageText(event.Data, "workerSlot")
+			if event.TurnStartData != nil {
+				slot = event.TurnStartData.WorkerSlot
+			}
+			if slot == "" && event.Task != nil {
+				slot = event.Task.WorkerSlot
+			}
+			turnSlots[event.CLI+"\x00"+event.TurnID] = slot
+		}
+	}
+	for _, event := range events {
+		if event.Kind != "bridge.note" || usageText(event.Data, "category") != "native-identity" {
+			continue
+		}
+		slot := usageText(event.Data, "workerSlot")
+		if slot == "" {
+			slot = turnSlots[event.CLI+"\x00"+event.TurnID]
+		}
+		if slot != "" {
+			add(event.CLI, slot, usageText(event.Data, "nativeSessionId"))
+		}
+	}
+	// Do not bill an old copied native ID twice under different participants.
+	owners := map[string]string{}
+	ambiguous := map[string]bool{}
+	for _, session := range sessions {
+		key := session.CLI + "\x00" + session.SessionID
+		if owner, ok := owners[key]; ok && owner != session.WorkerSlot {
+			ambiguous[key] = true
+		}
+		owners[key] = session.WorkerSlot
+	}
+	filtered := sessions[:0]
+	for _, session := range sessions {
+		if !ambiguous[session.CLI+"\x00"+session.SessionID] {
+			filtered = append(filtered, session)
+		}
+	}
+	return filtered
 }
 
 func (s *Server) handleOrchestrationUsageSyncResult(ctx context.Context, agentID string, env protocol.Envelope) {
@@ -1253,6 +1573,13 @@ func (s *Server) handleOrchestrationUsageSyncResult(ctx context.Context, agentID
 
 // Snapshots preserve native provider inputs; ledger rows already exclude
 // cache reads. Normalize only snapshots, including historical records.
+func snapshotUsageCallCount(usage orchestrationUsageStats) int {
+	if usage.Model == "unattributed" || (usage.Estimated && !usage.Native && usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.CacheReadTokens == 0 && usage.CacheWriteTokens == 0 && usage.EstimatedCostUSD == 0) {
+		return 0 // Aggregate remainders are not additional model calls.
+	}
+	return 1
+}
+
 func orchestrationSnapshotUsage(event store.OrchestrationEvent) orchestrationUsageStats {
 	usage := orchestrationUsageFromData(event.Data)
 	if usage.CLI == "" {
@@ -1288,11 +1615,11 @@ func orchestrationUsageFromData(data map[string]any) orchestrationUsageStats {
 	estimated, _ := data["estimated"].(bool)
 	native, _ := data["native"].(bool)
 	costKnown, _ := data["costKnown"].(bool)
-	return orchestrationUsageStats{CLI: text("cli"), Model: text("model"), InputTokens: value("inputTokens"), OutputTokens: value("outputTokens"), CacheReadTokens: value("cacheReadTokens"), CacheWriteTokens: value("cacheWriteTokens"), EstimatedCostUSD: decimal("estimatedCostUsd"), Estimated: estimated, Native: native, CostKnown: costKnown, CostSource: text("costSource"), PricingModel: text("pricingModel")}
+	return orchestrationUsageStats{WorkerSlot: text("workerSlot"), CLI: text("cli"), Model: text("model"), ModelSource: text("modelSource"), InputTokens: value("inputTokens"), OutputTokens: value("outputTokens"), CacheReadTokens: value("cacheReadTokens"), CacheWriteTokens: value("cacheWriteTokens"), EstimatedCostUSD: decimal("estimatedCostUsd"), Estimated: estimated, Native: native, CostKnown: costKnown, CostSource: text("costSource"), PricingModel: text("pricingModel")}
 }
 
 func (usage *orchestrationUsageStats) applyOfficialCatalogFallback() {
-	if usage.CostKnown {
+	if usage.CostKnown && usage.CostSource != "catalog" && usage.CostSource != "official-catalog" && usage.CostSource != "models.dev" || usage.CostSource == "provider-unallocated" {
 		return
 	}
 	quote, ok := usagepricing.Estimate(usage.CLI, usage.Model, usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens)
@@ -1335,11 +1662,12 @@ func (s *Server) startOrchestration(ctx context.Context, run store.Orchestration
 		slog.Error("[hub] update orchestration status failed", "run_id", run.ID, "error", err)
 	}
 	payload := protocol.OrchestrationStartPayload{
-		RunID:                   run.ID,
+		ExecutionMode: req.ExecutionMode, RunID: run.ID,
 		Mode:                    req.Mode,
 		WorkerPair:              req.WorkerPair,
 		FirstCLI:                req.FirstCLI,
 		Prompt:                  req.Prompt,
+		TaskPrompt:              req.Prompt,
 		Context:                 strings.Join(cleanContextParts(contextParts), "\n\n"),
 		Resume:                  resume,
 		PromptSeq:               event.Seq,
@@ -1354,9 +1682,16 @@ func (s *Server) startOrchestration(ctx context.Context, run store.Orchestration
 		ClaudeStartedSlots:      orchestrationResumeBoolMap(resume, run.ClaudeStartedSlots),
 		RunCWD:                  orchestrationResumeString(resume, run.RunCWD),
 		Profile:                 req.Profile,
+		VerificationMode:        req.VerificationMode,
 		NativeContextCompaction: req.NativeContextCompaction,
 		PlanWorkspace:           req.PlanWorkspace,
 		WorkerProfiles:          req.WorkerProfiles,
+	}
+	if user, err := s.store.UserByID(ctx, run.UserID); err == nil {
+		payload.NativeUserInput = req.NativeUserInputClientVersion == 3 && s.featureEnabled(rollout.FeatureNativeUserInput, user) && s.nativeUserInputV3(run.AgentID, "")
+		if payload.NativeUserInput {
+			payload.NativeUserInputProtocolVersion = 3
+		}
 	}
 	if s.durableTaskGraphEnabled(run.AgentID) {
 		if err := s.createAndDispatchTaskGraph(ctx, run, payload); err != nil {
@@ -1416,6 +1751,32 @@ func (s *Server) validateOrchestrationCapabilities(agentID, workerPair string) e
 		return fmt.Errorf("review-required orchestration needs browser approval for %s; reconnect the endpoint with a review-required bridge that supports app-server orchestration", strings.Join(missing, " and "))
 	}
 	return nil
+}
+
+func (s *Server) validateVerificationCapability(agentID, profile, verificationMode string) error {
+	if normalizeOrchestrationProfile(profile) != "formal-proof" || protocol.NormalizeVerificationMode(verificationMode) != protocol.VerificationModeTBCI {
+		return nil
+	}
+	connection, ok := s.pool.AgentConnectionInfo(agentID)
+	if !ok || connection.Capabilities == nil {
+		return errors.New("selected CLI endpoint is offline and cannot report TBCI availability")
+	}
+	capability := connection.Capabilities.TBCI
+	if capability == nil {
+		return errors.New("selected CLI endpoint must update and reconnect its Bridge before TBCI verification can be selected")
+	}
+	if capability.Available && strings.EqualFold(strings.TrimSpace(capability.State), "ready") {
+		return nil
+	}
+	reason := strings.TrimSpace(capability.Reason)
+	if reason == "" {
+		state := strings.TrimSpace(capability.State)
+		if state == "" {
+			state = "unavailable"
+		}
+		reason = "the Bridge reported TBCI as " + state
+	}
+	return fmt.Errorf("selected CLI endpoint cannot run TBCI: %s", reason)
 }
 
 // validateIsolatedWorkerProfileCapability rejects Bridges that predate the
@@ -1580,7 +1941,7 @@ func (s *Server) handleOrchestrationEvents(w http.ResponseWriter, r *http.Reques
 		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load orchestration run")
 		return
 	}
-	limit := boundedQueryLimit(r, "limit", 10000, 10000)
+	limit := boundedQueryLimit(r, "limit", 200, 1000)
 	afterSeq, hasAfterSeq, ok := int64QueryParam(w, r, "afterSeq")
 	if !ok {
 		return
@@ -1592,9 +1953,6 @@ func (s *Server) handleOrchestrationEvents(w http.ResponseWriter, r *http.Reques
 	if hasAfterSeq && hasBeforeSeq {
 		serverutil.WriteError(w, http.StatusBadRequest, "BAD_QUERY", "afterSeq and beforeSeq cannot be used together")
 		return
-	}
-	if (hasAfterSeq || hasBeforeSeq) && limit > 1000 {
-		limit = 1000
 	}
 	// Read one extra record so the browser does not have to infer pagination
 	// from page size after reconnects or event de-duplication.
@@ -1612,13 +1970,18 @@ func (s *Server) handleOrchestrationEvents(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	hasMoreBefore := false
+	hasMoreAfter := false
+	if hasAfterSeq && len(events) > limit {
+		hasMoreAfter = true
+		events = events[:limit]
+	}
 	if !hasAfterSeq && len(events) > limit {
 		hasMoreBefore = true
 		// All store methods return ascending events. Retain the newest page so
 		// the next beforeSeq cursor is adjacent to the currently displayed page.
 		events = events[len(events)-limit:]
 	}
-	serverutil.WriteJSON(w, http.StatusOK, map[string]any{"events": events, "hasMoreBefore": hasMoreBefore})
+	serverutil.WriteJSON(w, http.StatusOK, map[string]any{"events": events, "hasMoreBefore": hasMoreBefore, "hasMoreAfter": hasMoreAfter})
 }
 
 func (s *Server) handleCancelOrchestration(w http.ResponseWriter, r *http.Request, uid string) {
@@ -1833,6 +2196,8 @@ func compactOrchestrationContext(run store.OrchestrationRun, events []store.Orch
 			commands = append(commands, trimForContext(joinNonEmpty(command, status, output), 700))
 		case event.Kind == "run.error" || event.Kind == "run.cancelled":
 			blockers = append(blockers, trimForContext(joinNonEmpty(event.Error, event.Content, event.Status), 600))
+		case event.Kind == "bridge.note" && event.BridgeNoteData != nil && event.BridgeNoteData.Category == "tbci-verification":
+			blockers = append(blockers, trimForContext(joinNonEmpty(event.Error, event.Content), 600))
 		}
 	}
 
@@ -2065,8 +2430,8 @@ func (s *Server) handleOrchestrationWS(w http.ResponseWriter, r *http.Request, u
 		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load orchestration run")
 		return
 	}
-	if !orchestrationActiveStatus(run.Status) {
-		serverutil.WriteError(w, http.StatusConflict, "RUN_NOT_ACTIVE", "orchestration event stream is only available for active runs")
+	if !orchestrationActiveStatus(run.Status) && !orchestrationTerminalStatus(run.Status) {
+		serverutil.WriteError(w, http.StatusConflict, "RUN_NOT_ACTIVE", "orchestration event stream is unavailable")
 		return
 	}
 	upgrader := websocket.Upgrader{CheckOrigin: s.checkOrigin}
@@ -2110,9 +2475,15 @@ func (s *Server) handleOrchestrationWS(w http.ResponseWriter, r *http.Request, u
 				_ = conn.Send(protocol.MustEnvelope(protocol.TypeError, "", protocol.ErrorPayload{Code: "RUN_NOT_FOUND", Message: "orchestration run not found"}))
 				continue
 			}
+			if !orchestrationActiveStatus(latest.Status) {
+				_ = conn.Send(protocol.MustEnvelope(protocol.TypeError, "", protocol.ErrorPayload{Code: "RUN_NOT_ACTIVE", Message: "approval is unavailable for a completed run"}))
+				continue
+			}
 			if err := s.pool.SendToAgent(latest.AgentID, protocol.MustEnvelope(protocol.TypeApprovalResponse, "", payload)); err != nil {
 				_ = conn.Send(protocol.MustEnvelope(protocol.TypeError, "", protocol.ErrorPayload{Code: "AGENT_OFFLINE", Message: err.Error()}))
 			}
+		case protocol.TypeUserInputResponse, protocol.TypeUserInputSync:
+			s.handleUserInputFromBrowser(r.Context(), uid, runID, conn, env)
 		}
 	}
 }
@@ -2140,6 +2511,31 @@ func (s *Server) handleOrchestrationEventFromAgent(ctx context.Context, agentID 
 			slog.Warn("[hub] rejected orchestration event from foreign bridge", "agent_id", agentID, "run_id", payload.RunID)
 			return
 		}
+	}
+	// Older Bridges emitted stagnation as an error. Apply the current run
+	// lifecycle policy before persistence, retaining their factual check record.
+	if payload.RunEndData != nil && payload.RunEndData.TerminalReason == "stalled" && (payload.Kind == "run.error" || payload.Kind == "run.end") {
+		reason := strings.TrimSpace(payload.Error)
+		if reason == "" {
+			reason = payload.Content
+		}
+		if reason == "" {
+			reason = "Repeated unchanged verification result"
+		}
+		verificationStatus := "unknown"
+		if payload.RunEndData.VerifierVerdict != nil {
+			reason = payload.RunEndData.VerifierVerdict.Reason
+			verificationStatus = payload.RunEndData.VerifierVerdict.Status
+		}
+		if payload.RunConclusion == nil {
+			payload.RunConclusion = &protocol.RunConclusion{}
+		}
+		payload.RunConclusion.Outcome = "completed"
+		payload.RunConclusion.VerificationStatus = verificationStatus
+		payload.RunConclusion.Summary = "已完成：连续三轮工作区未变且检查报告相同，已自动提前结束本次运行。\n检查记录：" + reason
+		payload.RunConclusion.UnmetObligations = append(payload.RunConclusion.UnmetObligations, reason)
+		payload.Kind, payload.Status, payload.Error, payload.Severity = "run.end", store.OrchestrationCompleted, "", "info"
+		payload.Content = payload.RunConclusion.Summary
 	}
 	if existingRun.DeleteRequested && (payload.Task != nil || (payload.Kind != "run.end" && payload.Kind != "run.error" && payload.Kind != "run.cancelled")) {
 		slog.Info("[hub] ignored non-terminal event for orchestration pending deletion", "run_id", payload.RunID, "kind", payload.Kind)
@@ -2238,7 +2634,7 @@ func (s *Server) handleOrchestrationEventFromAgent(ctx context.Context, agentID 
 					slog.Info("[hub] deleted orchestration after terminal event", "run_id", payload.RunID)
 				}
 			} else if events, listErr := s.store.ListOrchestrationEvents(ctx, payload.RunID, 10000); listErr == nil {
-				if syncErr := s.requestOrchestrationUsageSync(run, events); syncErr != nil {
+				if syncErr := s.requestOrchestrationUsageSync(ctx, run, events); syncErr != nil {
 					slog.Info("[hub] deferred orchestration usage sync", "run_id", payload.RunID, "reason", syncErr)
 				}
 			}

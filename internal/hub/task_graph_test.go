@@ -1,9 +1,11 @@
 package hub
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -63,7 +65,7 @@ func TestDurableTaskDispatchRetainsSelectedCWD(t *testing.T) {
 	s, st, userID, agentID := newOrchestrationTestServer(t)
 	run := createOrchestrationRun(t, st, userID, agentID)
 	selectedCWD := t.TempDir()
-	payload := protocol.OrchestrationStartPayload{RunID: run.ID, Mode: "collaboration", WorkerPair: protocol.WorkerPairCodexCodex, Prompt: "verify", CWD: selectedCWD, MaxTurns: 1}
+	payload := protocol.OrchestrationStartPayload{RunID: run.ID, Mode: "collaboration", WorkerPair: protocol.WorkerPairCodexCodex, Prompt: "verify", TaskPrompt: "verify", CWD: selectedCWD, MaxTurns: 1}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +84,9 @@ func TestDurableTaskDispatchRetainsSelectedCWD(t *testing.T) {
 	dispatched := decodeTaskDispatchPayload(t, <-conn.send)
 	if dispatched.CWD != selectedCWD || dispatched.RunCWD != "" {
 		t.Fatalf("task cwd was rewritten: cwd=%q runCwd=%q, want cwd=%q", dispatched.CWD, dispatched.RunCWD, selectedCWD)
+	}
+	if dispatched.TaskPrompt != "verify" || !strings.Contains(dispatched.Prompt, "Durable task node:") {
+		t.Fatalf("exact task prompt was not preserved separately: %#v", dispatched)
 	}
 }
 
@@ -428,6 +433,7 @@ func TestContinueOrchestrationPreservesPlanWorkspace(t *testing.T) {
 	payload := protocol.OrchestrationStartPayload{
 		RunID: run.ID, Mode: "collaboration", WorkerPair: protocol.WorkerPairCodexCodex,
 		Prompt: "initial task", CWD: t.TempDir(), MaxTurns: 1, MaxTurnsRequested: 1, PlanWorkspace: true,
+		CompletionHistory: []protocol.CompletionObservation{{Round: 8, BlockerKey: "old blocker"}},
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -451,6 +457,9 @@ func TestContinueOrchestrationPreservesPlanWorkspace(t *testing.T) {
 	dispatched := decodeTaskDispatchPayload(t, <-conn.send)
 	if !dispatched.PlanWorkspace || dispatched.TaskGraph.Tasks[0].Role != store.TaskRolePlanner || dispatched.TaskGraph.Generation != 2 {
 		t.Fatalf("continued plan workspace dispatch = %#v", dispatched)
+	}
+	if len(dispatched.CompletionHistory) != 0 || dispatched.Round != 1 || dispatched.RunID != run.ID {
+		t.Fatalf("follow-up did not reset completion samples within the same run: %#v", dispatched)
 	}
 }
 
@@ -540,6 +549,7 @@ func TestDurableTaskGraphRunsEveryConfiguredRound(t *testing.T) {
 	payload := protocol.OrchestrationStartPayload{
 		RunID: run.ID, Mode: "collaboration", WorkerPair: protocol.WorkerPairCodexCodex,
 		Prompt: "finish across two rounds", CWD: t.TempDir(), MaxTurns: 2, MaxTurnsRequested: 2,
+		Profile: "formal-proof", VerificationMode: "tbci",
 	}
 	conn := testBridgeConn(agentID, 16)
 	s.pool.RegisterAgent(conn)
@@ -552,6 +562,9 @@ func TestDurableTaskGraphRunsEveryConfiguredRound(t *testing.T) {
 		t.Helper()
 		for position := 0; position < 4; position++ {
 			dispatched := decodeTaskDispatchPayload(t, <-conn.send)
+			if dispatched.VerificationMode != "tbci" {
+				t.Fatalf("round %d lost verification mode: %#v", wantRound, dispatched)
+			}
 			if dispatched.MaxTurns != 1 || dispatched.MaxTurnsRequested != 2 {
 				t.Fatalf("round %d node limits = %d requested=%d", wantRound, dispatched.MaxTurns, dispatched.MaxTurnsRequested)
 			}
@@ -592,56 +605,60 @@ func TestDurableTaskGraphRunsEveryConfiguredRound(t *testing.T) {
 }
 
 func TestDurableTaskGraphVerifiedEarlyDoesNotDispatchAnotherRound(t *testing.T) {
-	s, st, userID, agentID := newOrchestrationTestServer(t)
-	run := createOrchestrationRun(t, st, userID, agentID)
-	payload := protocol.OrchestrationStartPayload{
-		RunID: run.ID, Mode: "collaboration", WorkerPair: protocol.WorkerPairCodexCodex,
-		Prompt: "finish once independently verified", CWD: t.TempDir(), MaxTurns: 2, MaxTurnsRequested: 2,
-	}
-	conn := testBridgeConn(agentID, 8)
-	s.pool.RegisterAgent(conn)
-	defer s.pool.UnregisterAgent(agentID, conn)
-	if err := s.createAndDispatchTaskGraph(context.Background(), run, payload); err != nil {
-		t.Fatal(err)
-	}
-	for position := 0; position < 4; position++ {
-		dispatched := decodeTaskDispatchPayload(t, <-conn.send)
-		task := dispatched.TaskGraph.Tasks[0]
-		ref := protocol.TaskAttemptRef{GraphID: dispatched.TaskGraph.ID, TaskID: task.ID, AttemptID: task.AttemptID, Role: task.Role, WorkerSlot: task.WorkerSlot, PayloadDigest: task.PayloadDigest}
-		s.handleOrchestrationEvent(context.Background(), protocol.MustEnvelope(protocol.TypeOrchestrationEvent, "", protocol.OrchestrationEventPayload{
-			RunID: run.ID, Kind: "run.start", Task: &ref,
-		}))
-		end := protocol.OrchestrationEventPayload{RunID: run.ID, Kind: "run.end", Content: "independent review passed", Task: &ref}
-		if position == 3 {
-			end.RunConclusion = &protocol.RunConclusion{Outcome: "satisfied", Summary: "independent review passed"}
-			end.RunEndData = &protocol.RunEndData{TerminalReason: "verified-early", VerifierVerdict: &protocol.VerifierVerdict{Status: "pass", Reason: "independent reviewer confirmed the result"}}
-		}
-		s.handleOrchestrationEvent(context.Background(), protocol.MustEnvelope(protocol.TypeOrchestrationEvent, "", end))
-	}
-	loaded, err := st.OrchestrationRunByID(context.Background(), run.ID, userID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Status != store.OrchestrationCompleted {
-		t.Fatalf("verified run status = %q", loaded.Status)
-	}
-	graph, err := st.TaskGraphByRun(context.Background(), run.ID)
-	if err != nil || graph.Generation != 1 || graph.Status != store.TaskGraphCompleted {
-		t.Fatalf("verified early unexpectedly advanced graph=%#v err=%v", graph, err)
-	}
-	select {
-	case next := <-conn.send:
-		t.Fatalf("verified early dispatched another round: %#v", next)
-	default:
-	}
-	events, err := st.ListOrchestrationEvents(context.Background(), run.ID, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, event := range events {
-		if event.Task == nil && event.Kind == "run.end" && (event.RunEndData == nil || event.RunEndData.TerminalReason != "verified-early") {
-			t.Fatalf("public terminal event lost verifier result: %#v", event)
-		}
+	for _, mode := range []string{"collaboration", "debate"} {
+		t.Run(mode, func(t *testing.T) {
+			s, st, userID, agentID := newOrchestrationTestServer(t)
+			run := createOrchestrationRun(t, st, userID, agentID)
+			payload := protocol.OrchestrationStartPayload{
+				RunID: run.ID, Mode: mode, WorkerPair: protocol.WorkerPairCodexCodex,
+				Prompt: "finish once independently verified", CWD: t.TempDir(), MaxTurns: 2, MaxTurnsRequested: 2,
+			}
+			conn := testBridgeConn(agentID, 8)
+			s.pool.RegisterAgent(conn)
+			defer s.pool.UnregisterAgent(agentID, conn)
+			if err := s.createAndDispatchTaskGraph(context.Background(), run, payload); err != nil {
+				t.Fatal(err)
+			}
+			for position := 0; position < 4; position++ {
+				dispatched := decodeTaskDispatchPayload(t, <-conn.send)
+				task := dispatched.TaskGraph.Tasks[0]
+				ref := protocol.TaskAttemptRef{GraphID: dispatched.TaskGraph.ID, TaskID: task.ID, AttemptID: task.AttemptID, Role: task.Role, WorkerSlot: task.WorkerSlot, PayloadDigest: task.PayloadDigest}
+				s.handleOrchestrationEvent(context.Background(), protocol.MustEnvelope(protocol.TypeOrchestrationEvent, "", protocol.OrchestrationEventPayload{
+					RunID: run.ID, Kind: "run.start", Task: &ref,
+				}))
+				end := protocol.OrchestrationEventPayload{RunID: run.ID, Kind: "run.end", Content: "independent review passed", Task: &ref}
+				if position == 3 {
+					end.RunConclusion = &protocol.RunConclusion{Outcome: "satisfied", Summary: "independent review passed"}
+					end.RunEndData = &protocol.RunEndData{TerminalReason: "verified-early", VerifierVerdict: &protocol.VerifierVerdict{Status: "pass", Reason: "independent reviewer confirmed the result"}}
+				}
+				s.handleOrchestrationEvent(context.Background(), protocol.MustEnvelope(protocol.TypeOrchestrationEvent, "", end))
+			}
+			loaded, err := st.OrchestrationRunByID(context.Background(), run.ID, userID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.Status != store.OrchestrationCompleted {
+				t.Fatalf("verified run status = %q", loaded.Status)
+			}
+			graph, err := st.TaskGraphByRun(context.Background(), run.ID)
+			if err != nil || graph.Generation != 1 || graph.Status != store.TaskGraphCompleted {
+				t.Fatalf("verified early unexpectedly advanced graph=%#v err=%v", graph, err)
+			}
+			select {
+			case next := <-conn.send:
+				t.Fatalf("verified early dispatched another round: %#v", next)
+			default:
+			}
+			events, err := st.ListOrchestrationEvents(context.Background(), run.ID, 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, event := range events {
+				if event.Task == nil && event.Kind == "run.end" && (event.RunEndData == nil || event.RunEndData.TerminalReason != "verified-early") {
+					t.Fatalf("public terminal event lost verifier result: %#v", event)
+				}
+			}
+		})
 	}
 }
 
@@ -662,5 +679,95 @@ func TestReconnectDispatchesOnlyReadyDurableTasks(t *testing.T) {
 	case extra := <-conn.send:
 		t.Fatalf("unexpected reconnect dispatch: %#v", extra)
 	default:
+	}
+}
+
+// mergeOrchestrationProgressEvents preserves the bounded live-event query for
+// transcript responsiveness while retaining the durable plan marker ledger.
+// The same event can appear in both lists, so sequence is the stable identity.
+func mergeOrchestrationProgressEvents(live, plan []store.OrchestrationEvent) []store.OrchestrationEvent {
+	if len(plan) == 0 {
+		return live
+	}
+	merged := make([]store.OrchestrationEvent, 0, len(live)+len(plan))
+	seen := make(map[int64]struct{}, len(live)+len(plan))
+	for _, event := range live {
+		if _, exists := seen[event.Seq]; exists {
+			continue
+		}
+		seen[event.Seq] = struct{}{}
+		merged = append(merged, event)
+	}
+	for _, event := range plan {
+		if _, exists := seen[event.Seq]; exists {
+			continue
+		}
+		seen[event.Seq] = struct{}{}
+		merged = append(merged, event)
+	}
+	slices.SortFunc(merged, func(left, right store.OrchestrationEvent) int {
+		return cmp.Compare(left.Seq, right.Seq)
+	})
+	return merged
+}
+
+func TestSparseProgressPreservesReviewBoundaryAndPlan(t *testing.T) {
+	s, st, uid, agentID := newOrchestrationTestServer(t)
+	ctx := context.Background()
+	run := createOrchestrationRun(t, st, uid, agentID)
+	payload := protocol.OrchestrationStartPayload{RunID: run.ID, Mode: "collaboration", Prompt: "plan task", MaxTurns: 1, PlanWorkspace: true}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := taskPayloadDigest(string(raw))
+	graph, err := st.CreateOrchestrationTaskGraph(ctx, run.ID, string(raw), digest, orchestrationTaskSpecs(digest, payload.WorkerPair, payload.Mode, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := []struct {
+		name, content string
+		count         int
+	}{
+		{"plan", `[PLAN_ITEM id="P1" status="pending"] draft`, 1},
+		{"plan-review", "reviewing, no validated plan yet", 0},
+		{"plan-review", `[PLAN_ITEM id="P2" status="pending"] reviewed`, 1},
+		{"review", `[PLAN_UPDATE id="P2" status="completed"] verified`, 1},
+	}
+	for _, step := range steps {
+		_, err := st.AddOrchestrationEvent(ctx, store.OrchestrationEvent{RunID: run.ID, Kind: "turn.delta", Content: step.content, Task: &protocol.TaskAttemptRef{GraphID: graph.ID, Name: step.name}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		live, err := st.ListOrchestrationEvents(ctx, run.ID, 10000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		markers, err := st.ListOrchestrationPlanEvents(ctx, run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacy := reduceOrchestrationPlan(mergeOrchestrationProgressEvents(live, markers))
+		body := getJSON(t, s, uid, "/api/orchestrations/"+run.ID+"/progress", http.StatusOK)
+		encoded, err := json.Marshal(body["plan"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected, err := json.Marshal(legacy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Compare decoded JSON so map key ordering cannot affect the assertion.
+		var actualPlan orchestrationPlanProgress
+		if err := json.Unmarshal(encoded, &actualPlan); err != nil {
+			t.Fatal(err)
+		}
+		actual, err := json.Marshal(actualPlan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(actual) != string(expected) || actualPlan.Total != step.count {
+			t.Fatalf("%s: sparse=%s legacy=%s", step.name, actual, expected)
+		}
 	}
 }

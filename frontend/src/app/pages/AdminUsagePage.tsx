@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Activity, ArrowDown, ArrowLeft, ArrowUp, BarChart3, ChevronRight, Coins, GitBranch, Layers3, Monitor, RefreshCw, Search, ShieldCheck, Users } from 'lucide-react';
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api } from '../lib/api';
+import { useStatsRequest } from '../lib/useStatsRequest';
 import type { AdminUsageOverview, AdminUserUsage } from '../lib/types';
 import type { UIText } from '../lib/i18n';
 import { Button, Input } from '../components/ui';
@@ -42,25 +43,19 @@ function UsageTooltip({ active, payload, label, metric }: any) {
 }
 
 export function AdminUsagePage({ t, navigate }: { t: UIText; navigate: (path: string) => void }) {
-  const [overview, setOverview] = useState<AdminUsageOverview | null>(null);
   const [range, setRange] = useState<Range>(30);
   const [metric, setMetric] = useState<Metric>('totalTokens');
   const [query, setQuery] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('lastActiveAt');
   const [descending, setDescending] = useState(true);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  const load = async () => {
-    setLoading(true); setError('');
-    try {
-      const timezoneOffset = new Date().getTimezoneOffset();
-      const data = await api<{ overview: AdminUsageOverview }>(`/api/admin/usage?days=${range}&timezoneOffset=${timezoneOffset}`);
-      setOverview(data.overview);
-    } catch (err) { setError(err instanceof Error ? err.message : t.failedLoadOrchestration); }
-    finally { setLoading(false); }
-  };
-  useEffect(() => { void load(); }, [range]);
+  const timeoutText = t.task === '任务' ? '统计请求超时，请重试。' : 'Statistics request timed out. Please retry.';
+  const loadingText = t.task === '任务' ? '正在加载统计…' : 'Loading statistics…';
+  const fetchOverview = useCallback(async (signal: AbortSignal) => {
+    const timezoneOffset = new Date().getTimezoneOffset();
+    const data = await api<{ overview: AdminUsageOverview }>(`/api/admin/usage?days=${range}&timezoneOffset=${timezoneOffset}`, { signal });
+    return data.overview;
+  }, [range]);
+  const { data: overview, loading, error, reload: load } = useStatsRequest(`admin:${range}`, fetchOverview, t.failedLoadOrchestration, timeoutText);
 
   const users = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -85,18 +80,18 @@ export function AdminUsagePage({ t, navigate }: { t: UIText; navigate: (path: st
   const setSort = (next: SortKey) => { if (sortKey === next) setDescending((value) => !value); else { setSortKey(next); setDescending(next !== 'username'); } };
   const SortIcon = descending ? ArrowDown : ArrowUp;
 
-  return <div className="min-h-screen overflow-x-hidden bg-background text-foreground">
+  return <div className="phone-page min-h-screen overflow-x-hidden bg-background text-foreground">
     <header className="flex min-h-14 items-center justify-between gap-3 border-b border-border px-4 py-2 md:px-8">
       <div className="flex min-w-0 items-center gap-3"><ShieldCheck className="h-5 w-5 shrink-0 text-primary" /><div className="min-w-0"><h1 className="truncate text-sm font-semibold">{t.adminDashboard}</h1><p className="truncate text-xs text-muted-foreground">{t.adminUsageSubtitle}</p></div></div>
       <div className="flex shrink-0 items-center gap-2"><Button variant="ghost" size="icon" onClick={() => void load()} disabled={loading} aria-label={t.refresh} title={t.refresh}><RefreshCw className={loading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} /></Button><Button variant="secondary" size="sm" onClick={() => navigate('/')}><ArrowLeft className="mr-1.5 h-3.5 w-3.5" /><span className="hidden sm:inline">{t.backToWorkspace}</span></Button></div>
     </header>
     <main className="mx-auto max-w-7xl space-y-5 p-4 md:p-8">
-      {error && <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
+      {error && <div role="alert" className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"><span>{error}</span><Button variant="secondary" size="sm" onClick={load}>{t.retry}</Button></div>}
       <section className="flex flex-col gap-4 border-b border-border pb-5 lg:flex-row lg:items-end lg:justify-between">
         <div><p className="text-xs font-medium uppercase text-muted-foreground">{t.adminDashboard}</p><h2 className="mt-1 text-xl font-semibold">{selectedMetric.label}</h2><p className="mt-1 text-sm text-muted-foreground">{t.adminUsageSubtitle}</p></div>
         <div className="flex flex-col gap-3 sm:flex-row"><Control label={t.timeRange}>{ranges.map((item) => <Choice key={item.value} active={range === item.value} onClick={() => setRange(item.value)}>{item.label}</Choice>)}</Control><Control label={t.metric}>{metrics.map((item) => <Choice key={item.value} active={metric === item.value} onClick={() => setMetric(item.value)}>{item.label}</Choice>)}</Control></div>
       </section>
-      {loading && !overview ? <div className="flex justify-center p-16"><RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" /></div> : overview ? <>
+      {loading && !overview ? <div role="status" aria-label={loadingText} className="flex items-center justify-center gap-2 p-16 text-sm text-muted-foreground"><RefreshCw className="h-5 w-5 animate-spin" />{loadingText}</div> : overview ? <>
         <section className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
           <Summary icon={Users} label={t.usersMetric} value={overview.users.toLocaleString()} detail={`${overview.activeUsers} ${t.activeUsersMetric} · ${overview.onlineUsers} ${t.onlineUsersMetric}`} />
           <Summary icon={Monitor} label={t.onlineEndpointsMetric} value={`${overview.onlineAgents} / ${overview.totalAgents}`} detail={`${t.sessionsMetric}: ${overview.chatSessions.toLocaleString()}`} />

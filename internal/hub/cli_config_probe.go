@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/tencent/codex-bridge/internal/providerprobe"
 )
 
 const (
@@ -70,6 +72,8 @@ func (s *Server) probeCLIConfigProvider(parent context.Context, cli, rawBase, mo
 			if inferenceStatus == http.StatusUnauthorized || inferenceStatus == http.StatusForbidden {
 				authFailed = true
 			}
+			messages = appendProbeMessage(messages, base, inferenceStatus, inferenceErr, "inference")
+			continue
 		}
 		messages = appendProbeMessage(messages, base, status, fetchErr, "")
 	}
@@ -85,7 +89,7 @@ func appendProbeMessage(messages []string, base string, status int, err error, o
 		if len(message) > 180 {
 			message = message[:180] + "..."
 		}
-		return append(messages, message)
+		return append(messages, fmt.Sprintf("%s %s (HTTP %d): %s", base, operation, status, message))
 	}
 	if operation != "" {
 		return append(messages, fmt.Sprintf("%s %s returned HTTP %d", base, operation, status))
@@ -248,8 +252,7 @@ func hubProbeInference(ctx context.Context, client *http.Client, base, model, ke
 		return 0, err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-	return resp.StatusCode, nil
+	return resp.StatusCode, providerprobe.ValidateInferenceResponse(resp, cli)
 }
 
 func hubSetProviderHeaders(req *http.Request, key, cli string) {

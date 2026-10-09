@@ -1,362 +1,235 @@
-# ProofBridge 中文接入指南
+# ProofBridge
 
 <p align="center">
-  <img src="docs/assets/codex-bridge-hero.webp" alt="ProofBridge：连接 IDE 与 Codex 的桥梁" width="100%" />
+  <img src="docs/assets/codex-bridge-hero.webp" alt="ProofBridge：在浏览器中使用本机的编程智能体" width="100%" />
 </p>
 
-<p align="center"><strong>让浏览器安全访问私有机器上的 Codex 与 Claude Code，并进行多 CLI 编排。</strong></p>
+<p align="center"><strong>从浏览器使用自己机器上的 Codex 与 Claude Code。</strong></p>
 
 <p align="center">
   <a href="https://github.com/Atingaii/ProofBridge/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/Atingaii/ProofBridge/actions/workflows/ci.yml/badge.svg?branch=main&amp;event=push" alt="main 分支 CI 状态" /></a>
-  <a href="https://github.com/Atingaii/ProofBridge/releases/latest"><img src="https://img.shields.io/github/v/release/Atingaii/ProofBridge" alt="最新 Release" /></a>
-  <a href="go.mod"><img src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white" alt="Go 1.25+" /></a>
-  <a href="docs/deployment.md"><img src="https://img.shields.io/badge/platform-Linux-555" alt="Linux" /></a>
+  <a href="https://github.com/Atingaii/ProofBridge/releases/latest"><img src="https://img.shields.io/github/v/release/Atingaii/ProofBridge" alt="GitHub 最新发行版" /></a>
+  <a href="go.mod"><img src="https://img.shields.io/badge/Go-1.25.7%2B-00ADD8?logo=go&amp;logoColor=white" alt="Go 1.25.7 及以上" /></a>
 </p>
 
-<p align="center"><a href="README.md">English</a> · <a href="https://sparkon.cn/help">在线图文教程</a> · <a href="docs/deployment.md">部署指南</a> · <a href="docs/architecture.md">架构</a></p>
+<p align="center">
+  <a href="README.md">English</a> · 简体中文 ·
+  <a href="https://test.sparkon.cn/help">使用教程</a> ·
+  <a href="docs/deployment.md">自建部署</a> ·
+  <a href="https://github.com/Atingaii/ProofBridge/releases">发行版本</a>
+</p>
 
-ProofBridge 将公网 Hub 与私有工作区分离：Hub 负责浏览器访问和历史持久化，反向连接的 Bridge 在已有文件与凭据的私有机器上运行 Codex 和 Claude Code CLI。
+ProofBridge 将浏览器连接到已有工作区中的编程 CLI。你可以与单个智能体对话、组织
+Codex 和 Claude Code 协作，并带着历史记录与原生上下文继续同一个任务。
+公网 **Hub** 提供操作界面；私有机器上的 **Bridge** 主动向外连接，在本机执行工具。
 
-## Bridge / ACP / resume 简明版
+[核心功能](#核心功能) · [接入机器](#连接现有-hub) ·
+[本地启动](#本地快速启动) · [架构](#架构与数据边界) ·
+[兼容性](#版本与平台) · [文档](#文档导航)
 
-用户侧执行网页里的 `curl .../install.sh | sh` 后，装到本机的核心就是
-`~/.local/bin/codex-bridge`。安装器通过 HTTP/1.1 下载到临时文件，并对
-TLS 或边缘网络中断执行有上限的退避续传；下载完整前不会覆盖当前可用版本。
-兼容软链 `acp-bridge` 和 `agent-up.sh` / `agent-down.sh` 只负责旧命名与
-启停；Codex、Claude Code、
-Gemini、CodeBuddy 等 agent CLI 仍然要用户自己安装和登录。Bridge 本身是通信与进程管理器：
-它从私有机器主动连到 Hub 的反向 WebSocket，然后按会话在工作目录里 `exec` 本机 CLI，
-所以 Hub 不需要访问你的工作目录，也不需要你的模型密钥。
+## 核心功能
 
-ACP 是 Bridge 和本地 CLI/适配器之间的程序化协议：JSON-RPC over
-stdin/stdout，不是人工 REPL。`bridge.runner: acp` 时，Bridge 会启动对应 ACP 适配器
-（例如 Claude 用 `npx @zed-industries/claude-code-acp`，Codex 用 `codex-acp`），
-执行 `initialize -> session/new` 或 `session/load`，之后每轮发
-`session/prompt`。Hub 的 `open_session` 对应打开/恢复 ACP 会话，`prompt`
-对应一轮提示，ACP 的 `session/update` 再被转成网页上的流式输出。
+- **对话与多智能体协作。** 支持单 CLI 对话，以及 Codex + Claude Code、
+  Codex + Codex、Claude Code + Claude Code 的协作与辩论。
+- **延续当前工作。** 继续输入沿用选中的会话或运行；未发送的编排草稿按账户和任务
+  分别保存在浏览器中。
+- **整理任务历史。** 按端点、状态筛选和搜索，加载更早记录、重命名任务，归档或恢复
+  已结束的运行，保留原有上下文。
+- **查看执行过程。** 检查计划、工具活动、结果，按任务、模型、项目或端点查看
+  Token 用量；费用显示为 API 标价估算，不是实际账单。
+- **运行中交互。** 在浏览器中处理工具审批、回答 CLI 原生问题，并在端点支持时向
+  正在运行的任务追加指令。
+- **选择适合的配置。** 使用 CLI 本地登录或已保存的服务商配置，选择执行权限策略，
+  并按需启用由 Agent 或 TBCI 验证的形式化证明流程。
 
-核心绑定关系是：
+功能可用性取决于前端版本、Hub 开放策略以及 Bridge/CLI 能力。启用可选执行模式前，
+请查看[版本与平台说明](#版本与平台)。
 
-```text
-浏览器会话 sid <-> Bridge sessionRouter <-> 一个常驻 CLI/ACP 子进程 <-> 一个 ACP session
-```
+增强先行版支持为官方登录的 Codex A/B 分别选择模型及该模型支持的思考强度，
+需要兼容的 Bridge（ConfigSwitcher v3），现有工作器分工保持不变。
+详见[功能与构建要求](docs/features/official-codex-worker-models.md)。构建命令为 `VITE_LEADING=true VITE_OFFICIAL_CODEX_MODELS=true npm run build`。
 
-同一个 `sid` 后续每轮都会查到同一个 router，复用同一个进程和同一个
-ACP session，所以上下文在这个本地 CLI 会话里持续累积。只有前端显式新建会话、
-让 Hub 使用新的 `sid` 发 `open_session`，才会新开本地进程并得到一段新的上下文。
-如果把 `/new` 当普通消息发给网页，Bridge 不解析斜杠命令；它会原样转给同一个
-ACP session，是否清空由 CLI 自己决定。真正决定“是不是同一个本地会话”的开关是 `sid`。
+## 连接现有 Hub
 
-`/resume` 能看到真实对话不是因为 Hub 回放了网页消息，而是因为 CLI 自己在本机落盘。
-Bridge 在 `cwd=/你的项目` 下驱动 ACP 会话，CLI 执行时会按自己的规则把对话写到本地
-session 存储，并按项目目录归档。事后你在同一台机器执行
-`cd /你的项目 && claude` 后用 `/resume`，或执行 `codex resume ...`，CLI 扫到的是它自己
-写下的本地记录。也就是说：ACP 负责实时驱动和流式回传，CLI 本地 session 存储负责事后
-原生 resume，两条链路是解耦的。
+已有 Hub 账号时，使用这条路径。**接入机器无需克隆仓库，也无需安装 Go 或自行编译。**
 
-浏览器 WebSocket 断开时，Hub 不会立刻清掉 Bridge 侧会话，而是把该 `sid` 放进
-`leaseIdleLeased` 租约状态并启动 TTL 计时器（默认由 `HUB_BROWSER_LEASE_TTL` /
-`hub.browser_lease_ttl` 控制）。TTL 内重新打开同一个会话，Hub 走 `tryReattach`
-取消计时器并再次发送同一个 `open_session{sid}`；Bridge 侧按 `sid` 命中已有
-sessionRouter，继续复用原进程和 ACP session，不需要 `/resume`。TTL 过期后 Hub 才发送
-`close_session`，Bridge 才真正释放本地会话。
+1. 用运行 Bridge 的系统用户安装并认证 Codex CLI 和 Claude Code。网页生成的接入
+   命令会检查两个 CLI 是否可用。
+2. 登录目标 Hub。项目当前的新版界面位于 [test.sparkon.cn](https://test.sparkon.cn)；
+   自建部署请使用自己的 Hub 地址。
+3. 打开 **设置 → 添加 CLI 端**，选择权限策略，复制页面生成的**安装并连接**命令。
+4. 在项目目录中，用同一系统用户执行该命令。在浏览器中选中上线的端点，开始对话或任务。
 
-整体链路可以压缩成：
+接入命令会安装 Bridge 并绑定当前目录。在 Linux 上优先使用 `systemd --user`，
+不可用时改用后台进程。日志位于 `~/.codex-bridge/logs/`。已有端点需要修复时，
+使用其**修复连接**命令以保留原有身份。
 
-```text
-安装 codex-bridge
-  -> Bridge 反向拨 WebSocket 连 Hub
-前端打开会话 sid
-  -> Bridge 在项目 cwd 下启动一个本地 CLI/ACP 会话，形成 1:1 绑定
-前端每轮发消息
-  -> 复用同一进程、同一 ACP session，上下文持续累积，并流式回显到网页
-  -> CLI 同时把对话写到本机 session 存储
-关闭浏览器再回来
-  -> TTL 内同 sid 直接 reattach，不需要 /resume
-事后在本机 cd 到项目目录运行 CLI
-  -> 用 CLI 自己的 resume 能看到 bridge 跑过的真实对话
-```
+<details>
+<summary>已安装 Bridge 时，手动以前台模式连接</summary>
 
-## 普通用户接入 SparkAPI Hub
-
-目标 Hub：`https://sparkapi.tech`
-
-1. 打开 `https://sparkapi.tech`。部署方启用 Cloudflare Turnstile 后可在登录页注册；否则使用已开通的账号登录。
-2. 进入设置，点击“添加 CLI 端”，复制页面生成的“安装并连接”命令。
-3. 进入要接入的工作目录，用同一个运行 Codex CLI / Claude Code 的系统用户粘贴执行这一行命令。
-
-WSL2/Linux 终端一般就是：
+在目标 Hub 的设置页生成 token，进入工作目录后，将它填入以下命令。此示例要求
+Codex 的工具执行通过浏览器审批：
 
 ```bash
-# 执行网页生成的单行“安装并连接”命令
+~/.local/bin/codex-bridge connect \
+  --hub https://test.sparkon.cn \
+  --cwd "$PWD" \
+  --runner codex-app-server \
+  --sandbox workspace-write \
+  --approval-policy untrusted \
+  '<TOKEN>'
 ```
 
-页面生成的一键命令会先安装二进制，再优先安装并启动 `systemd --user` 服务，并
-best-effort 开启 linger；在 user systemd 和 linger 可用时，机器重启后可自动恢复。
-如果当前环境没有 user systemd，会退回 `nohup` 后台启动，但 `nohup` 不能跨机器重启。
-日志写到 `~/.codex-bridge/logs/<当前目录hash>.log`。命令会把当前 shell 的
-`HOME`、`PATH`、`CODEX_HOME`、Claude 配置目录、常见模型凭据和常见代理环境变量保存给
-后台服务，避免 WSL/Linux 里前台能联网或能 resume、`systemd --user` 后台却使用了另一个
-CLI/配置目录或直连超时。
-生成的 user service 会设置 `OOMPolicy=continue`，避免 Isabelle/Coq 这类重型子进程被
-OOM kill 时把 Bridge 父进程一起重启，导致网页端运行链路中断。
-`connect` 默认连接
-`https://sparkapi.tech`，默认使用当前目录作为工作目录，默认 runner 是 `codex`。
-如果要前台调试，可以手动执行：
+自建部署请替换 URL。手动连接时始终显式传入 `--hub`，不要依赖 CLI 的默认域名。
+前台模式需要保持终端打开。详见[安装与服务行为](docs/dev-workflow.md#cli-install-flow)。
 
-```bash
-~/.local/bin/codex-bridge connect '<TOKEN>' --cwd "$PWD" --name wsl2-main --runner codex
-```
+</details>
 
-token 由网页生成，默认 24 小时内有效。一个 token 绑定一个 CLI 端；不同用户、不同终端会在页面里显示为不同的 CLI 端，并可在顶部选择切换。
+## 本地快速启动
 
-浏览器编排产生的 Codex 和 Claude Code 原生会话会写在运行上述命令的同一个系统用户下。要在本机查看 Codex：
-
-```bash
-cd /home/zy/os
-codex
-```
-
-在 Codex 界面中输入 `/resume` 即可从当前项目的原生会话列表选择 Bridge 编排产生的对话。要查看或直接恢复 Claude Code，请在同一个工作目录运行 `claude`，然后使用 `/resume`；Bridge 会把 Claude 自己写下的 stream-json transcript 规范成 `/resume` 选择器可见的本地会话，并同步 `~/.claude/history.jsonl` 与当前项目最近会话记录。运行结束元数据里的 `claude --resume <session-id>` 仍然是直接恢复入口，真实 transcript 位于 `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`。
-
-如果需要跨目录查找旧会话，可使用 `codex resume --all`。正常接入流程不使用 sudo/root 命令，因为那会把原生会话写到另一个用户的 HOME 下。
-
-## 普通用户前置条件
-
-在 WSL2/Linux CLI 端需要先准备好 Codex CLI 和 Claude Code，并在该终端完成本地认证。Hub 不会接触你的 `OPENAI_API_KEY`。请在同一个已完成认证的 shell 里运行网页生成的安装/修复命令；后台服务会把常见模型凭据环境变量（如 `OPENAI_API_KEY`、`CLAUDE_CODE_OAUTH_TOKEN`）保存到本机 0600 权限的 service env 文件中。
-
-最短接入路径不需要 clone 仓库，也不需要本地编译：
-
-```bash
-# 执行网页生成的单行“安装并连接”命令
-```
-
-如果只是验证连接链路，可以用 echo runner：
-
-```bash
-~/.local/bin/codex-bridge connect '<TOKEN>' --runner echo
-```
-
-## 界面使用
-
-完整的注册、Turnstile 验证、端点接入、单 CLI 对话、协作/辩论编排、形式化证明、
-上下文节省、分享和排错流程见 [在线图文教程](https://sparkon.cn/help)。
-
-- 登录后在设置里可以看到自己已接入的 CLI 端。
-- 在线/离线状态会显示在 CLI 端列表里。
-- 主对话和编排页顶部都有 CLI 端选择器，可以在多个 WSL2/服务器终端之间切换。
-- “需要确认”权限策略会把 Codex 聊天、Codex 编排和 Claude Code 编排审批都展示到浏览器；其中单条 `cat`、`coqc` 和批处理 `coqtop` 仅在可执行文件、参数和文件路径通过严格工作区白名单时自动放行，命令拼接、重定向、展开和目录越界仍需人工审批。“严格工作区”是无需审批的用户目录隔离模式：绑定工作区完整读写，系统与运行时目录、Home 隐藏项及链接时由当前或登录 Shell 的 PATH 明确导出的工具组件只读，Home 下其他普通目录不可见，并使用私有 CLI 状态和临时目录。真实 Home 路径语义仍保留，因此 Shell、opam、mise 等初始化无需 Bridge 猜测安装布局。“自动执行”保留原有可信机器的完整权限。编排页会显示当前 CLI 端的能力矩阵。Hub 编排会在同一个选中的 Bridge 连接上轮流调用 Claude Code 和 Codex CLI，并把每轮摘要带给下一轮。
-- 编排页有 `默认` / `形式化证明` 配置选择，也有“原生上下文”设置。形式化证明提示和每轮结束后的原生压缩维护都是显式选择后才启用，并随 run 持久化；Codex 会走 app-server 原生压缩 RPC，没有可验证控制通道的 CLI 会记录 Bridge note 并跳过，避免把 slash 命令写进真实会话。形式化证明下，协作模式采用证明作者/独立审计者契约，辩论模式采用可证伪提案者/对抗性批评者契约，要求目标陈述不变、记录证明状态和精确检查命令，并在最后审计依赖与信任边界；界面、轮数和现有会话用法不变。默认配置不会因为关键词自动注入证明提示。编排事件使用结构化字段区分 CLI、Bridge、用户来源，并用单独的最终结论事件展示收尾结果。
-- 每个 CLI 端可以展开“详情”并生成“修复连接”命令；旧版启动命令接入的端点可用该命令更新 Bridge、保留原 machine id 并重连同一个端点。
-- 删除 CLI 端会让 Hub 通知在线 Bridge 停止对应本地服务并退出，同时让已消费 token
-  失效；离线端点仍会从页面隐藏并撤销旧 token。
-- 非管理员只能看到自己接入的 CLI 端；管理员可以看到所有 CLI 端。
-- bootstrap 管理员可以点击工作区的盾牌图标进入 `/admin/usage`，按 7 天、30 天、90 天或全部时间查看各用户的活跃状态、在线 Bridge、聊天与编排任务、模型调用、输入/输出/缓存/总 Token 及官方 API 标价费用趋势，并可搜索和排序用户。点击用户可进入只读详情，按标题查看其聊天会话和编排任务、状态、端点、时间及每条对话用量；继续点击对话可按需查看消息正文和编排提示词。本地路径、原生 CLI Session ID 与可写操作不会开放，普通用户不能访问管理员页面或接口。
-- Orchestrate 页面只有点击“新运行”才会开启新的编排会话；在当前任务框继续输入会沿用当前 run，并把历史事件压缩成上下文继续运行。
-
-## 自建 Hub
-
-> 完整的多种部署方式（源码 / make / Docker / systemd + Caddy）、生产配置、
-> 验证与排查见 **[docs/deployment.md](docs/deployment.md)**。
-
-先获取代码：
+**构建要求：** Go **1.25.7+**、Node.js **22+** 及 npm、Git、Make。
+首次使用 `echo` runner 验证连接，无需调用模型。
 
 ```bash
 git clone https://github.com/Atingaii/ProofBridge.git
 cd ProofBridge
-```
+make build-all
 
-构建单个 Go 二进制（前置：Go 1.25+、Node 20+）。Web UI 已编译进二进制，从源码构建时
-需要先构建前端，因此推荐用 `make build-all`：
-
-```bash
-make test            # 等价于 go test ./...
-make build-all       # 先构建前端，再编译 Go 二进制 -> bin/codex-bridge
-```
-
-也可以用 Docker 跑 Hub：
-
-```bash
-docker build -t codex-bridge:local .          # 或 make docker
-docker run --rm -p 8088:8088 \
-  -v "$PWD/configs:/opt/codex-bridge/configs:ro" \
-  -v codex-bridge-data:/opt/codex-bridge/data \
-  codex-bridge:local hub
-```
-
-如果希望把新项目直接打成压缩包拷到另一台 Linux 服务器，只让新机器“解压并运行脚本”，
-可以构建 portable 包：
-
-```bash
-make portable-package
-scp dist/codex-bridge-*-linux-amd64.tar.gz user@server:/opt/
-
-ssh user@server
-cd /opt
-tar -xzf codex-bridge-*-linux-amd64.tar.gz
-cd codex-bridge-*-linux-amd64
-ADMIN_USERNAME=admin ADMIN_PASSWORD='change-me' APP_HOST=0.0.0.0 APP_PORT=8088 ./start.sh
-```
-
-`start.sh` 会在解压目录内初始化 SQLite、JWT secret、admin 登录用户、Bridge token、
-日志和 pid 文件，并同时启动 Hub 与本机 Bridge。默认 `BRIDGE_RUNNER=echo`，用于先确认
-登录和连接链路可用；目标服务器安装并登录 Codex CLI 后，可改用：
-
-```bash
-BRIDGE_RUNNER=codex BRIDGE_CWD=/srv/workspace ./start.sh
-```
-
-初始化生产配置：
-
-```bash
-sudo mkdir -p /opt/codex-bridge/configs /opt/codex-bridge/data
-sudo cp bin/codex-bridge /usr/local/bin/codex-bridge
-sudo cp configs/dev.yaml.example /opt/codex-bridge/configs/prod.yaml
-```
-
-关键配置：
-
-```yaml
-gateway:
-  host: 127.0.0.1
-  port: 8088
-hub:
-  db_path: /opt/codex-bridge/data/codex-bridge.db
-  cookie_secure: true
-  bridge_download_url: https://github.com/Atingaii/ProofBridge/releases/latest/download/codex-bridge-linux-amd64
-auth:
-  jwt_secret: replace-with-32-byte-random-secret
-  bootstrap_username: admin
-  registration:
-    enabled: false
-    turnstile_site_key: ""
-    turnstile_secret: ""
-    turnstile_hostname: "bridge.example.com"
-```
-
-启动 Hub 前创建管理员或其他已批准用户：
-
-```bash
-APP_ENV=prod CODEX_BRIDGE_CONFIG_DIR=/opt/codex-bridge/configs codex-bridge user --username admin --password 'change-me'
-APP_ENV=prod CODEX_BRIDGE_CONFIG_DIR=/opt/codex-bridge/configs codex-bridge user --username alice --password 'change-me-too'
-APP_ENV=prod CODEX_BRIDGE_CONFIG_DIR=/opt/codex-bridge/configs codex-bridge hub
-```
-
-建议把 Hub 放在 Caddy/Nginx 后面做 HTTPS，反代到 `127.0.0.1:8088`。生产环境必须替换 `change-me` 和 `auth.jwt_secret`。
-
-## 给其他用户的接入配置
-
-自建 Hub 默认会让 `/install.sh` 从当前 Hub 的
-`/downloads/codex-bridge-linux-amd64` 下载正在运行的二进制。也可以配置
-release 二进制下载地址：
-
-```yaml
-hub:
-  bridge_download_url: https://github.com/Atingaii/ProofBridge/releases/latest/download/codex-bridge-linux-amd64
-```
-
-也可以用环境变量覆盖：
-
-```bash
-HUB_BRIDGE_DOWNLOAD_URL='https://your-release-url/codex-bridge-linux-amd64'
-```
-
-先用 `codex-bridge user --username <name> --password <password>` 创建用户。用户登录后在网页里自己生成 CLI token，然后复制执行页面生成的单行“安装并连接”命令。该命令会把日志写到 `~/.codex-bridge/logs/`，保留当前 shell 的 `PATH`、解析到的 Codex/Claude CLI 路径和常见代理变量；如果当前 shell 里找不到任一 CLI，会在注册不可用端点前直接失败。只有 Bridge 日志出现 `[bridge] connected` 后才会提示已连接；否则会打印最近日志方便定位。
-
-如果某个已添加 CLI 端没有上报能力矩阵，打开设置里的 `Agent 与运行时`，展开该端并点击 `生成修复命令`。修复命令会下载最新 Bridge，并用该端原有的 machine id、端名称和已知工作目录重启连接，避免误注册成新端点。
-
-添加 CLI 端时有三种权限策略：
-
-- `需要确认`：Codex 聊天和 Codex 编排使用 `codex app-server` runner，命令/文件审批会回传到网页端确认；Claude Code 编排通过权限提示 MCP hook 把审批回传到网页端。
-- `自动执行（仅工作区）`：无需审批，使用 Bridge 外层 Linux Landlock 把 Codex、Claude、ACP 及其子进程限制在用户目录隔离边界内。工作区和隔离会话状态可写；系统、运行时、Home 隐藏项及链接时由当前或登录 Shell PATH 明确导出的工具组件只读；Home 下其他普通目录和共享 `/tmp` 不可访问。严格模式保留真实 Home 的 Shell 初始化语义，但 Codex/Claude 状态与临时文件仍是工作区私有；同时关闭 Codex 内层 Bubblewrap，避免嵌套沙箱初始化冲突。要求 Linux Landlock ABI 3；不支持时 Bridge 会拒绝启动，不会退化成全盘权限。
-- `无需授权`：保持当前可信机器模式，使用 `danger-full-access` 和 `approval_policy=never`，不会弹权限确认。
-
-Bridge 会只读开放 Home 容器之外的系统与挂载分支、完整 `/proc` 与 `/sys`、Home 隐藏项，以及链接端点时由当前 Shell 或默认登录 Shell 的 PATH 明确导出的工具组件。它不扫描 Home、不读取历史任务，也不按 nvm、opam、Coq、Nix 等产品名猜测目录，因此新机器首次运行也使用同一规则。若 PATH 指向另一个项目的 `_opam/bin` 等组件，只读开放该组件，不开放其父项目源码。特殊发行版或自定义共享工具链可在运行安装/修复命令前设置 `BRIDGE_STRICT_WORKSPACE_READ_ONLY`，值为当前操作系统的路径列表（Linux 使用冒号分隔）；不要填写整个 HOME、`/tmp` 或私人项目目录。隔离状态磁盘较大时，可用 `CODEX_BRIDGE_RUNTIME_DIR` 指定本地运行目录；安装/修复命令会把这两个变量一并保留到后台服务。
-
-手动拆分时等价于：
-
-```bash
-curl -fsSL https://your-domain.example/install.sh | sh
-~/.local/bin/codex-bridge connect --hub https://your-domain.example '<TOKEN>'
-```
-
-用户始终只使用页面给出的这两条命令。安装命令保持为简短的一行，下载安装器后会立即显示进度，网络停滞时会
-限时重试。首次接入依次执行安装和连接；以后重跑同一条安装
-命令会原子替换 Bridge，但不会触碰同机其他目录已连接的 systemd 服务、受管 nohup 进程或活跃任务；
-后续 `link` 只启动或重启当前目录对应的端点。
-
-## 旧式手动接入
-
-管理员仍可手动生成未绑定 token，用于本地开发或临时测试：
-
-```bash
-TOKEN=$(codex-bridge enroll --ttl 24h | tail -n1)
-BRIDGE_HUB_URL='https://your-domain.example' BRIDGE_TOKEN="$TOKEN" BRIDGE_RUNNER=codex BRIDGE_CWD="$PWD" codex-bridge bridge
-```
-
-下载的 release 二进制也可以使用旧命令：
-
-```bash
-BRIDGE_HUB_URL='https://your-domain.example' BRIDGE_TOKEN="$TOKEN" codex-bridge bridge
-```
-
-## 本地开发
-
-```bash
 cp configs/dev.yaml.example configs/dev.yaml
-go run . user --username admin --password 'change-me'
-TOKEN=$(go run . enroll | tail -n1)
-BRIDGE_TOKEN="$TOKEN" go run . bridge        # 或 make run-bridge
+chmod 600 configs/dev.yaml
 ```
 
-另开一个终端：
+编辑 `configs/dev.yaml`：将 `auth.jwt_secret` 设置为至少 32 字节的新随机密钥，
+将 `auth.bootstrap_password` 设置为强密码。首次保留 `127.0.0.1:8088` 监听地址和
+`bridge.runner: echo`。
+
+使用上述配置创建登录账号与接入 token：
 
 ```bash
-go run . hub                                  # 或 make run-hub
+./bin/codex-bridge user
+./bin/codex-bridge enroll
 ```
 
-浏览器打开 `http://127.0.0.1:8088`。
-
-## 常用环境变量
+将输出的 token 写入 `configs/dev.yaml` 的 `bridge.token`。分别打开两个终端，
+在仓库根目录启动：
 
 ```bash
-APP_HOST=127.0.0.1
-APP_PORT=8088
-HUB_DB_PATH=/opt/codex-bridge/data/codex-bridge.db
-HUB_BRIDGE_DOWNLOAD_URL='https://your-release-url/codex-bridge-linux-amd64'
-HUB_BROWSER_LEASE_TTL=5m
-JWT_SECRET='32-byte-random-secret'
-REGISTRATION_ENABLED=false
-TURNSTILE_SITE_KEY='public-site-key'
-TURNSTILE_SECRET='server-only-secret'
-TURNSTILE_HOSTNAME='bridge.example.com'
-BRIDGE_HUB_URL='https://sparkapi.tech'
-BRIDGE_TOKEN='enroll-token'
-BRIDGE_RUNNER=codex
-BRIDGE_CWD='/path/to/workspace'
-BRIDGE_MODEL='gpt-5.1-codex-max'
-BRIDGE_SANDBOX=workspace-write
-BRIDGE_APPROVAL_POLICY=never
-BRIDGE_STRICT_WORKSPACE=false
-BRIDGE_STRICT_WORKSPACE_READ_ONLY='/custom/coq:/custom/isabelle'
-BRIDGE_LONG_COMMAND_OBSERVER_ENABLED=false
-BRIDGE_LONG_COMMAND_OBSERVER_AFTER=2m
+# Terminal 1
+./bin/codex-bridge hub
 ```
-
-长命令观察器的完整 YAML 配置在 `bridge.long_command_observer`，详细说明见
-`docs/dev-workflow.md`。
-
-## 排查
 
 ```bash
-curl https://sparkapi.tech/health
-~/.local/bin/codex-bridge connect '<TOKEN>' --runner echo
-go test ./...                                 # 或 make test
+# Terminal 2
+./bin/codex-bridge bridge
 ```
 
-常见问题：
+打开 <http://127.0.0.1:8088>，使用 `admin` 和刚设置的密码登录，向 echo 端点发送
+一条消息。使用真实智能体时，先安装并认证 CLI，再按[设置页接入流程](#连接现有-hub)
+连接机器。
 
-- Bridge 不在线：确认 token 没过期、没有被其他机器消费，并且终端能访问 Hub。
-- Codex 无法执行：确认 WSL2/服务器里已经安装并登录 Codex CLI。
-- 工作目录不对：用 `--cwd /path/to/workspace` 指定。
-- HTTPS Cookie 异常：生产环境设置 `hub.cookie_secure: true`，本地 HTTP 设置为 `false`。
+`make build-all` 将标准前端嵌入 `bin/codex-bridge`。如需构建新版动态执行界面，
+请按[前端版本构建说明](docs/deployment.md#leading-and-experimental-websites)操作。
+
+## 自建部署
+
+同一个二进制提供 `hub` 和 `bridge` 两种运行模式。典型部署包含一个公网 Hub 和
+一个或多个私有 Bridge；私有机器无需开放入站端口。
+
+| 部署方式 | 指南 |
+| --- | --- |
+| 带 TLS 与服务管理的 Linux 服务器 | [systemd + Caddy](docs/deployment.md#option-e--production-systemd--caddy) |
+| 容器化运行 Hub | [Docker](docs/deployment.md#option-d--docker) |
+| 拷贝、解压后在 Linux amd64 上运行 | [Portable 包](docs/deployment.md#option-c--portable-package) |
+| 配置项与环境变量 | [开发工作流](docs/dev-workflow.md#environment-variables) |
+
+公网 Hub 需要配置 HTTPS、安全 Cookie、独立凭据和持久化 SQLite 存储。账号创建、
+注册策略、备份与验收步骤统一见[部署指南](docs/deployment.md)。
+
+## 架构与数据边界
+
+```mermaid
+flowchart LR
+    Browser[浏览器] <-->|HTTPS / WSS| Hub[Hub]
+    Bridge[私有机器上的 Bridge] -->|主动建立 WebSocket| Hub
+    Hub <--> DB[(SQLite)]
+    Bridge <--> CLI[Codex / Claude Code]
+    CLI <--> Workspace[工作区与原生会话]
+```
+
+- **Hub：** 提供内嵌界面与认证 API，将用户、消息、任务历史、事件和用量保存在
+  SQLite。管理员可通过有明确权限边界的只读页面查看用户统计及对话内容。
+- **Bridge：** 在私有机器上运行 CLI 进程并访问工作区。CLI 原生登录状态和原生
+  会话文件保留在该机器上。
+- **服务商配置：** 通过模型库保存的可选 API key 会由 Hub 接收，在密钥库中加密
+  存储，并在需要时加密封装给选定的 Bridge。这不属于对 Hub 运营方不可见的端到端加密。
+- **执行权限：** 浏览器审批和可选的 Linux 工作区隔离约束工具执行。根据任务的
+  信任程度选择权限策略。
+
+完整边界见[架构说明](docs/architecture.md)、
+[服务商凭据模型](docs/features/user-scoped-cli-provider-presets.md)和
+[权限策略](docs/features/cli-permission-profiles.md)。
+
+## 版本与平台
+
+本 README 对应当前仓库内容。**源码、已部署网站、GitHub 发行包和运行中的 Bridge
+可能处于不同版本。** 安装发布包前请检查[发行说明与实际附件](https://github.com/Atingaii/ProofBridge/releases)；
+它们可能早于本文描述的部分能力。
+
+| 入口或平台 | 当前范围 |
+| --- | --- |
+| [test.sparkon.cn](https://test.sparkon.cn) | 新版界面，包含动态执行 |
+| [proofbridge.sparkon.cn](https://proofbridge.sparkon.cn) | 保留旧版前端，与新版站点共享 Hub 和服务端数据 |
+| Linux amd64 / arm64 | 提供 Bridge 安装器与构建目标；WSL2 使用 Linux 接入方式 |
+| macOS Intel / Apple Silicon | 提供原生安装器与构建目标；重启机器后需重新启动后台进程。[Mac 验收记录](docs/features/macos-installation.md#validation-record)中的原生安装与连接实测仍待完成。 |
+| Android | 轻量系统WebView客户端；[发行构建](docs/dev-workflow.md#android-release)使用 `JAVA_HOME`、`ANDROID_HOME`、`ANDROID_SIGNING_PROPERTIES`，APK单独交付 |
+
+手动 Android CI 使用私有 `ANDROID_RELEASE_KEYSTORE_BASE64`、`ANDROID_RELEASE_STORE_PASSWORD`、`ANDROID_RELEASE_KEY_ALIAS`、`ANDROID_RELEASE_KEY_PASSWORD` secrets；配置方式见上面的发行构建文档。
+
+Android 7.0+ 在线客户端：[下载签名 APK](https://codex.sparkon.cn/android/codex-bridge-1.1.0.apk)（18,408 bytes），[SHA256](https://codex.sparkon.cn/android/codex-bridge-1.1.0.apk.sha256)。安装实际占用和宿主加 WebView renderer 的运行内存仍需真机测量。
+
+网站部署**不会**升级或重启已连接的 Bridge。原生问答与运行中追加指令需要匹配的
+Hub、前端、Bridge、CLI 和功能开放策略。具体门禁见
+[原生问答](docs/features/native-structured-user-input.md)和
+[动态输入](docs/features/dynamic-orchestration-input.md)；满足 CLI 最低版本不代表
+所有后续版本都已实测。
+
+严格工作区隔离要求 Linux 支持 Landlock ABI 3 或以上。内嵌 TBCI 仅提供给 Linux
+amd64；项目所需的 Rocq/Coq、Lean 或 Isabelle 工具链仍需单独准备。详见
+[严格工作区](docs/features/strict-workspace-auto-execute.md)和
+[TBCI 验证](docs/features/tbci-formal-proof-verification.md)。
+
+## 文档导航
+
+| 需要了解 | 文档 |
+| --- | --- |
+| 图文使用流程 | [在线帮助](https://test.sparkon.cn/help) |
+| 部署与排错 | [部署指南](docs/deployment.md) |
+| 本地配置与开发 | [开发工作流](docs/dev-workflow.md) |
+| 架构与源码分布 | [架构](docs/architecture.md) · [代码地图](docs/code-map.md) |
+| 会话连续性与本机恢复 | [上下文连续性](docs/features/orchestration-continuity.md) · [ACP runner](docs/features/acp-runner.md) |
+| 草稿、历史管理与请求恢复 | [桌面可靠性](docs/features/desktop-audit-fixes.md) |
+| Token 统计与管理员权限 | [用量总览](docs/features/orchestration-usage-overview.md) · [管理员面板](docs/features/admin-usage-dashboard.md) |
+| 项目状态与设计决策 | [路线图](docs/plan.md) · [功能设计](docs/features/) · [ADR](docs/adr/) |
+
+## 开发与贡献
+
+通过 [GitHub Issues](https://github.com/Atingaii/ProofBridge/issues) 提交可复现的问题或
+范围明确的建议。附上相关前端/Hub/Bridge 版本、操作系统、复现步骤及脱敏日志，
+不要包含 token、密钥或私有任务内容。
+
+较大修改前阅读 [AGENTS.md](AGENTS.md) 与[变更影响表](docs/change-impact.md)，
+更新相应功能设计或 ADR，保留会话连续性，并运行与修改范围相适应的检查：
+
+```bash
+make test
+npm --prefix frontend test
+make doc-lint
+```
+
+修改前端后，运行 `make build-all` 更新仓库内的嵌入式静态资源并重新构建二进制。
+Trellis 是可选开发工具，配置见[开发工作流](docs/dev-workflow.md#trellis-for-codex)。
+提交遵循仓库的[提交信息约定](AGENTS.md#r6-commit-message-contract)。
+
+## 许可证
+
+仓库目前没有项目级 `LICENSE` 文件。第三方组件仍适用各自的许可证。

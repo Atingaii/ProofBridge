@@ -66,8 +66,14 @@ func (r *CodexAppServerRunner) Prompt(ctx context.Context, req RunnerRequest, on
 		client.close()
 	}()
 
+	if req.OnNativeIdentity != nil {
+		req.OnNativeIdentity(threadID, client.resolvedModel)
+	}
+
 	done := make(chan appServerTurnResult, 1)
 	scope := newAppServerTurnScope(threadID)
+	liveReady := make(chan struct{})
+	req.LiveInputReady = liveReady
 	go r.readEvents(ctx, client, req, scope, onUpdate, done)
 
 	res, err := client.request(ctx, "turn/start", r.turnStartParams(threadID, req.Content, req))
@@ -75,9 +81,11 @@ func (r *CodexAppServerRunner) Prompt(ctx context.Context, req RunnerRequest, on
 		return RunnerResult{RemoteThreadID: threadID}, err
 	}
 	scope.setTurnID(appServerTurnIDFromResponse(res))
+	close(liveReady)
 	select {
 	case result := <-done:
 		result.result.RemoteThreadID = threadID
+		result.result.Usage = usageWithResolvedModel(result.result.Usage, client.resolvedModel)
 		return result.result, result.err
 	case <-ctx.Done():
 		return RunnerResult{RemoteThreadID: threadID}, ctx.Err()
@@ -106,8 +114,13 @@ func (r *CodexAppServerRunner) prepare(ctx context.Context, req RunnerRequest) (
 			return client, "", err
 		}
 		threadID = nestedString(appServerResultMap(res), "thread", "id")
-	} else if _, err := client.request(ctx, "thread/resume", r.threadResumeParams(threadID, req)); err != nil {
-		return client, threadID, err
+		client.resolvedModel = appServerResolvedModel(res)
+	} else {
+		res, err := client.request(ctx, "thread/resume", r.threadResumeParams(threadID, req))
+		if err != nil {
+			return client, threadID, err
+		}
+		client.resolvedModel = appServerResolvedModel(res)
 	}
 	if threadID == "" {
 		return client, "", errors.New("codex app-server did not return a thread id")
@@ -126,7 +139,23 @@ const appServerNativeReconnectGracePeriod = 45 * time.Second
 const appServerPostReconnectTerminalQuietPeriod = 30 * time.Second
 
 func (r *CodexAppServerRunner) start(ctx context.Context, req RunnerRequest) (*appServerClient, error) {
-	cmd := exec.CommandContext(ctx, r.codexPath(), "app-server", "--listen", "stdio://")
+	return r.startWithArgs(ctx, req, nil)
+}
+
+func (r *CodexAppServerRunner) startWithArgs(ctx context.Context, req RunnerRequest, overrides []string) (*appServerClient, error) {
+	args := append([]string{"app-server", "--listen", "stdio://"}, overrides...)
+	if req.OfficialLogin {
+		args = append(args, officialCodexProviderArgs()...)
+	}
+	if effort := strings.TrimSpace(req.ReasoningEffort); effort != "" {
+		args = append(args, "-c", "model_reasoning_effort="+quoteTomlString(effort))
+	}
+	if req.NativeUserInput {
+		// This experimental flag is local to this app-server process. It does
+		// not change the user's global Codex configuration or collaboration mode.
+		args = append(args, "--enable", "default_mode_request_user_input")
+	}
+	cmd := exec.CommandContext(ctx, r.codexPath(), args...)
 	configureManagedCommand(cmd)
 	if len(req.Env) > 0 {
 		replaceCommandEnv(cmd, req.Env...)
@@ -180,6 +209,9 @@ func (r *CodexAppServerRunner) threadStartParams(req ...RunnerRequest) map[strin
 	if model := r.model(req...); model != "" {
 		params["model"] = model
 	}
+	if len(req) > 0 && req[0].OfficialLogin {
+		params["modelProvider"] = "openai"
+	}
 	return params
 }
 
@@ -194,6 +226,11 @@ func (r *CodexAppServerRunner) threadResumeParams(threadID string, req ...Runner
 	if model := r.model(req...); model != "" {
 		params["model"] = model
 	}
+	if len(req) > 0 && req[0].OfficialLogin {
+		// An explicit provider prevents native resume from restoring the old
+		// model/effort when this official binding selects CLI defaults again.
+		params["modelProvider"] = "openai"
+	}
 	return params
 }
 
@@ -205,15 +242,30 @@ func (r *CodexAppServerRunner) model(req ...RunnerRequest) string {
 }
 
 func (r *CodexAppServerRunner) turnStartParams(threadID, content string, req ...RunnerRequest) map[string]any {
-	return map[string]any{
-		"threadId": threadID,
-		"input": []map[string]any{
-			{"type": "text", "text": content, "text_elements": []any{}},
-		},
+	return r.turnStartInputParams(threadID, []map[string]any{
+		{"type": "text", "text": content, "text_elements": []any{}},
+	}, req...)
+}
+
+// All new turns, including live input and asynchronous question replies, share
+// these overrides. turn/steer stays on the already configured active turn.
+func (r *CodexAppServerRunner) turnStartInputParams(threadID string, input []map[string]any, req ...RunnerRequest) map[string]any {
+	params := map[string]any{
+		"threadId":          threadID,
+		"input":             input,
 		"approvalPolicy":    r.approvalPolicy(),
 		"approvalsReviewer": "user",
 		"sandboxPolicy":     r.sandboxPolicy(req...),
 	}
+	if len(req) > 0 {
+		if model := strings.TrimSpace(req[0].Model); model != "" {
+			params["model"] = model
+		}
+		if effort := strings.TrimSpace(req[0].ReasoningEffort); effort != "" {
+			params["effort"] = effort
+		}
+	}
+	return params
 }
 
 func (r *CodexAppServerRunner) approvalPolicy() string {
@@ -274,6 +326,13 @@ func (r *CodexAppServerRunner) codexPath() string {
 type appServerTurnResult struct {
 	result RunnerResult
 	err    error
+}
+
+type codexAsyncAnswer struct {
+	question protocol.UserInputQuestion
+	answer   protocol.UserInputAnswer
+	ctx      context.Context
+	done     chan error
 }
 
 type appServerTurnScope struct {
@@ -430,6 +489,11 @@ func (r *CodexAppServerRunner) readEvents(ctx context.Context, client *appServer
 	var postReconnectTerminalTimer *time.Timer
 	var postReconnectTerminalTimeout <-chan time.Time
 	activeTools := make(map[string]struct{})
+	nativeUserInputs := make(map[string]string)
+	asyncUserInputs := make(map[string]string)
+	asyncSeenMessages := make(map[string]bool)
+	asyncAnswers := make(chan codexAsyncAnswer)
+	nativeTurnActive := true
 	clearPostReconnectTerminal := func() {
 		if postReconnectTerminalTimer != nil {
 			postReconnectTerminalTimer.Stop()
@@ -479,6 +543,14 @@ func (r *CodexAppServerRunner) readEvents(ctx context.Context, client *appServer
 		nativeReconnectErr = err
 	}
 	defer func() {
+		if req.UserInput != nil {
+			for _, id := range nativeUserInputs {
+				req.UserInput.CloseUserInput(id, "native turn ended")
+			}
+			for _, id := range asyncUserInputs {
+				req.UserInput.CloseUserInput(id, "native session ended")
+			}
+		}
 		if unscopedErrorTimer != nil {
 			unscopedErrorTimer.Stop()
 		}
@@ -489,11 +561,111 @@ func (r *CodexAppServerRunner) readEvents(ctx context.Context, client *appServer
 			postReconnectTerminalTimer.Stop()
 		}
 	}()
+	liveReady := req.LiveInputReady
+	liveWake := liveInputWake(req.LiveInput)
+	if liveReady != nil {
+		liveWake = nil
+	}
+	deliverLive := func(p protocol.OrchestrationInputPayload) error {
+		threadID, turnID := scope.current()
+		input := []map[string]any{{"type": "text", "text": p.Prompt}}
+		var err error
+		if nativeTurnActive {
+			_, err = client.requestNativeUserInput(ctx, "turn/steer", map[string]any{"threadId": threadID, "expectedTurnId": turnID, "input": input})
+			if actual := codexSteerActualTurnID(err, turnID); actual != "" {
+				scope.setTurnID(actual)
+				_, err = client.requestNativeUserInput(ctx, "turn/steer", map[string]any{"threadId": threadID, "expectedTurnId": actual, "input": input})
+			}
+			if err != nil && strings.TrimSpace(err.Error()) == "no active turn to steer" {
+				nativeTurnActive = false
+				err = nil
+			}
+		}
+		if err == nil && !nativeTurnActive {
+			var response json.RawMessage
+			response, err = client.requestNativeUserInput(ctx, "turn/start", r.turnStartInputParams(threadID, input, req))
+			if err == nil {
+				scope.setTurnID(appServerTurnIDFromResponse(response))
+				nativeTurnActive = true
+				text.Reset()
+				result.Content = ""
+				pendingFailedTool = nil
+				clearPostReconnectTerminal()
+			}
+		}
+		req.LiveInput.receipt(p, err)
+		return err
+	}
 	for {
 		select {
+		case <-liveReady:
+			liveReady = nil
+			liveWake = liveInputWake(req.LiveInput)
+		case <-liveWake:
+			for {
+				p, ok := req.LiveInput.pop(true)
+				if !ok {
+					break
+				}
+				// A rejected user steer is reported through its own receipt; it
+				// must not turn an otherwise healthy native task into run.error.
+				_ = deliverLive(p)
+			}
+
 		case <-ctx.Done():
 			done <- appServerTurnResult{result: result, err: ctx.Err()}
 			return
+		case submission := <-asyncAnswers:
+			if ctx.Err() != nil || submission.ctx.Err() != nil {
+				submission.done <- context.Canceled
+				continue
+			}
+			answerText, err := codexAsyncUserInputText(submission.question, submission.answer)
+			if err == nil {
+				threadID, turnID := scope.current()
+				input := []map[string]any{{"type": "text", "text": answerText}}
+				if nativeTurnActive {
+					_, err = client.requestNativeUserInput(submission.ctx, "turn/steer", map[string]any{
+						"threadId": threadID, "expectedTurnId": turnID, "input": input,
+					})
+					if actual := codexSteerActualTurnID(err, turnID); actual != "" {
+						// A turn can change while its completion event is queued. Codex's
+						// own TUI retries once with the server-reported active turn.
+						scope.setTurnID(actual)
+						_, err = client.requestNativeUserInput(submission.ctx, "turn/steer", map[string]any{
+							"threadId": threadID, "expectedTurnId": actual, "input": input,
+						})
+					}
+					if err != nil && strings.TrimSpace(err.Error()) == "no active turn to steer" {
+						nativeTurnActive = false
+						err = nil
+					}
+				}
+				if err == nil && !nativeTurnActive {
+					var response json.RawMessage
+					response, err = client.requestNativeUserInput(submission.ctx, "turn/start", r.turnStartInputParams(threadID, input, req))
+					if err == nil {
+						scope.setTurnID(appServerTurnIDFromResponse(response))
+						nativeTurnActive = true
+						// The original turn may have produced text before it queued
+						// the question. Return the answer turn's result to the
+						// orchestrator instead of mixing both turns together.
+						text.Reset()
+						result.Content = ""
+						pendingFailedTool = nil
+						clearPostReconnectTerminal()
+						postReconnectAssistantReady = false
+					}
+				}
+			}
+			if err == nil {
+				delete(asyncUserInputs, submission.question.ID)
+			}
+			submission.done <- err
+			if err != nil {
+				done <- appServerTurnResult{result: result, err: fmt.Errorf("Codex async answer delivery failed: %w", err)}
+				return
+			}
 		case <-nativeReconnectTimeout:
 			if text.Len() > 0 {
 				result.Content = text.String()
@@ -508,7 +680,7 @@ func (r *CodexAppServerRunner) readEvents(ctx context.Context, client *appServer
 			if text.Len() > 0 {
 				result.Content = text.String()
 			}
-			if postReconnectAssistantReady && len(activeTools) == 0 && pendingFailedTool == nil && strings.TrimSpace(result.Content) != "" {
+			if postReconnectAssistantReady && len(activeTools) == 0 && len(asyncUserInputs) == 0 && pendingFailedTool == nil && strings.TrimSpace(result.Content) != "" {
 				done <- appServerTurnResult{result: result}
 				return
 			}
@@ -532,6 +704,10 @@ func (r *CodexAppServerRunner) readEvents(ctx context.Context, client *appServer
 					done <- appServerTurnResult{result: result, err: client.withDiagnostics(nativeReconnectErr)}
 					return
 				}
+				if len(asyncUserInputs) > 0 {
+					done <- appServerTurnResult{result: result, err: client.exitError()}
+					return
+				}
 				if pendingFailedTool != nil {
 					done <- appServerTurnResult{result: result, err: failedToolWithoutFollowupError("codex app-server", *pendingFailedTool)}
 					return
@@ -550,6 +726,39 @@ func (r *CodexAppServerRunner) readEvents(ctx context.Context, client *appServer
 				if scope.matchesNonTerminal(ctx, msg) {
 					threadID, _ := scope.current()
 					r.handleApproval(ctx, client, msg, req, threadID)
+				}
+				continue
+			}
+			if msg.Method == "item/tool/requestUserInput" {
+				if scope.matchesNonTerminal(ctx, msg) && msg.ID != nil {
+					if req.UserInput == nil || !req.NativeUserInput {
+						_ = client.respondError(msg.ID, -32601, "browser user input is unavailable")
+						continue
+					}
+					questions, blocking, err := decodeCodexUserInput(msg.Params)
+					if err != nil {
+						_ = client.respondError(msg.ID, -32602, "unsupported native user input")
+						continue
+					}
+					nativeID := msg.ID
+					id, err := req.UserInput.RegisterUserInput(ctx, blocking, questions, func(deliveryCtx context.Context, res protocol.UserInputResponsePayload) error {
+						return client.respondUserInput(deliveryCtx, nativeID, codexUserInputResult(questions, res.Answers))
+					})
+					if err != nil {
+						_ = client.respondError(msg.ID, -32603, "browser user input could not be registered")
+						continue
+					}
+					nativeUserInputs[nativeRequestKey(msg.ID)] = id
+				}
+				continue
+			}
+			if msg.Method == "serverRequest/resolved" {
+				if scope.matchesNonTerminal(ctx, msg) {
+					key := nativeRequestKey(msg.Params["requestId"])
+					if id := nativeUserInputs[key]; id != "" {
+						req.UserInput.CloseUserInput(id, "native request resolved")
+						delete(nativeUserInputs, key)
+					}
 				}
 				continue
 			}
@@ -592,6 +801,45 @@ func (r *CodexAppServerRunner) readEvents(ctx context.Context, client *appServer
 			case "item/completed":
 				item, _ := appServerNestedMap(msg.Params, "item")
 				if itemType, _ := item["type"].(string); itemType == "agentMessage" {
+					if item["delivery"] == "async" {
+						if !req.NativeUserInput || req.UserInput == nil {
+							done <- appServerTurnResult{result: result, err: errors.New("Codex async question cannot be delivered without browser user input")}
+							return
+						}
+						messageID, _ := item["id"].(string)
+						if asyncSeenMessages[messageID] {
+							continue
+						}
+						questions, err := decodeCodexAsyncUserInput(item)
+						if err != nil {
+							done <- appServerTurnResult{result: result, err: fmt.Errorf("Codex async question is unsupported: %w", err)}
+							return
+						}
+						asyncSeenMessages[messageID] = true
+						for _, question := range questions {
+							question := question
+							id, err := req.UserInput.RegisterUserInput(ctx, false, []protocol.UserInputQuestion{question}, func(deliveryCtx context.Context, res protocol.UserInputResponsePayload) error {
+								submission := codexAsyncAnswer{question: question, answer: res.Answers[question.ID], ctx: deliveryCtx, done: make(chan error, 1)}
+								select {
+								case asyncAnswers <- submission:
+								case <-deliveryCtx.Done():
+									return deliveryCtx.Err()
+								}
+								select {
+								case err := <-submission.done:
+									return err
+								case <-deliveryCtx.Done():
+									return deliveryCtx.Err()
+								}
+							})
+							if err != nil {
+								done <- appServerTurnResult{result: result, err: fmt.Errorf("Codex async question registration failed: %w", err)}
+								return
+							}
+							asyncUserInputs[question.ID] = id
+						}
+						continue
+					}
 					if content, _ := item["text"].(string); content != "" {
 						if delta := appendAgentMessageContent(&text, content); delta != "" {
 							pendingFailedTool = nil
@@ -637,6 +885,14 @@ func (r *CodexAppServerRunner) readEvents(ctx context.Context, client *appServer
 					done <- appServerTurnResult{result: result, err: err}
 					return
 				}
+				nativeTurnActive = false
+				if p, ok := req.LiveInput.pop(false); ok {
+					if err := deliverLive(p); err != nil {
+						done <- appServerTurnResult{result: result, err: err}
+						return
+					}
+					continue
+				}
 				if content := appServerTurnContent(msg); content != "" {
 					if delta := appendAgentMessageContent(&text, content); delta != "" {
 						pendingFailedTool = nil
@@ -645,6 +901,11 @@ func (r *CodexAppServerRunner) readEvents(ctx context.Context, client *appServer
 				}
 				if text.Len() > 0 {
 					result.Content = text.String()
+				}
+				if len(asyncUserInputs) > 0 {
+					// The native turn may finish before the user answers. Keep this
+					// sole reader and its run alive until those answers are sent.
+					continue
 				}
 				if pendingFailedTool != nil {
 					done <- appServerTurnResult{result: result, err: failedToolWithoutFollowupError("codex app-server", *pendingFailedTool)}
@@ -790,11 +1051,32 @@ func appServerTurnContent(msg appServerMessage) string {
 		if firstString(item, "type") != "agentMessage" {
 			continue
 		}
+		if item["delivery"] == "async" {
+			continue
+		}
 		if text := agentMessageText(item); text != "" {
 			appendAgentMessageContent(&content, text)
 		}
 	}
 	return content.String()
+}
+
+// The Codex app-server reports a changed active turn using this exact error
+// shape. It is safe to retry only when the rejected ID matches our request.
+func codexSteerActualTurnID(err error, expected string) string {
+	if err == nil || expected == "" {
+		return ""
+	}
+	message := strings.TrimSpace(err.Error())
+	prefix := "expected active turn id `" + expected + "` but found `"
+	if !strings.HasPrefix(message, prefix) || !strings.HasSuffix(message, "`") {
+		return ""
+	}
+	actual := strings.TrimSuffix(strings.TrimPrefix(message, prefix), "`")
+	if actual == "" || strings.Contains(actual, "`") {
+		return ""
+	}
+	return actual
 }
 
 func appServerTurnIDFromResponse(raw json.RawMessage) string {
@@ -996,19 +1278,22 @@ func approvalResponseFor(method, decision string) any {
 }
 
 type appServerClient struct {
-	cmd         *exec.Cmd
-	stdin       io.WriteCloser
-	mu          sync.Mutex
-	writeMu     sync.Mutex
-	nextID      int64
-	pending     map[int64]chan appServerResponse
-	events      chan appServerMessage
-	stop        chan struct{}
-	stopOnce    sync.Once
-	closed      bool
-	wait        sync.Once
-	waitDone    chan struct{}
-	diagnostics *appServerDiagnosticTail
+	resolvedModel         string // Set by thread preparation before consuming turn events.
+	cmd                   *exec.Cmd
+	stdin                 io.WriteCloser
+	mu                    sync.Mutex
+	writeMu               sync.Mutex
+	userInputAbortOnce    sync.Once
+	userInputWriteTimeout time.Duration // Zero uses the production 10-second transport budget.
+	nextID                int64
+	pending               map[int64]chan appServerResponse
+	events                chan appServerMessage
+	stop                  chan struct{}
+	stopOnce              sync.Once
+	closed                bool
+	wait                  sync.Once
+	waitDone              chan struct{}
+	diagnostics           *appServerDiagnosticTail
 }
 
 type appServerDiagnosticTail struct {
@@ -1112,6 +1397,155 @@ func (c *appServerClient) request(ctx context.Context, method string, params any
 
 func (c *appServerClient) respond(id any, result any) error {
 	res := map[string]any{"jsonrpc": "2.0", "id": id, "result": result}
+	b, err := json.Marshal(res)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return errors.New("codex app-server exited")
+	}
+	stdin := c.stdin
+	c.mu.Unlock()
+	c.writeMu.Lock()
+	_, err = stdin.Write(append(b, '\n'))
+	c.writeMu.Unlock()
+	return err
+}
+
+// A native question may wait for the user indefinitely. Its lease can be
+// revoked while waiting for the writer lock, but once Write starts a normal
+// serverRequest/resolved must not terminate a healthy native process.
+func (c *appServerClient) respondUserInput(ctx context.Context, id any, result any) error {
+	b, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+	if err != nil {
+		return err
+	}
+	return c.writeNativeUserInputFrame(ctx, b)
+}
+
+// An async answer is a user message on the same Codex thread. Unlike a
+// server-request response it has its own JSON-RPC acknowledgement. The
+// native answer lease is checked at the actual transport write boundary.
+func (c *appServerClient) requestNativeUserInput(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil, errors.New("codex app-server exited")
+	}
+	c.nextID++
+	id := c.nextID
+	ch := make(chan appServerResponse, 1)
+	c.pending[id] = ch
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(c.pending, id)
+		c.mu.Unlock()
+	}()
+	b, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+	if err != nil {
+		return nil, err
+	}
+	if err := c.writeNativeUserInputFrame(ctx, b); err != nil {
+		return nil, err
+	}
+	select {
+	case response := <-ch:
+		return response.result, response.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (c *appServerClient) writeNativeUserInputFrame(ctx context.Context, b []byte) error {
+	budget := c.userInputWriteTimeout
+	if budget <= 0 {
+		budget = 10 * time.Second
+	}
+	writeCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	if err := writeCtx.Err(); err != nil {
+		return err
+	}
+	// Unlike ordinary requests, a native user answer must not remain behind
+	// another writer's mutex after its request has closed.
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for !c.writeMu.TryLock() {
+		select {
+		case <-writeCtx.Done():
+			return writeCtx.Err()
+		case <-ticker.C:
+		}
+	}
+	defer c.writeMu.Unlock()
+	if err := writeCtx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return errors.New("codex app-server exited")
+	}
+	stdin := c.stdin
+	c.mu.Unlock()
+	if err := writeCtx.Err(); err != nil {
+		return err
+	}
+	if !claimNativeUserInputWrite(ctx) {
+		return context.Canceled
+	}
+	frame := append(b, '\n')
+	// The transport deadline is independent of the request lease. Stop and
+	// completion share a lock so a late timer cannot kill a successful client.
+	var watchdogMu sync.Mutex
+	completed, timedOut := false, false
+	watchdog := time.AfterFunc(budget, func() {
+		watchdogMu.Lock()
+		defer watchdogMu.Unlock()
+		if !completed {
+			timedOut = true
+			c.abortUserInputTransport()
+		}
+	})
+	n, writeErr := stdin.Write(frame)
+	watchdogMu.Lock()
+	completed = true
+	watchdog.Stop()
+	wasTimedOut := timedOut
+	watchdogMu.Unlock()
+	if wasTimedOut {
+		return context.DeadlineExceeded
+	}
+	if writeErr != nil {
+		return writeErr
+	}
+	if n != len(frame) {
+		return io.ErrShortWrite
+	}
+	return nil
+}
+
+func (c *appServerClient) abortUserInputTransport() {
+	c.userInputAbortOnce.Do(func() {
+		c.mu.Lock()
+		c.closed = true
+		stdin, cmd := c.stdin, c.cmd
+		c.mu.Unlock()
+		c.signalStop()
+		if stdin != nil {
+			_ = stdin.Close()
+		}
+		if cmd != nil && cmd.Process != nil {
+			_ = terminateProcessGroup(cmd.Process.Pid)
+		}
+	})
+}
+
+func (c *appServerClient) respondError(id any, code int, message string) error {
+	res := map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": message}}
 	b, err := json.Marshal(res)
 	if err != nil {
 		return err

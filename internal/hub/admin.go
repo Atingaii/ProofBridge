@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"math"
@@ -88,11 +89,15 @@ type adminUserUsageDetail struct {
 }
 
 type adminConversationContent struct {
-	ID     string                         `json:"id"`
-	Kind   string                         `json:"kind"`
-	Title  string                         `json:"title"`
-	Prompt string                         `json:"prompt,omitempty"`
-	Items  []adminConversationContentItem `json:"items"`
+	ID                  string                         `json:"id"`
+	Kind                string                         `json:"kind"`
+	Title               string                         `json:"title"`
+	Prompt              string                         `json:"prompt,omitempty"`
+	Items               []adminConversationContentItem `json:"items"`
+	HasMoreBefore       bool                           `json:"hasMoreBefore"`
+	NextBeforeSeq       int64                          `json:"nextBeforeSeq,omitempty"`
+	NextBeforeCreatedAt int64                          `json:"nextBeforeCreatedAt"`
+	NextBeforeID        string                         `json:"nextBeforeId,omitempty"`
 }
 
 type adminConversationContentItem struct {
@@ -104,6 +109,10 @@ type adminConversationContentItem struct {
 }
 
 func (s *Server) handleAdminUsage(w http.ResponseWriter, r *http.Request, _ string) {
+	ctx, cancel := context.WithTimeout(r.Context(), orchestrationStatsTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
+
 	days, timezoneOffset, cutoff, err := usageOverviewRange(r)
 	if err != nil {
 		serverutil.WriteError(w, http.StatusBadRequest, "BAD_RANGE", err.Error())
@@ -111,14 +120,22 @@ func (s *Server) handleAdminUsage(w http.ResponseWriter, r *http.Request, _ stri
 	}
 	snapshot, err := s.store.AdminUsageSnapshot(r.Context(), cutoff, timezoneOffset)
 	if err != nil {
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load administrator usage")
+		writeUsageReadError(w, r, "failed to load administrator usage")
 		return
 	}
 	overview := buildAdminUsageOverview(snapshot, days, timezoneOffset, time.Now().Unix(), s.pool.AgentOnline)
+	if r.Context().Err() != nil {
+		writeUsageReadError(w, r, "statistics request interrupted")
+		return
+	}
 	serverutil.WriteJSON(w, http.StatusOK, map[string]any{"overview": overview})
 }
 
 func (s *Server) handleAdminUserUsage(w http.ResponseWriter, r *http.Request, _ string) {
+	ctx, cancel := context.WithTimeout(r.Context(), orchestrationStatsTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
+
 	days, timezoneOffset, cutoff, err := usageOverviewRange(r)
 	if err != nil {
 		serverutil.WriteError(w, http.StatusBadRequest, "BAD_RANGE", err.Error())
@@ -130,33 +147,70 @@ func (s *Server) handleAdminUserUsage(w http.ResponseWriter, r *http.Request, _ 
 			serverutil.WriteError(w, http.StatusNotFound, "NOT_FOUND", "user not found")
 			return
 		}
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load administrator user detail")
+		writeUsageReadError(w, r, "failed to load administrator user detail")
 		return
 	}
 	detail := buildAdminUserUsageDetail(snapshot, days, timezoneOffset)
+	if r.Context().Err() != nil {
+		writeUsageReadError(w, r, "statistics request interrupted")
+		return
+	}
 	serverutil.WriteJSON(w, http.StatusOK, map[string]any{"detail": detail})
 }
 
 func (s *Server) handleAdminConversationContent(w http.ResponseWriter, r *http.Request, _ string) {
+	ctx, cancel := context.WithTimeout(r.Context(), orchestrationStatsTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
+	page := store.AdminConversationContentPage{Limit: boundedQueryLimit(r, "limit", 200, 1000)}
+	beforeSeq, hasSeq, ok := int64QueryParam(w, r, "beforeSeq")
+	if !ok {
+		return
+	}
+	beforeCreatedAt, hasTime, ok := int64QueryParam(w, r, "beforeCreatedAt")
+	if !ok {
+		return
+	}
+	beforeID := r.URL.Query().Get("beforeId")
+	kind := r.PathValue("kind")
+	if (kind == "chat" && (hasSeq || hasTime != (beforeID != ""))) ||
+		(kind == "orchestration" && (hasTime || beforeID != "")) {
+		serverutil.WriteError(w, http.StatusBadRequest, "BAD_QUERY", "invalid conversation history cursor")
+		return
+	}
+	if hasSeq {
+		page.BeforeSeq = &beforeSeq
+	}
+	if hasTime {
+		page.BeforeCreatedAt = &beforeCreatedAt
+		page.BeforeID = beforeID
+	}
+
 	content, err := s.store.AdminConversationContent(
-		r.Context(), r.PathValue("userID"), r.PathValue("kind"), r.PathValue("conversationID"),
+		r.Context(), r.PathValue("userID"), kind, r.PathValue("conversationID"), page,
 	)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			serverutil.WriteError(w, http.StatusNotFound, "NOT_FOUND", "conversation not found")
 			return
 		}
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load administrator conversation content")
+		writeUsageReadError(w, r, "failed to load administrator conversation content")
 		return
 	}
 	response := adminConversationContent{
 		ID: content.ID, Kind: content.Kind, Title: content.Title, Prompt: content.Prompt,
-		Items: make([]adminConversationContentItem, 0, len(content.Items)),
+		Items:         make([]adminConversationContentItem, 0, len(content.Items)),
+		HasMoreBefore: content.HasMoreBefore, NextBeforeSeq: content.NextBeforeSeq,
+		NextBeforeCreatedAt: content.NextBeforeCreatedAt, NextBeforeID: content.NextBeforeID,
 	}
 	for _, item := range content.Items {
 		response.Items = append(response.Items, adminConversationContentItem{
 			Role: item.Role, Source: item.Source, Kind: item.Kind, Content: item.Content, CreatedAt: item.CreatedAt,
 		})
+	}
+	if r.Context().Err() != nil {
+		writeUsageReadError(w, r, "statistics request interrupted")
+		return
 	}
 	serverutil.WriteJSON(w, http.StatusOK, map[string]any{"conversation": response})
 }

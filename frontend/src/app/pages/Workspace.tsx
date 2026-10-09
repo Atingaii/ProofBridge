@@ -39,6 +39,8 @@ import { ApprovalCard } from '../components/chat/ApprovalCard';
 import { TakeoverHint } from '../components/chat/TakeoverHint';
 import { MessageItem, ToolItem } from '../components/chat/MessageItem';
 import { RenameSessionModal, SettingsModal } from '../components/Settings';
+import { MobileSurface, MobileViewport } from '../components/MobileSurface';
+import { MoreHorizontal } from 'lucide-react';
 import { SidebarContent } from '../components/SidebarContent';
 import { Button } from '../components/ui';
 import {
@@ -81,6 +83,7 @@ export function Workspace({
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [mobileActionsOpen, setMobileActionsOpen] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsFocus, setSettingsFocus] = useState<'cli' | ''>('');
@@ -792,8 +795,9 @@ export function Workspace({
   }, [agentSessions, search]);
 
   return (
-    <div className="h-screen w-full flex bg-background text-foreground overflow-hidden font-sans">
-      <aside
+    <div className="phone-workspace h-screen w-full flex bg-background text-foreground overflow-hidden font-sans">
+      <MobileViewport />
+      <MobileSurface open={mobileMenuOpen} onClose={() => setMobileMenuOpen(false)} title={language === 'zh' ? '会话历史' : 'Chat history'} closeLabel={t.cancel} bodyClassName="min-h-0 flex flex-1 flex-col"
         className={cn(
           "hidden md:flex flex-col border-r border-sidebar-border bg-sidebar transition-all duration-300 ease-in-out",
           sidebarOpen ? "w-[260px]" : "w-0 opacity-0 overflow-hidden border-r-0"
@@ -802,14 +806,14 @@ export function Workspace({
         <SidebarContent
           groupedSessions={groupedSessions}
           activeSession={activeSessionId}
-          setActiveSession={(id) => selectSession(id).catch((err) => appendSystem(err.message))}
-          createSession={() => createSession().catch((err) => appendSystem(err.message))}
+          setActiveSession={(id) => { setMobileMenuOpen(false); selectSession(id).catch((err) => appendSystem(err.message)); }}
+          createSession={() => { setMobileMenuOpen(false); createSession().catch((err) => appendSystem(err.message)); }}
           shareSession={(session) => shareSession(session).catch((err) => appendSystem(err.message))}
           renameSession={renameSession}
           deleteSession={(session) => deleteSession(session).catch((err) => appendSystem(err.message))}
           search={search}
           setSearch={setSearch}
-          openSettings={() => openSettings()}
+          openSettings={() => { setMobileMenuOpen(false); openSettings(); }}
           agentOnline={Boolean(onlineAgent)}
           openOrchestration={() => navigate('/orchestrate')}
           shareCopiedSessionId={shareCopiedSessionId}
@@ -817,47 +821,15 @@ export function Workspace({
           deletingSessionId={deletingSessionId}
           t={t}
         />
-      </aside>
-
-      {mobileMenuOpen && (
-        <div className="md:hidden fixed inset-0 z-50 flex">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setMobileMenuOpen(false)} />
-          <div className="relative flex flex-col w-[280px] h-full bg-sidebar border-r border-sidebar-border animate-in slide-in-from-left">
-            <Button variant="ghost" size="icon" className="absolute right-2 top-2 z-10" onClick={() => setMobileMenuOpen(false)}>
-              <X className="h-4 w-4" />
-            </Button>
-            <SidebarContent
-              groupedSessions={groupedSessions}
-              activeSession={activeSessionId}
-              setActiveSession={(id) => selectSession(id).catch((err) => appendSystem(err.message))}
-              createSession={() => createSession().catch((err) => appendSystem(err.message))}
-              shareSession={(session) => shareSession(session).catch((err) => appendSystem(err.message))}
-              renameSession={renameSession}
-              deleteSession={(session) => deleteSession(session).catch((err) => appendSystem(err.message))}
-              search={search}
-              setSearch={setSearch}
-              openSettings={() => openSettings()}
-              agentOnline={Boolean(onlineAgent)}
-              openOrchestration={() => {
-                setMobileMenuOpen(false);
-                navigate('/orchestrate');
-              }}
-              shareCopiedSessionId={shareCopiedSessionId}
-              sharingSessionId={sharingSessionId}
-              deletingSessionId={deletingSessionId}
-              t={t}
-            />
-          </div>
-        </div>
-      )}
+      </MobileSurface>
 
       <main className="flex-1 flex flex-col min-w-0 h-full">
         <header className="h-14 shrink-0 border-b border-border flex items-center justify-between px-3 md:px-4 bg-background z-10">
           <div className="flex items-center gap-2 overflow-hidden">
-            <Button variant="ghost" size="icon" className="md:hidden shrink-0 text-muted-foreground" onClick={() => setMobileMenuOpen(true)}>
+            <Button variant="ghost" size="icon" className="phone-only shrink-0 text-muted-foreground" aria-label={language === 'zh' ? '会话历史' : 'Chat history'} onClick={() => setMobileMenuOpen(true)}>
               <Menu className="h-5 w-5" />
             </Button>
-            <Button variant="ghost" size="icon" className="hidden md:flex shrink-0 text-muted-foreground" onClick={() => setSidebarOpen(!sidebarOpen)}>
+            <Button variant="ghost" size="icon" className="phone-desktop-only hidden md:flex shrink-0 text-muted-foreground" onClick={() => setSidebarOpen(!sidebarOpen)}>
               {sidebarOpen ? <PanelLeftClose className="h-5 w-5" /> : <PanelLeft className="h-5 w-5" />}
             </Button>
 
@@ -870,7 +842,8 @@ export function Workspace({
             </div>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <Button variant="ghost" size="icon" className="phone-only shrink-0" aria-label={language === 'zh' ? '更多操作' : 'More actions'} onClick={() => setMobileActionsOpen(true)}><MoreHorizontal className="h-5 w-5" /></Button>
+          <MobileSurface open={mobileActionsOpen} onClose={() => setMobileActionsOpen(false)} title={language === 'zh' ? '更多操作' : 'More actions'} closeLabel={t.cancel} className="flex items-center gap-3 shrink-0 phone-action-surface" bodyClassName="flex flex-col gap-3 p-4">
             <AgentSelector
               agents={agents}
               selectedAgentId={selectedAgentId}
@@ -914,10 +887,10 @@ export function Workspace({
               {t.orchestrate}
             </Button>
             {user.isAdmin && <Button variant="secondary" size="icon" className="h-8 w-8 rounded-lg" onClick={() => navigate('/admin/usage')} aria-label={t.adminDashboard} title={t.adminDashboard}><ShieldCheck className="h-3.5 w-3.5" /></Button>}
-          </div>
+          </MobileSurface>
         </header>
 
-        <div className="bg-muted/30 border-b border-border px-4 py-2 flex items-center gap-4 text-xs text-muted-foreground overflow-x-auto whitespace-nowrap elegant-scrollbar">
+        <div className="phone-status bg-muted/30 border-b border-border px-4 py-2 flex items-center gap-4 text-xs text-muted-foreground overflow-x-auto whitespace-nowrap elegant-scrollbar">
           <div className="flex items-center gap-1.5">
             <Server className="h-3.5 w-3.5" />
             <span>{t.runner}: {runner}</span>

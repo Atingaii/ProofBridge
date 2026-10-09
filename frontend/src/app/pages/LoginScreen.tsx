@@ -160,7 +160,7 @@ export function LoginScreen({
   };
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-background text-foreground p-4">
+    <div className="phone-page phone-auth min-h-screen w-full flex items-center justify-center bg-background text-foreground p-4">
       <div className="w-full max-w-[360px] flex flex-col gap-6">
         <div className="flex flex-col items-center gap-2 text-center">
           <div className="h-12 w-12 rounded-xl bg-primary text-primary-foreground flex items-center justify-center mb-2 shadow-sm">

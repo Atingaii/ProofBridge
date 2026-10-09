@@ -48,7 +48,7 @@ configuration, atomic lifecycle, and preservation of the user's primary CLI
 state. It also applies harness ideas visible in DeepSeek Harness AgentTeams:
 explicit role ownership, durable state, dependency-aware progress, and a
 separate adjudication record rather than trusting a worker's prose claim.
-The `claude-claude` pair and unanimous checker quorum extend this design in
+The `claude-claude` pair and two-agent checker policy extend this design in
 [claude-claude-and-quorum-verification.md](claude-claude-and-quorum-verification.md).
 
 ## Data And Protocol Impact
@@ -87,10 +87,11 @@ The `claude-claude` pair and unanimous checker quorum extend this design in
    native resume and remove it after the session exits. Synchronize only native
    session/transcript records into ordinary `/resume` picker locations; never
    copy isolated configuration or credentials.
-4. After an intermediate round's durable reviewer, record local evidence facts and run two
-   fresh Agent Verifiers using role 1 and role 2's bound presets. Validate
-   their JSON decisions, emit the quorum before choosing the next round, and
-   stop only on a two-Agent unanimous pass.
+4. After an intermediate round's durable reviewer, run two fresh Agent Verifiers using role 1
+   and role 2's bound presets. Give each only the original task prompt and the
+   real project workspace; validate their JSON decisions, wait for both, emit
+   the quorum before choosing the next round, and stop when either agent
+   passes.
 5. Add compact required preset selectors to the existing orchestration form,
    refresh their candidates after Settings changes, and render
    verdict/terminal-reason data in the existing progress surfaces.
@@ -111,11 +112,11 @@ The `claude-claude` pair and unanimous checker quorum extend this design in
   context-window override.
 - A profile secret is absent from Hub API responses, events, logs, prompts,
   task-graph public shares, and runtime artifacts after cleanup.
-- A resolved turn with independent command evidence ends before unused turns
-  only when both isolated Agent Verifiers pass after reviewing the recorded
-  local evidence.
-- Missing evidence, unresolved formal-proof obligations, verifier error, or a
-  failed command never causes early termination.
+- A resolved turn ends before unused turns when either isolated Agent Verifier
+  passes after independently inspecting the real workspace.
+- A verifier that finds missing evidence, unresolved formal-proof obligations,
+  an error, or a failed command returns `continue`; early termination still
+  depends on the other verifier returning a valid `pass`.
 - Existing plans, branch maps, follow-up continuity, Claude and Codex runner
   tests, and frontend reducers remain covered.
 
@@ -125,8 +126,8 @@ The `claude-claude` pair and unanimous checker quorum extend this design in
 
 The two configured roles may use different providers, models, and reasoning
 strengths. Fresh, concurrent sessions give two independent completion judgments
-without contaminating worker history. Any error, malformed JSON, disagreement,
-or missing local evidence conservatively continues the scheduled run.
+without contaminating worker history. Any error or malformed JSON, or two
+continuing results, conservatively continues the scheduled run.
 
 **Why snapshot ciphertext in private run storage and the start payload?**
 
@@ -138,7 +139,6 @@ protocol and make reconnect recovery ambiguous.
 
 **Can a successful test incorrectly finish a task?**
 
-Not by itself. Both Agent Verifiers must accept a structured final resolution
-from the relevant worker with no outstanding risks/next work, and local gates
-still require successful command evidence plus a recognized proof checker for
-formal proofs.
+Not by itself. Each Agent Verifier must inspect the workspace and accept that
+the original task is complete, including any required checker for formal
+proofs. The Bridge does not infer completion from Worker claims or local gates.

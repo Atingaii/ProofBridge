@@ -9,6 +9,12 @@ import (
 	"github.com/tencent/codex-bridge/internal/protocol"
 )
 
+// Keep the query and sparse index predicates identical so SQLite can skip
+// delta/command payloads without reading them. The JSON validity guard also
+// permits historical bridge notes with non-JSON payloads during migration.
+const orchestrationUsageTimelinePredicate = `(kind IN ('run.start', 'turn.start', 'turn.usage', 'verifier.verdict', 'run.end')
+    OR (kind = 'bridge.note' AND CASE WHEN json_valid(data_json) THEN COALESCE(json_extract(data_json, '$.extra.category'), json_extract(data_json, '$.category')) END = 'native-identity'))`
+
 type OrchestrationUsageSync struct {
 	RunID      string `json:"runId"`
 	CLI        string `json:"cli"`
@@ -22,9 +28,7 @@ type OrchestrationUsageSync struct {
 
 func (s *Store) ListAllOrchestrationRuns(ctx context.Context, userID string) ([]OrchestrationRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
-	SELECT id, user_id, agent_id, title, mode, COALESCE(worker_pair,'claude-codex'), COALESCE(first_cli,''), COALESCE(profile,'default'), prompt, COALESCE(cwd,''),
-			COALESCE(run_cwd,''), COALESCE(codex_thread_id,''), COALESCE(codex_thread_ids_json,'{}'), COALESCE(claude_started,0), COALESCE(claude_session_ids_json,'{}'), COALESCE(claude_started_slots_json,'{}'),
-			COALESCE(native_context_compaction,'off'), max_turns, status, COALESCE(error,''), COALESCE(files_json,'[]'), created_at, updated_at, COALESCE(finished_at,0), COALESCE(delete_requested,0)
+	SELECT `+orchestrationRunColumns+`
 		FROM orchestration_runs
 		WHERE user_id = ? AND delete_requested = 0
 		ORDER BY updated_at DESC, created_at DESC`, userID)
@@ -126,9 +130,7 @@ func (s *Store) ListTerminalOrchestrationRunsByAgent(ctx context.Context, agentI
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx, `
-	SELECT id, user_id, agent_id, title, mode, COALESCE(worker_pair,'claude-codex'), COALESCE(first_cli,''), COALESCE(profile,'default'), prompt, COALESCE(cwd,''),
-			COALESCE(run_cwd,''), COALESCE(codex_thread_id,''), COALESCE(codex_thread_ids_json,'{}'), COALESCE(claude_started,0), COALESCE(claude_session_ids_json,'{}'), COALESCE(claude_started_slots_json,'{}'),
-			COALESCE(native_context_compaction,'off'), max_turns, status, COALESCE(error,''), COALESCE(files_json,'[]'), created_at, updated_at, COALESCE(finished_at,0), COALESCE(delete_requested,0)
+	SELECT `+orchestrationRunColumns+`
 		FROM orchestration_runs
 		WHERE agent_id = ? AND status IN ('completed','failed','canceled') AND delete_requested = 0
 		ORDER BY updated_at DESC LIMIT ?`, agentID, limit)

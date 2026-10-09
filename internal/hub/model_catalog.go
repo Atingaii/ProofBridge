@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"github.com/tencent/codex-bridge/internal/modelcatalog"
 	"strings"
 
 	"github.com/tencent/codex-bridge/internal/protocol"
@@ -89,6 +90,22 @@ func reviewedModelMetadata(cli, model string) *protocol.CLIModelMetadata {
 	if name == "" {
 		return nil
 	}
+	if m, ok := modelcatalog.Default.Lookup(model); ok {
+		levels := m.Efforts(cli)
+		if len(levels) > 0 {
+			def := levels[0]
+			for _, level := range levels {
+				if level == "medium" {
+					def = level
+					break
+				}
+				if level == "high" {
+					def = level
+				}
+			}
+			return &protocol.CLIModelMetadata{Model: model, Reviewed: true, SupportedReasoningLevels: levels, DefaultReasoningLevel: def}
+		}
+	}
 	for _, profile := range reviewedModelFamilies {
 		matched := false
 		for _, exact := range profile.Exact {
@@ -123,6 +140,9 @@ func normalizeCatalogModel(model string) string {
 }
 
 func reviewedClaudeContextForModel(model string) (reviewedClaudeContextProfile, bool) {
+	if m, ok := modelcatalog.Default.Lookup(model); ok && m.Limit.Context > 0 {
+		return reviewedClaudeContextProfile{Window: m.Limit.Context, DisableUnknownEnforcement: m.Provider != "anthropic"}, true
+	}
 	profile, ok := reviewedClaudeContextProfiles[normalizeCatalogModel(model)]
 	return profile, ok
 }

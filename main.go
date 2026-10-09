@@ -341,9 +341,9 @@ Hub (public server):
   codex-bridge enroll [--ttl 24h]  Mint an enroll token for a new endpoint
 
 Endpoint (private machine):
-  codex-bridge link <token>        Recommended. Install + run as a background service
-                                   (auto-restart, survives logout). This is the command the
-                                   Hub Settings page generates for you.
+  codex-bridge link <token>        Recommended. Start in the background (systemd with
+                                   auto-restart on Linux; nohup otherwise). This is the
+                                   command the Hub Settings page generates for you.
   codex-bridge connect <token>     Run the endpoint in the foreground. Used internally by
                                    ` + "`link`" + `; also handy for one-off runs or debugging.
   codex-bridge bridge              Run the endpoint from configs/<env>.yaml (advanced/dev).

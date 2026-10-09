@@ -62,6 +62,16 @@
 
 ## Exit Gates
 
+- Automatic Base URL discovery must validate the inference response body, not
+  merely HTTP success. HTML fallbacks, empty bodies, JSON error envelopes, and
+  unrelated JSON must never select or overwrite a preset URL. Both Hub and
+  Bridge use `internal/providerprobe.ValidateInferenceResponse` for this check.
+- A failed versioned endpoint followed by an HTTP 200 website fallback remains
+  a failed test; a valid versioned endpoint can still be discovered from a root
+  URL. Probe errors retain the attempted endpoint and HTTP status without
+  exposing response bodies or credentials. No schema or wire changes are needed.
+- This lightweight, non-streaming probe checks the API response shape; it does
+  not guarantee a subsequent long-running CLI stream will remain connected.
 - A preset created on machine A appears for machine B owned by the same user.
 - Machine B can apply or bind a vault-backed preset even while machine A is
   offline; the API key is never returned to browser responses.

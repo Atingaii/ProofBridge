@@ -11,6 +11,14 @@
   Codex CLI round-robin workflow.
 - Make the round count visible and configurable for every new or continued
   orchestration run.
+- Initialize a fresh standard-edition workspace with 6 rounds in
+  `frontend/src/app/pages/OrchestrationWorkspace.tsx:OrchestrationWorkspace`.
+  In this edition, choosing New Run also resets the budget to 6, even after
+  viewing an older run with a different budget. Manual adjustments remain in
+  effect for the current draft until New Run is selected again. Selecting an
+  existing run still restores its saved budget. The leading edition retains
+  its existing default and New Run behavior. CLI provider presets do not set
+  the round count. This browser default does not require a Bridge upgrade.
 - Keep each continued run on the same selected Bridge/CLI endpoint so compact
   context is not lost by switching machines mid-conversation.
 - Keep follow-up prompts on the existing run through
@@ -55,6 +63,9 @@
 
 ## Exit Gates
 
+- Standard edition: saved 2-round run → New Run defaults to 6 → manual draft
+  selection remains effective → returning to the saved run restores 2 → New Run
+  defaults to 6 again. Verify without submitting model tasks.
 - Creating or continuing an orchestration sends the UI-selected `maxTurns`.
 - An endpoint with only `ccb` capability is rejected for orchestration.
 - Continuing a run with a different `agentId` is rejected.

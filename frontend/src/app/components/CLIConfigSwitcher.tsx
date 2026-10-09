@@ -1,14 +1,17 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Check, KeyRound, Loader2, Pencil, Search, ServerCog, Trash2, X } from 'lucide-react';
 import { api } from '../lib/api';
 import type { Agent, CLIConfigPreset, CLIConfigResult } from '../lib/types';
 import type { UIText } from '../lib/i18n';
 import { cn } from '../lib/utils';
 import { Button, Input } from './ui';
+import { useDialogFocus } from './MobileSurface';
 
 type CLI = 'codex' | 'claude';
 
 export function CLIConfigSwitcher({ agents, preferredAgentId, t, close, onPresetsChanged }: { agents: Agent[]; preferredAgentId: string; t: UIText; close: () => void; onPresetsChanged: () => Promise<void> | void }) {
+	const dialogRef = useRef<HTMLDivElement>(null);
+	useDialogFocus(dialogRef);
 	const resetAgents = useMemo(() => agents.filter((agent) => agent.online && agent.capabilities?.configSwitcher), [agents]);
 	const [resetAgentId, setResetAgentId] = useState('');
 	const [cli, setCLI] = useState<CLI>('codex');
@@ -205,8 +208,8 @@ export function CLIConfigSwitcher({ agents, preferredAgentId, t, close, onPreset
 	};
 
 	return (
-		<div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-3 backdrop-blur-sm">
-			<div className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border bg-card shadow-xl">
+		<div className="phone-modal-overlay fixed inset-0 z-[60] flex items-center justify-center bg-black/45 p-3 backdrop-blur-sm">
+			<div ref={dialogRef} role="dialog" aria-modal="true" aria-label={t.modelLibrary} onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); close(); } }} className="phone-modal flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border bg-card shadow-xl">
 				<div className="flex items-center justify-between border-b border-border px-4 py-3">
 					<div className="min-w-0">
 						<h2 className="text-sm font-semibold">{t.modelLibrary}</h2>
@@ -214,7 +217,7 @@ export function CLIConfigSwitcher({ agents, preferredAgentId, t, close, onPreset
 					</div>
 					<Button variant="ghost" size="icon" className="h-7 w-7 rounded-md" onClick={close} aria-label={t.cancel}><X className="h-4 w-4" /></Button>
 				</div>
-				<div className="overflow-y-auto p-4 elegant-scrollbar">
+				<div className="phone-modal-body min-h-0 overflow-y-auto p-4 elegant-scrollbar">
 					<div className="mb-4 grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted p-1">
 						{(['codex', 'claude'] as CLI[]).map((item) => (
 							<button key={item} onClick={() => setCLI(item)} className={cn('h-8 rounded-md text-xs font-medium', cli === item ? 'bg-background shadow-sm' : 'text-muted-foreground')}>{item === 'codex' ? 'Codex' : 'Claude Code'}</button>
@@ -256,7 +259,8 @@ export function CLIConfigSwitcher({ agents, preferredAgentId, t, close, onPreset
 								{tested && <div className="space-y-2 rounded-md border border-emerald-500/25 bg-emerald-500/5 p-3">
 								<div className="flex items-center gap-2 text-xs font-medium text-emerald-700 dark:text-emerald-300"><Check className="h-3.5 w-3.5" />{t.connectionPassed}</div>
 								<div className="truncate font-mono text-[11px] text-muted-foreground">{t.normalizedBaseUrl}: {baseUrl}</div>
-									{models.length ? <><div className="relative"><Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" /><Input className="pl-8" value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} placeholder={t.searchModels} /></div><div className="max-h-36 overflow-y-auto rounded-md border border-border bg-background p-1 elegant-scrollbar">{filteredModels.slice(0, 200).map((item) => <button key={item} className={cn('block w-full truncate rounded px-2 py-1.5 text-left font-mono text-xs hover:bg-muted', model === item && 'bg-primary/10 text-primary')} onClick={() => { setModel(item); setReasoningEffort(''); setReasoningLevels([]); setReasoningDefault(''); setTested(false); setMessage(''); }}>{item}</button>)}</div></> : <div className="text-xs text-muted-foreground">{t.modelListUnavailable}</div>}
+									{!name.trim() && <div className="text-xs text-amber-500">{t.presetNameRequired}</div>}
+									{models.length ? <><div className="relative"><Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" /><Input className="pl-8" value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} placeholder={t.searchModels} /></div><div className="max-h-36 overflow-y-auto rounded-md border border-border bg-background p-1 elegant-scrollbar">{filteredModels.slice(0, 200).map((item) => <button key={item} className={cn('block w-full truncate rounded px-2 py-1.5 text-left font-mono text-xs hover:bg-muted', model === item && 'bg-primary/10 text-primary')} onClick={() => { if (model.trim() === item.trim()) return; setModel(item); setReasoningEffort(''); setReasoningLevels([]); setReasoningDefault(''); setTested(false); setMessage(''); }}>{item}</button>)}</div></> : <div className="text-xs text-muted-foreground">{t.modelListUnavailable}</div>}
 									{tested && !reasoningLevels.length && <div className="text-[11px] text-muted-foreground">{t.modelCatalogUnavailable}</div>}
 							</div>}
 						</section>

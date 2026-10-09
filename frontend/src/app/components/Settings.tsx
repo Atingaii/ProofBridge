@@ -8,6 +8,7 @@ import { CapabilityMatrix } from './OrchestrationComponents';
 import { CommandBlock } from './chat/CommandBlock';
 import { CLIConfigSwitcher } from './CLIConfigSwitcher';
 import { Button, Input } from './ui';
+import { useDialogFocus } from './MobileSurface';
 
 export function SettingsModal({
   user,
@@ -40,6 +41,8 @@ export function SettingsModal({
   initialFocus: 'cli' | '';
   close: () => void;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef);
   const [label, setLabel] = useState('');
   const [permissionProfile, setPermissionProfile] = useState<PermissionProfileId>('review-required');
   const [tokenInfo, setTokenInfo] = useState<BridgeTokenResponse | null>(null);
@@ -150,16 +153,16 @@ export function SettingsModal({
   }, [initialFocus]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-card w-full max-w-md rounded-xl border border-border shadow-lg flex flex-col overflow-hidden animate-in zoom-in-95">
+    <div className="phone-modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={t.settings} onKeyDown={(event) => { if (event.key === 'Escape' && event.target instanceof Element && event.target.closest('[role="dialog"]') === event.currentTarget) { event.stopPropagation(); close(); } }} className="phone-modal bg-card w-full max-w-md rounded-xl border border-border shadow-lg flex flex-col overflow-hidden animate-in zoom-in-95">
         <div className="px-4 py-3 border-b border-border flex items-center justify-between bg-muted/30">
           <h2 className="font-medium">{t.settings}</h2>
-          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md" onClick={close}>
+          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md" aria-label={t.cancel} onClick={close}>
             <X className="h-4 w-4" />
           </Button>
         </div>
 
-        <div className="p-4 space-y-6 overflow-y-auto max-h-[70vh] elegant-scrollbar">
+        <div className="phone-modal-body min-h-0 p-4 space-y-6 overflow-y-auto max-h-[70vh] elegant-scrollbar">
           <div className="space-y-3">
             <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.account}</h3>
             <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20">
@@ -487,6 +490,8 @@ export function RenameSessionModal({
   t: UIText;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const dialogRef = useRef<HTMLFormElement>(null);
+  useDialogFocus(dialogRef);
 
   useEffect(() => {
     const id = window.setTimeout(() => {
@@ -498,16 +503,23 @@ export function RenameSessionModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in"
+      className="phone-modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
       onKeyDown={(event) => {
-        if (event.key === 'Escape') onClose();
+        if (event.key === 'Escape') {
+          event.stopPropagation();
+          onClose();
+        }
       }}
     >
       <form
-        className="bg-card w-full max-w-sm rounded-xl border border-border shadow-lg flex flex-col overflow-hidden animate-in zoom-in-95"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t.renameSession}
+        className="phone-modal bg-card w-full max-w-sm rounded-xl border border-border shadow-lg flex flex-col overflow-hidden animate-in zoom-in-95"
         onSubmit={(event) => {
           event.preventDefault();
           onSave();
@@ -520,12 +532,12 @@ export function RenameSessionModal({
             </div>
             <h2 className="font-medium">{t.renameSession}</h2>
           </div>
-          <Button variant="ghost" size="icon" type="button" className="h-7 w-7 rounded-md" onClick={onClose} disabled={saving}>
+          <Button variant="ghost" size="icon" type="button" className="h-7 w-7 rounded-md" onClick={onClose} disabled={saving} aria-label={t.cancel}>
             <X className="h-4 w-4" />
           </Button>
         </div>
 
-        <div className="p-4 space-y-3">
+        <div className="phone-modal-body min-h-0 overflow-y-auto p-4 space-y-3">
           <label className="space-y-1.5 block">
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.sessionName}</span>
             <Input

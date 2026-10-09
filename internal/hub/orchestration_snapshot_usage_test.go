@@ -45,3 +45,45 @@ func TestSnapshotUsageSeparatesModelsAndClampsCacheOverlap(t *testing.T) {
 		t.Fatalf("stats = %#v", stats)
 	}
 }
+
+func TestLedgerRefreshPreservesVerifierAndProviderCosts(t *testing.T) {
+	run := store.OrchestrationRun{ID: "costs", CreatedAt: 100, FinishedAt: 110, Status: store.OrchestrationCompleted}
+	ledger := []protocol.OrchestrationUsageEvent{{CLI: "codex", Model: "gpt-5.6-sol", InputTokens: 100}}
+	syncs := []store.OrchestrationUsageSync{{Status: "complete"}}
+	for _, verifier := range []bool{false, true} {
+		timeline := []store.OrchestrationEvent{{Kind: "turn.usage", CLI: "codex", CreatedAt: 101, Data: map[string]any{"model": "gpt-5.6-sol", "inputTokens": 100, "native": true}}}
+		extra := store.OrchestrationEvent{Kind: "turn.usage", CLI: "claude", CreatedAt: 102, Data: map[string]any{"model": "private-model", "inputTokens": 50, "native": true}}
+		if verifier {
+			extra.Role = "verifier"
+		} else {
+			extra.Data["costSource"] = "provider"
+			extra.Data["costKnown"] = true
+			extra.Data["estimatedCostUsd"] = .5
+		}
+		timeline = append(timeline, extra)
+		before := buildOrchestrationRunStatsWithLedger(run, timeline, nil, nil)
+		after := buildOrchestrationRunStatsWithLedger(run, timeline, ledger, syncs)
+		if before.TotalTokens != 150 || after.TotalTokens != before.TotalTokens || after.EstimatedCostUSD != before.EstimatedCostUSD || len(after.ByCLI) != 2 {
+			t.Fatalf("before=%#v after=%#v", before, after)
+		}
+	}
+}
+
+func TestUnallocatedProviderTotalIsNotPricedAgain(t *testing.T) {
+	run := store.OrchestrationRun{ID: "unallocated", CreatedAt: 100, FinishedAt: 110}
+	events := []store.OrchestrationEvent{
+		{Kind: "turn.usage", CLI: "claude", CreatedAt: 101, Data: map[string]any{"model": "claude-opus-4.6", "inputTokens": 100, "costKnown": false, "costSource": "provider-unallocated"}},
+		{Kind: "turn.usage", CLI: "claude", CreatedAt: 101, Data: map[string]any{"model": "unattributed", "estimatedCostUsd": 0.12, "costKnown": true, "costSource": "provider"}},
+	}
+	stats := buildOrchestrationRunStats(run, events)
+	if stats.EstimatedCostUSD != .12 || stats.TotalTokens != 100 || stats.CallCount != 1 || stats.CostKnown {
+		t.Fatalf("unallocated bill counted twice: %#v", stats)
+	}
+	trend := map[string]*orchestrationUsageTrendPoint{}
+	appendOverviewTrend(trend, run, events, nil, nil, 0)
+	for _, point := range trend {
+		if point.EstimatedCostUSD != .12 || point.CallCount != 1 {
+			t.Fatalf("trend disagrees: %#v", point)
+		}
+	}
+}

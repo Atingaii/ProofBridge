@@ -1,7 +1,6 @@
 package hub
 
 import (
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
-	"slices"
 	"strings"
 
 	"github.com/tencent/codex-bridge/internal/protocol"
@@ -363,35 +361,6 @@ func publicOrchestrationTaskGraph(graph store.OrchestrationTaskGraph) store.Orch
 	return graph
 }
 
-// mergeOrchestrationProgressEvents preserves the bounded live-event query for
-// transcript responsiveness while retaining the durable plan marker ledger.
-// The same event can appear in both lists, so sequence is the stable identity.
-func mergeOrchestrationProgressEvents(live, plan []store.OrchestrationEvent) []store.OrchestrationEvent {
-	if len(plan) == 0 {
-		return live
-	}
-	merged := make([]store.OrchestrationEvent, 0, len(live)+len(plan))
-	seen := make(map[int64]struct{}, len(live)+len(plan))
-	for _, event := range live {
-		if _, exists := seen[event.Seq]; exists {
-			continue
-		}
-		seen[event.Seq] = struct{}{}
-		merged = append(merged, event)
-	}
-	for _, event := range plan {
-		if _, exists := seen[event.Seq]; exists {
-			continue
-		}
-		seen[event.Seq] = struct{}{}
-		merged = append(merged, event)
-	}
-	slices.SortFunc(merged, func(left, right store.OrchestrationEvent) int {
-		return cmp.Compare(left.Seq, right.Seq)
-	})
-	return merged
-}
-
 func sameOrchestrationUserTask(previous protocol.OrchestrationStartPayload, previousValid bool, current protocol.OrchestrationStartPayload, currentValid bool) bool {
 	if !previousValid || !currentValid {
 		return false
@@ -434,17 +403,11 @@ func (s *Server) handleOrchestrationProgress(w http.ResponseWriter, r *http.Requ
 		serverutil.WriteJSON(w, http.StatusOK, map[string]any{"graph": graph, "graphs": publicGraphs, "tasks": []orchestrationProgressTask{}, "planItems": []orchestrationPlanItem{}, "plan": orchestrationPlanProgress{Items: []orchestrationPlanItem{}}, "planWorkspace": false})
 		return
 	}
-	events, err := s.store.ListOrchestrationEvents(r.Context(), runID, 10000)
+	events, err := s.store.ListOrchestrationProgressEvents(r.Context(), runID)
 	if err != nil {
 		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load orchestration progress events")
 		return
 	}
-	planEvents, err := s.store.ListOrchestrationPlanEvents(r.Context(), runID)
-	if err != nil {
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load orchestration plan events")
-		return
-	}
-	events = mergeOrchestrationProgressEvents(events, planEvents)
 	tasks := groupOrchestrationProgressGraphs(graphs, events)
 	latestTask := tasks[len(tasks)-1]
 	serverutil.WriteJSON(w, http.StatusOK, map[string]any{
@@ -458,7 +421,8 @@ func (s *Server) handleOrchestrationProgress(w http.ResponseWriter, r *http.Requ
 }
 
 func verifiedEarly(payload protocol.OrchestrationEventPayload) bool {
-	return payload.RunEndData != nil && payload.RunEndData.TerminalReason == "verified-early"
+	return payload.RunEndData != nil && payload.RunEndData.TerminalReason == "verified-early" &&
+		payload.RunEndData.VerifierVerdict != nil && payload.RunEndData.VerifierVerdict.Status == "pass"
 }
 
 type orchestrationTaskInstruction struct {
@@ -490,7 +454,7 @@ func orchestrationTaskSpecs(baseDigest, workerPair, mode string, planWorkspace .
 		{Instruction: workerDuty + " You are candidate A; choose the strongest route, pursue it deeply, and do not wait for candidate B."},
 		{Instruction: workerDuty + " You are candidate B; start from candidate A's workspace and evidence, improve it or choose a materially different route, and do not repeat its baseline scan."},
 		{Instruction: "Act as the sole integrator in the user's selected project directory. Inspect both candidate handoffs and compact evidence, reconcile their actual changes, resolve conflicts, continue implementing remaining gaps, and run integration checks. Finish with an exact handoff for an independent reviewer rather than a summary-only report."},
-		{Instruction: "Act as the independent reviewer in the user's selected project directory. Rerun relevant tests, audit the original requirement and risks, and directly fix safe in-scope defects before reporting. Return resolved, blocked, or needs_next with independent command evidence; only the final configured round may address a resolved final conclusion to the user. Formal-proof work must include a successful proof-assistant checker or audit command in this reviewing turn."},
+		{Instruction: "Act as the independent reviewer in the user's selected project directory. Rerun relevant tests, audit the original requirement and risks, and directly fix safe in-scope defects before reporting. Return resolved, blocked, or needs_next with independent command evidence; any reviewing round may address a resolved final conclusion to the user when the original task is complete; independent verification decides early completion. Formal-proof work must include a successful proof-assistant checker or audit command in this reviewing turn."},
 	}
 	roles := []string{store.TaskRoleWorker, store.TaskRoleWorker, store.TaskRoleIntegrator, store.TaskRoleReviewer}
 	slots := []string{workerA, workerB, workerA, workerB}
@@ -527,6 +491,18 @@ func orchestrationTaskSpecs(baseDigest, workerPair, mode string, planWorkspace .
 			Dependencies:  deps[i],
 		})
 	}
+	if len(planWorkspace) > 1 && planWorkspace[0] && planWorkspace[1] {
+		out = out[2:]
+		for i := range out {
+			deps := []int{}
+			for _, dep := range out[i].Dependencies {
+				if dep >= 2 {
+					deps = append(deps, dep-2)
+				}
+			}
+			out[i].Dependencies = deps
+		}
+	}
 	return out
 }
 
@@ -544,15 +520,22 @@ func (s *Server) createAndDispatchTaskGraphAfter(ctx context.Context, run store.
 	if payload.Round <= 0 {
 		payload.Round = 1
 	}
-	if payload.MaxRounds <= 0 {
+	if payload.ExecutionMode == "dynamic" {
+		payload.MaxRounds = 0
+	} else if payload.MaxRounds <= 0 {
 		payload.MaxRounds = payload.MaxTurns
 	}
+	version, err := s.orchestrationInputVersion(ctx, run.ID)
+	if err != nil {
+		return false, err
+	}
+	payload.InputVersion = version
 	baseJSON, err := json.Marshal(payload)
 	if err != nil {
 		return false, err
 	}
 	baseDigest := taskPayloadDigest(string(baseJSON))
-	specs := orchestrationTaskSpecs(baseDigest, payload.WorkerPair, payload.Mode, payload.PlanWorkspace)
+	specs := orchestrationTaskSpecs(baseDigest, payload.WorkerPair, payload.Mode, payload.PlanWorkspace, payload.Round > 1)
 	var graph store.OrchestrationTaskGraph
 	created := true
 	if previousGraphID == "" {
@@ -635,7 +618,13 @@ func (s *Server) dispatchTaskAttempt(ctx context.Context, run store.Orchestratio
 	if err != nil {
 		return err
 	}
-	payload.Prompt = strings.TrimSpace(payload.Prompt) + "\n\nDurable task node:\n" + instruction.Instruction
+	if strings.TrimSpace(payload.TaskPrompt) == "" {
+		payload.TaskPrompt = payload.Prompt
+	}
+	if err := s.appendOrchestrationInputContext(ctx, &payload); err != nil {
+		return err
+	}
+	payload.Prompt = strings.TrimSpace(payload.TaskPrompt) + "\n\nDurable task node:\n" + instruction.Instruction
 	if len(evidence) > 0 {
 		raw, _ := json.Marshal(evidence)
 		payload.Context = strings.TrimSpace(payload.Context + "\n\nDependency evidence (compact JSON):\n" + string(raw))
@@ -660,7 +649,11 @@ func (s *Server) dispatchTaskAttempt(ctx context.Context, run store.Orchestratio
 	payload.TaskGraph = &protocol.TaskGraphPayload{ID: graph.ID, Generation: graph.Generation, Round: payload.Round, MaxRounds: maxRounds, ParallelLimit: graph.ParallelLimit, Tasks: []protocol.TaskPayload{{
 		ID: task.ID, AttemptID: attempt.ID, Name: task.Name, Role: task.Role, WorkerSlot: task.WorkerSlot, PayloadDigest: task.PayloadDigest, Dependencies: task.Dependencies,
 	}}}
-	return s.pool.SendToAgent(run.AgentID, protocol.MustEnvelope(protocol.TypeOrchestrationStart, "", payload))
+	if err := s.pool.SendToAgent(run.AgentID, protocol.MustEnvelope(protocol.TypeOrchestrationStart, "", payload)); err != nil {
+		return err
+	}
+	s.dispatchOrchestrationMessages(ctx, run)
+	return nil
 }
 
 func taskTerminalStatus(kind string) string {
@@ -695,14 +688,28 @@ func nextTaskGraphPayload(graph store.OrchestrationTaskGraph, run store.Orchestr
 	if err := json.Unmarshal([]byte(graph.PayloadJSON), &payload); err != nil {
 		return payload, false, fmt.Errorf("decode completed durable task payload: %w", err)
 	}
-	if payload.MaxRounds <= 0 {
+	if verifiedEarly(review) || review.RunEndData != nil && review.RunEndData.TerminalReason == "stalled" {
+		return payload, false, nil
+	}
+	if payload.ExecutionMode == "dynamic" {
+		payload.MaxRounds = 0
+	} else if payload.MaxRounds <= 0 {
 		payload.MaxRounds = payload.MaxTurns
 	}
 	if payload.Round <= 0 {
 		payload.Round = 1
 	}
-	if payload.Round >= payload.MaxRounds {
+	if payload.ExecutionMode != "dynamic" && payload.Round >= payload.MaxRounds {
 		return payload, false, nil
+	}
+	if review.RunEndData != nil && review.RunEndData.CompletionObservation != nil {
+		sample := *review.RunEndData.CompletionObservation
+		if sample.Round == payload.Round {
+			payload.CompletionHistory = append(payload.CompletionHistory, sample)
+			if len(payload.CompletionHistory) > 8 {
+				payload.CompletionHistory = payload.CompletionHistory[len(payload.CompletionHistory)-8:]
+			}
+		}
 	}
 	payload.Round++
 	payload.Resume = true
@@ -719,14 +726,58 @@ func nextTaskGraphPayload(graph store.OrchestrationTaskGraph, run store.Orchestr
 			reviewContext = strings.TrimSpace(reviewContext + "\nConclusion: " + string(raw))
 		}
 	}
-	payload.Context = trimForContext(strings.TrimSpace(payload.Context+"\n\nPrevious round reviewer handoff:\n"+reviewContext), 64*1024)
+	if review.RunEndData != nil && review.RunEndData.VerifierVerdict != nil {
+		if raw, err := json.Marshal(review.RunEndData.VerifierVerdict); err == nil {
+			reviewContext += "\nIndependent verification failures to resolve before repeating work:\n" + string(raw)
+		}
+	}
+	// Keep the newest failed checks ahead of older context when truncating.
+	payload.Context = trimForContext("Previous round reviewer handoff:\n"+reviewContext, 24*1024) + "\n\n" + trimForContext(payload.Context, 40*1024)
 	return payload, true, nil
 }
 
 func (s *Server) advanceCompletedTaskGraph(ctx context.Context, run store.OrchestrationRun, graph store.OrchestrationTaskGraph, review protocol.OrchestrationEventPayload) (bool, error) {
+	var accepted protocol.OrchestrationStartPayload
+	if err := json.Unmarshal([]byte(graph.PayloadJSON), &accepted); err != nil {
+		return false, err
+	}
+	version, err := s.orchestrationInputVersion(ctx, run.ID)
+	if err != nil {
+		return false, err
+	}
+	if version != accepted.InputVersion {
+		// A verdict against the old contract cannot conclude newly accepted work.
+		// A fresh phase must evaluate the complete instruction history.
+		review.RunEndData = nil
+		review.RunConclusion = nil
+		accepted.CompletionHistory = nil
+		raw, err := json.Marshal(accepted)
+		if err != nil {
+			return false, err
+		}
+		graph.PayloadJSON = string(raw)
+	}
 	next, advance, err := nextTaskGraphPayload(graph, run, review)
 	if err != nil || !advance {
 		return advance, err
+	}
+	if next.PlanWorkspace {
+		graphs, err := s.store.ListTaskGraphsByRun(ctx, run.ID)
+		if err != nil {
+			return false, err
+		}
+		events, err := s.store.ListOrchestrationPlanEvents(ctx, run.ID)
+		if err != nil {
+			return false, err
+		}
+		groups := groupOrchestrationProgressGraphs(graphs, events)
+		if len(groups) > 0 {
+			raw, err := json.Marshal(groups[len(groups)-1].Plan)
+			if err != nil {
+				return false, err
+			}
+			next.Context = trimForContext("Reviewed plan (advisory; original task remains the acceptance contract):\n"+string(raw), 16*1024) + "\n\n" + trimForContext(next.Context, 48*1024)
+		}
 	}
 	created, err := s.createAndDispatchTaskGraphAfter(ctx, run, next, graph.ID)
 	if err != nil {
@@ -735,9 +786,13 @@ func (s *Server) advanceCompletedTaskGraph(ctx context.Context, run store.Orches
 	if !created {
 		return true, nil
 	}
+	content := fmt.Sprintf("Collaboration round %d/%d completed; starting round %d/%d.", next.Round-1, next.MaxRounds, next.Round, next.MaxRounds)
+	if next.ExecutionMode == "dynamic" {
+		content = "本阶段评估仍有待完成工作，继续协作。"
+	}
 	event, err := s.store.AddOrchestrationEvent(ctx, store.OrchestrationEvent{
 		RunID: run.ID, Kind: "turn.delta", Source: "bridge", Severity: "info", Role: "summary",
-		Content: fmt.Sprintf("Collaboration round %d/%d completed; starting round %d/%d.", next.Round-1, next.MaxRounds, next.Round, next.MaxRounds),
+		Content: content,
 		Data:    map[string]any{"category": "orchestration-round-advance", "round": next.Round, "maxRounds": next.MaxRounds},
 	})
 	if err != nil {
@@ -751,6 +806,8 @@ func (s *Server) handleTaskGraphEvent(ctx context.Context, payload protocol.Orch
 	if payload.Task == nil {
 		return false, nil
 	}
+	s.orchestrationInputMu.Lock()
+	defer s.orchestrationInputMu.Unlock()
 	graph, err := s.store.TaskGraphByRun(ctx, payload.RunID)
 	if err != nil {
 		return true, err
@@ -773,6 +830,11 @@ func (s *Server) handleTaskGraphEvent(ctx context.Context, payload protocol.Orch
 	}
 	if !changed {
 		return true, errors.New("stale or mismatched orchestration task attempt event")
+	}
+	if status != store.TaskRunning {
+		if err := s.finishOrchestrationMessages(ctx, payload.RunID, payload.RunID+":"+payload.Task.AttemptID); err != nil {
+			return true, err
+		}
 	}
 	run, err := s.store.OrchestrationRunByIDAnyUser(ctx, payload.RunID)
 	if err != nil {
@@ -803,13 +865,9 @@ func (s *Server) handleTaskGraphEvent(ctx context.Context, payload protocol.Orch
 			if orchestrationTerminalStatus(run.Status) {
 				return true, nil
 			}
-			advanced := false
-			if !verifiedEarly(payload) {
-				var err error
-				advanced, err = s.advanceCompletedTaskGraph(ctx, run, updated, payload)
-				if err != nil {
-					return true, err
-				}
+			advanced, err := s.advanceCompletedTaskGraph(ctx, run, updated, payload)
+			if err != nil {
+				return true, err
 			}
 			if advanced {
 				return true, nil
@@ -819,7 +877,30 @@ func (s *Server) handleTaskGraphEvent(ctx context.Context, payload protocol.Orch
 			}
 			conclusion := payload.RunConclusion
 			if conclusion == nil {
-				conclusion = &protocol.RunConclusion{Outcome: "satisfied", Summary: payload.Content}
+				conclusion = &protocol.RunConclusion{Outcome: "blocked", Summary: payload.Content}
+			} else {
+				copy := *conclusion
+				conclusion = &copy
+			}
+			if payload.RunEndData != nil && payload.RunEndData.VerifierVerdict != nil && payload.RunEndData.VerifierVerdict.Status == "pass" {
+				conclusion.Outcome = "satisfied"
+				conclusion.VerificationStatus = "pass"
+				conclusion.UnmetObligations = nil
+			} else {
+				conclusion.Outcome = "blocked"
+				conclusion.VerificationStatus = "unknown"
+				reason := "Configured rounds ended without an independent verification pass."
+				if payload.RunEndData != nil && payload.RunEndData.VerifierVerdict != nil {
+					reason = payload.RunEndData.VerifierVerdict.Reason
+					conclusion.VerificationStatus = payload.RunEndData.VerifierVerdict.Status
+				}
+				conclusion.Summary = reason
+				conclusion.UnmetObligations = append(append([]string(nil), conclusion.UnmetObligations...), reason)
+				if payload.RunEndData != nil && payload.RunEndData.TerminalReason == "stalled" {
+					conclusion.Outcome = "completed"
+					conclusion.Summary = "已完成：连续三轮工作区未变且检查报告相同，已自动提前结束本次运行。\n检查记录：" + reason
+					payload.Content = conclusion.Summary
+				}
 			}
 			terminal, err := s.store.AddOrchestrationEvent(ctx, store.OrchestrationEvent{
 				RunID: payload.RunID, Kind: "run.end", Source: "bridge", Role: "summary", Content: payload.Content, Status: store.OrchestrationCompleted, RunConclusion: conclusion, RunEndData: payload.RunEndData,
@@ -862,7 +943,7 @@ func (s *Server) handleTaskGraphEvent(ctx context.Context, payload protocol.Orch
 		if status == store.TaskCanceled {
 			kind = "run.cancelled"
 		}
-		event, err := s.store.AddOrchestrationEvent(ctx, store.OrchestrationEvent{RunID: payload.RunID, Kind: kind, Source: "bridge", Severity: "error", Content: payload.Content, Status: runStatus, Error: payload.Error, RunConclusion: payload.RunConclusion})
+		event, err := s.store.AddOrchestrationEvent(ctx, store.OrchestrationEvent{RunID: payload.RunID, Kind: kind, Source: "bridge", Severity: "error", Content: payload.Content, Status: runStatus, Error: payload.Error, RunConclusion: payload.RunConclusion, RunEndData: payload.RunEndData})
 		if err != nil {
 			return true, err
 		}

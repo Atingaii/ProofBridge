@@ -4,12 +4,22 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "test": "node visible-events-check.mjs && node admin-access-check.mjs && node markdown-render-check.mjs && node password-visibility-check.mjs && node help-page-check.mjs && node updates-page-check.mjs && node brand-name-check.mjs && node websocket-reconnect-check.mjs && node orchestration-resilience-check.mjs && node model-config-access-check.mjs && node repair-command-check.mjs",
+    "test": "node visible-events-check.mjs && node admin-access-check.mjs && node markdown-render-check.mjs && node password-visibility-check.mjs && node help-page-check.mjs && node updates-page-check.mjs && node brand-name-check.mjs && node websocket-reconnect-check.mjs && node orchestration-resilience-check.mjs && node model-config-access-check.mjs && node repair-command-check.mjs && node worker-usage-check.mjs && node user-input-check.mjs && node participant-identity-check.mjs && node run-read-requests-check.mjs",
+    "test:user-input-browser": "node user-input-browser-check.mjs",
+    "test:official-models-browser": "node official-models-browser-check.mjs",
     "help:screenshots": "node scripts/generate-help-screenshots.cjs",
-    "android:build": "vite build && cap sync android",
-    "android:open": "cap open android",
+    "android:build": "../scripts/build-android-release.sh",
+    "android:open": "../scripts/open-android.sh",
     "build": "vite build && node scripts/normalize-build-output.mjs",
-    "dev": "vite"
+    "dev": "vite",
+    "test:live-input-browser": "node live-input-browser-check.mjs",
+    "test:desktop-workspace-browser": "node desktop-workspace-browser-check.mjs",
+    "test:site-loading-browser": "node site-loading-browser-check.mjs && node history-pagination-browser-check.mjs",
+    "test:stats": "node stats-request-check.mjs && node usage-overview-pages-check.mjs",
+    "test:auth-recovery-browser": "node auth-recovery-browser-check.mjs",
+    "test:stats-browser": "node stats-browser-check.mjs && node usage-overview-browser-check.mjs",
+    "test:documentation-browser": "node help-page-check.mjs",
+    "android:check": "../scripts/check-android-host.sh"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",

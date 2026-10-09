@@ -15,10 +15,11 @@ import (
 )
 
 type orchestrationCodexSession struct {
-	client   *appServerClient
-	threadID string
-	mode     string
-	loaded   bool
+	client             *appServerClient
+	threadID           string
+	mode               string
+	loaded             bool
+	profileFingerprint string
 }
 
 type orchestrationMaintenanceResult struct {
@@ -36,6 +37,17 @@ type codexScanResult struct {
 	Usage         json.RawMessage
 }
 
+func (m *OrchestrationManager) codexNativeUserInputEnabled(payload protocol.OrchestrationStartPayload) bool {
+	mode := approvalMode(m.cfg)
+	if !payload.NativeUserInput || payload.NativeUserInputProtocolVersion != 3 || (mode != "auto-execute" && mode != "review-required") {
+		return false
+	}
+	m.codexUserInputOnce.Do(func() {
+		m.codexUserInputAvailable = supportedCodexUserInputVersion(m.codexPath())
+	})
+	return m.codexUserInputAvailable
+}
+
 func (m *OrchestrationManager) runCodex(ctx context.Context, payload protocol.OrchestrationStartPayload, turnID, role, prompt string) (string, []RunnerToolEvent, error) {
 	content, tools, _, _, err := m.runCodexWithThread(ctx, payload, turnID, role, orchestrationCodexDefaultSlot, prompt, "")
 	return content, tools, err
@@ -46,6 +58,10 @@ func (m *OrchestrationManager) runCodexInteractive(ctx context.Context, payload 
 		return m.runCodexWithThread(ctx, payload, turnID, role, workerSlot, prompt, "")
 	}
 	workerSlot = normalizeCodexWorkerSlot(workerSlot)
+	payload.NativeUserInput = m.codexNativeUserInputEnabled(payload)
+	if payload.NativeUserInput {
+		prompt = codexUserInputPrompt(prompt)
+	}
 	session := state.NativeSession
 	runtime, err := m.workerRuntime(payload, workerSlot, "codex", session)
 	if err != nil {
@@ -57,15 +73,22 @@ func (m *OrchestrationManager) runCodexInteractive(ctx context.Context, payload 
 	if err != nil {
 		return "", nil, state.codexThreadID(workerSlot), "codex-interactive-error", err
 	}
+	m.emit(payload.RunID, nativeIdentityEvent(turnID, role, workerSlot, codex.threadID, codex.client.resolvedModel))
 	resumeMode := codex.mode
+	liveReady := make(chan struct{})
 	req := RunnerRequest{
-		Content:        prompt,
-		RemoteThreadID: codex.threadID,
-		RunID:          payload.RunID,
-		PromptID:       turnID,
-		CWD:            m.cwd(payload),
-		Env:            runtime.env,
-		Model:          runtime.model,
+		LiveInputReady:  liveReady,
+		LiveInput:       m.liveInputFor(payload.RunID),
+		Content:         prompt,
+		RemoteThreadID:  codex.threadID,
+		RunID:           payload.RunID,
+		PromptID:        turnID,
+		CWD:             m.cwd(payload),
+		Env:             runtime.env,
+		Model:           runtime.model,
+		ReasoningEffort: runtime.reasoningEffort,
+		OfficialLogin:   runtime.officialLogin,
+		NativeUserInput: payload.NativeUserInput,
 		Approvals: orchestrationApprovalRequester{
 			manager: m,
 			runID:   payload.RunID,
@@ -74,6 +97,12 @@ func (m *OrchestrationManager) runCodexInteractive(ctx context.Context, payload 
 			cli:     "codex",
 			cwd:     m.cwd(payload),
 		},
+	}
+	if payload.NativeUserInput {
+		req.UserInput = orchestrationUserInputRequester{manager: m, runID: m.executionFor(payload.RunID).runID, executionID: payload.RunID, workerID: workerSlot, turnID: turnID, cli: "codex"}
+		if req.UserInput.(orchestrationUserInputRequester).runID == "" {
+			req.UserInput = orchestrationUserInputRequester{manager: m, runID: payload.RunID, executionID: payload.RunID, workerID: workerSlot, turnID: turnID, cli: "codex"}
+		}
 	}
 	var toolsMu sync.Mutex
 	var tools []RunnerToolEvent
@@ -125,13 +154,14 @@ func (m *OrchestrationManager) runCodexInteractive(ctx context.Context, payload 
 		return "", snapshotTools(), codex.threadID, resumeMode, err
 	}
 	scope.setTurnID(appServerTurnIDFromResponse(res))
+	close(liveReady)
 	select {
 	case result := <-done:
 		if timeoutErr := timeouts.Err(); timeoutErr != nil {
 			return strings.TrimSpace(result.result.Content), snapshotTools(), codex.threadID, resumeMode, timeoutErr
 		}
 		if len(result.result.Usage) > 0 {
-			m.recordNativeUsage(turnID, "codex", firstNonEmpty(runtime.model, codexBridgeModel(m.cfg)), result.result.Usage)
+			m.recordNativeUsage(turnID, "codex", firstNonEmpty(codex.client.resolvedModel, runtime.model, codexBridgeModel(m.cfg)), result.result.Usage)
 		}
 		return strings.TrimSpace(result.result.Content), snapshotTools(), codex.threadID, resumeMode, result.err
 	case <-ctx.Done():
@@ -144,6 +174,13 @@ func (m *OrchestrationManager) ensureCodexInteractiveSessionLocked(ctx context.C
 	workerSlot = normalizeCodexWorkerSlot(workerSlot)
 	if codex := session.codexSessionLocked(workerSlot); codex != nil && codex.client != nil && codex.threadID != "" {
 		state.setCodexThreadID(workerSlot, codex.threadID)
+		if codex.profileFingerprint != runtime.fingerprint {
+			// A new process adopts the changed process-local settings, while
+			// resuming the same native thread and leaving role/turn rules intact.
+			codex.client.closeWithTimeout(appServerPrepareCloseTimeout)
+			session.setCodexSessionLocked(workerSlot, nil)
+			return m.ensureCodexInteractiveSessionLocked(ctx, payload, workerSlot, state, runtime)
+		}
 		if codex.client.isClosed() {
 			session.setCodexSessionLocked(workerSlot, nil)
 			state.setCodexThreadID(workerSlot, codex.threadID)
@@ -152,27 +189,34 @@ func (m *OrchestrationManager) ensureCodexInteractiveSessionLocked(ctx context.C
 		if codex.loaded {
 			return codex, nil
 		}
-		if _, err := codex.client.request(ctx, "thread/resume", NewCodexAppServerRunner(m.cfg).threadResumeParams(codex.threadID, RunnerRequest{
-			RemoteThreadID: codex.threadID,
-			RunID:          payload.RunID,
-			CWD:            m.cwd(payload),
-			Model:          runtime.model,
-		})); err != nil {
+		res, err := codex.client.request(ctx, "thread/resume", NewCodexAppServerRunner(m.cfg).threadResumeParams(codex.threadID, RunnerRequest{
+			RemoteThreadID:  codex.threadID,
+			RunID:           payload.RunID,
+			CWD:             m.cwd(payload),
+			Model:           runtime.model,
+			ReasoningEffort: runtime.reasoningEffort,
+			OfficialLogin:   runtime.officialLogin,
+		}))
+		if err != nil {
 			codex.client.close()
 			session.setCodexSessionLocked(workerSlot, nil)
 			return nil, err
 		}
+		codex.client.resolvedModel = appServerResolvedModel(res)
 		codex.loaded = true
 		codex.mode = "codex-interactive-resume"
 		return codex, nil
 	}
 	runner := NewCodexAppServerRunner(m.cfg)
 	req := RunnerRequest{
-		RemoteThreadID: state.codexThreadID(workerSlot),
-		RunID:          payload.RunID,
-		CWD:            m.cwd(payload),
-		Env:            runtime.env,
-		Model:          runtime.model,
+		RemoteThreadID:  state.codexThreadID(workerSlot),
+		RunID:           payload.RunID,
+		CWD:             m.cwd(payload),
+		Env:             runtime.env,
+		Model:           runtime.model,
+		ReasoningEffort: runtime.reasoningEffort,
+		OfficialLogin:   runtime.officialLogin,
+		NativeUserInput: payload.NativeUserInput,
 	}
 	client, err := runner.start(context.Background(), req)
 	if err != nil {
@@ -197,6 +241,7 @@ func (m *OrchestrationManager) ensureCodexInteractiveSessionLocked(ctx context.C
 			return nil, err
 		}
 		threadID = nestedString(appServerResultMap(res), "thread", "id")
+		client.resolvedModel = appServerResolvedModel(res)
 		if threadID == "" {
 			client.close()
 			return nil, errors.New("codex app-server did not return a thread id")
@@ -205,13 +250,16 @@ func (m *OrchestrationManager) ensureCodexInteractiveSessionLocked(ctx context.C
 			"threadId": threadID,
 			"name":     nativeSessionDisplayName(payload.RunID, workerSlot),
 		})
-	} else if _, err := client.request(ctx, "thread/resume", runner.threadResumeParams(threadID, req)); err != nil {
-		client.close()
-		return nil, err
 	} else {
+		res, err := client.request(ctx, "thread/resume", runner.threadResumeParams(threadID, req))
+		if err != nil {
+			client.close()
+			return nil, err
+		}
+		client.resolvedModel = appServerResolvedModel(res)
 		mode = "codex-interactive-resume"
 	}
-	codex := &orchestrationCodexSession{client: client, threadID: threadID, mode: mode, loaded: true}
+	codex := &orchestrationCodexSession{client: client, threadID: threadID, mode: mode, loaded: true, profileFingerprint: runtime.fingerprint}
 	session.setCodexSessionLocked(workerSlot, codex)
 	state.setCodexThreadID(workerSlot, threadID)
 	return codex, nil
@@ -284,7 +332,11 @@ func waitForCodexNativeCompaction(ctx context.Context, client *appServerClient, 
 
 func (m *OrchestrationManager) runCodexWithThread(ctx context.Context, payload protocol.OrchestrationStartPayload, turnID, role, workerSlot, prompt, threadID string) (string, []RunnerToolEvent, string, string, error) {
 	workerSlot = normalizeCodexWorkerSlot(workerSlot)
-	if m.shouldRunCodexAppServer() {
+	payload.NativeUserInput = m.codexNativeUserInputEnabled(payload)
+	if payload.NativeUserInput {
+		prompt = codexUserInputPrompt(prompt)
+	}
+	if payload.ExecutionMode == "dynamic" || payload.NativeUserInput || m.shouldRunCodexAppServer() {
 		return m.runCodexAppServerWithThread(ctx, payload, turnID, role, workerSlot, prompt, threadID)
 	}
 	attempt := m.runCodexExecAttempt(ctx, payload, turnID, role, workerSlot, prompt, threadID)
@@ -393,6 +445,10 @@ func (m *OrchestrationManager) runCodexExecAttempt(ctx context.Context, payload 
 		cancel()
 	}
 	waitErr := cmd.Wait()
+	resolved := silentVerifierOutput{ThreadID: firstNonEmpty(scanResult.ThreadID, threadID), Usage: scanResult.Usage}
+	resolveCodexVerifierModel(&resolved, runtime.codexHome())
+	scanResult.Usage = resolved.Usage
+	m.emit(payload.RunID, nativeIdentityEvent(turnID, role, workerSlot, resolved.ThreadID, appServerResolvedModel(resolved.Usage)))
 	if timeoutErr := timeouts.Err(); timeoutErr != nil {
 		return codexExecAttempt{content: scanResult.Content, tools: scanResult.Tools, threadID: firstNonEmpty(scanResult.ThreadID, threadID), threadStarted: scanResult.ThreadStarted, usage: scanResult.Usage, err: timeoutErr}
 	}
@@ -453,8 +509,14 @@ func (m *OrchestrationManager) codexOrchestrationArgs(payload protocol.Orchestra
 	workerSlot = normalizeCodexWorkerSlot(workerSlot)
 	if threadID != "" {
 		args := []string{"exec", "resume", "--json", "--skip-git-repo-check"}
+		if binding, ok := workerProfileBinding(payload, workerSlot, "codex"); ok && binding.OfficialLogin {
+			args = append(args, officialCodexProviderArgs()...)
+		}
 		if model := m.codexModelForPayload(payload, workerSlot); model != "" {
 			args = append(args, "--model", model)
+		}
+		if effort := m.codexEffortForPayload(payload, workerSlot); effort != "" {
+			args = append(args, "-c", "model_reasoning_effort="+quoteTomlString(effort))
 		}
 		if codexBypassApprovalsAndSandbox(m.cfg) {
 			args = append(args, "--dangerously-bypass-approvals-and-sandbox")
@@ -470,8 +532,14 @@ func (m *OrchestrationManager) codexOrchestrationArgs(payload protocol.Orchestra
 	}
 
 	args := []string{"exec", "--json", "--color", "never", "--skip-git-repo-check"}
+	if binding, ok := workerProfileBinding(payload, workerSlot, "codex"); ok && binding.OfficialLogin {
+		args = append(args, officialCodexProviderArgs()...)
+	}
 	if model := m.codexModelForPayload(payload, workerSlot); model != "" {
 		args = append(args, "--model", model)
+	}
+	if effort := m.codexEffortForPayload(payload, workerSlot); effort != "" {
+		args = append(args, "-c", "model_reasoning_effort="+quoteTomlString(effort))
 	}
 	if codexBypassApprovalsAndSandbox(m.cfg) {
 		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
@@ -501,14 +569,21 @@ func (m *OrchestrationManager) runCodexAppServerWithThread(ctx context.Context, 
 	if runtimeErr != nil {
 		return "", nil, threadID, "codex-profile-error", runtimeErr
 	}
-	result, err := runner.Prompt(turnCtx, RunnerRequest{
-		Content:        prompt,
-		RemoteThreadID: threadID,
-		RunID:          payload.RunID,
-		PromptID:       turnID,
-		CWD:            m.cwd(payload),
-		Env:            runtime.env,
-		Model:          runtime.model,
+	req := RunnerRequest{
+		LiveInput: m.liveInputFor(payload.RunID),
+		OnNativeIdentity: func(id, model string) {
+			m.emit(payload.RunID, nativeIdentityEvent(turnID, role, workerSlot, id, model))
+		},
+		Content:         prompt,
+		RemoteThreadID:  threadID,
+		RunID:           payload.RunID,
+		PromptID:        turnID,
+		CWD:             m.cwd(payload),
+		Env:             runtime.env,
+		Model:           runtime.model,
+		ReasoningEffort: runtime.reasoningEffort,
+		OfficialLogin:   runtime.officialLogin,
+		NativeUserInput: payload.NativeUserInput,
 		Approvals: orchestrationApprovalRequester{
 			manager: m,
 			runID:   payload.RunID,
@@ -517,7 +592,15 @@ func (m *OrchestrationManager) runCodexAppServerWithThread(ctx context.Context, 
 			cli:     "codex",
 			cwd:     m.cwd(payload),
 		},
-	}, func(update RunnerUpdate) {
+	}
+	if payload.NativeUserInput {
+		runID := m.executionFor(payload.RunID).runID
+		if runID == "" {
+			runID = payload.RunID
+		}
+		req.UserInput = orchestrationUserInputRequester{manager: m, runID: runID, executionID: payload.RunID, workerID: workerSlot, turnID: turnID, cli: "codex"}
+	}
+	result, err := runner.Prompt(turnCtx, req, func(update RunnerUpdate) {
 		if update.Notice != nil {
 			m.emit(payload.RunID, runnerNoticeOrchestrationEvent(turnID, role, "codex", update.Notice))
 		}
@@ -559,6 +642,7 @@ func (m *OrchestrationManager) scanCodexJSONLResult(stdout io.Reader, runID, tur
 	var threadID string
 	var threadStarted bool
 	var usage json.RawMessage
+	var resolvedModel string
 	var pendingFailedTool *RunnerToolEvent
 	toolStarts := make(map[string]time.Time)
 	observer := m.longCommandObserverConfig()
@@ -609,7 +693,7 @@ func (m *OrchestrationManager) scanCodexJSONLResult(stdout io.Reader, runID, tur
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return codexScanResult{Content: content.String(), Tools: tools, ThreadID: threadID, ThreadStarted: threadStarted, Usage: usage}, err
+			return codexScanResult{Content: content.String(), Tools: tools, ThreadID: threadID, ThreadStarted: threadStarted, Usage: usageWithResolvedModel(usage, resolvedModel)}, err
 		}
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
@@ -618,6 +702,9 @@ func (m *OrchestrationManager) scanCodexJSONLResult(stdout io.Reader, runID, tur
 		var msg map[string]any
 		if err := json.Unmarshal(line, &msg); err != nil {
 			continue
+		}
+		if model := appServerResolvedModel(line); model != "" {
+			resolvedModel = model
 		}
 		typ, _ := msg["type"].(string)
 		if isErrorEvent(typ) {
@@ -637,6 +724,7 @@ func (m *OrchestrationManager) scanCodexJSONLResult(stdout io.Reader, runID, tur
 			if id := nestedString(msg, "thread", "id"); id != "" {
 				threadID = id
 			}
+			m.emit(runID, nativeIdentityEvent(turnID, role, "", threadID, resolvedModel))
 		case "item.agent_message.delta", "item.agentMessage.delta", "agent_message.delta", "agentMessage.delta", "response.output_text.delta":
 			if delta := extractDelta(msg); delta != "" {
 				content.WriteString(delta)
@@ -672,10 +760,10 @@ func (m *OrchestrationManager) scanCodexJSONLResult(stdout io.Reader, runID, tur
 		}
 	}
 	if eventErr != "" && !codexTailErrorAfterContent(eventErr, content.String()) {
-		return codexScanResult{Content: content.String(), Tools: tools, ThreadID: threadID, ThreadStarted: threadStarted, Usage: usage}, errors.New(eventErr)
+		return codexScanResult{Content: content.String(), Tools: tools, ThreadID: threadID, ThreadStarted: threadStarted, Usage: usageWithResolvedModel(usage, resolvedModel)}, errors.New(eventErr)
 	}
 	if pendingFailedTool != nil {
-		return codexScanResult{Content: strings.TrimSpace(content.String()), Tools: tools, ThreadID: threadID, ThreadStarted: threadStarted, Usage: usage}, failedToolWithoutFollowupError("codex", *pendingFailedTool)
+		return codexScanResult{Content: strings.TrimSpace(content.String()), Tools: tools, ThreadID: threadID, ThreadStarted: threadStarted, Usage: usageWithResolvedModel(usage, resolvedModel)}, failedToolWithoutFollowupError("codex", *pendingFailedTool)
 	}
-	return codexScanResult{Content: strings.TrimSpace(content.String()), Tools: tools, ThreadID: threadID, ThreadStarted: threadStarted, Usage: usage}, nil
+	return codexScanResult{Content: strings.TrimSpace(content.String()), Tools: tools, ThreadID: threadID, ThreadStarted: threadStarted, Usage: usageWithResolvedModel(usage, resolvedModel)}, nil
 }

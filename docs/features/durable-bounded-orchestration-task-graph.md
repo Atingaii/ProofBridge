@@ -1,3 +1,5 @@
+> Completion-policy update: [independent early run completion](independent-early-run-completion.md) supersedes the reviewer-only barrier and incomplete stagnation result described below. Completion decisions ignore planning; all automatic early closures show completed while retaining factual checks. Other feature behavior remains applicable.
+
 # Durable Bounded Orchestration Task Graph
 
 ## Goals

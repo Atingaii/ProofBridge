@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/tencent/codex-bridge/internal/protocol"
 )
 
 const (
@@ -275,6 +277,23 @@ func (s *Store) TaskGraphByRun(ctx context.Context, runID string) (Orchestration
 // order. The query rows are closed before task hydration because Hub SQLite
 // intentionally uses one open connection.
 func (s *Store) ListTaskGraphsByRun(ctx context.Context, runID string) ([]OrchestrationTaskGraph, error) {
+	graphs, err := s.ListTaskGraphMetadataByRun(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range graphs {
+		tasks, err := s.listTasks(ctx, graphs[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		graphs[i].Tasks = tasks
+	}
+	return graphs, nil
+}
+
+// ListTaskGraphMetadataByRun reads the immutable graph payloads and boundaries
+// used by statistics, without hydrating unused tasks and dependencies.
+func (s *Store) ListTaskGraphMetadataByRun(ctx context.Context, runID string) ([]OrchestrationTaskGraph, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, run_id, generation, status, parallel_limit, payload_json, payload_digest, created_at, updated_at, COALESCE(finished_at,0) FROM orchestration_task_graphs WHERE run_id = ? ORDER BY generation`, runID)
 	if err != nil {
 		return nil, err
@@ -294,13 +313,6 @@ func (s *Store) ListTaskGraphsByRun(ctx context.Context, runID string) ([]Orches
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
-	}
-	for i := range graphs {
-		tasks, err := s.listTasks(ctx, graphs[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		graphs[i].Tasks = tasks
 	}
 	return graphs, nil
 }
@@ -425,11 +437,51 @@ func (s *Store) UpdateTaskAttempt(ctx context.Context, taskID, attemptID, digest
 		return false, err
 	}
 	if taskAttemptTerminal(status) {
+		if status == TaskSucceeded {
+			closed, err := closeVerifiedTaskGraphTx(ctx, tx, taskID, evidenceJSON, now)
+			if err != nil {
+				return false, err
+			}
+			if closed {
+				return true, tx.Commit()
+			}
+		}
 		if err := propagateTaskGraphTx(ctx, tx, taskID, status, now); err != nil {
 			return false, err
 		}
 	}
 	return true, tx.Commit()
+}
+
+// Commit a verified decision and stop undispatched work in the same transaction
+// as the current attempt. Never manufacture successful successor attempts.
+func closeVerifiedTaskGraphTx(ctx context.Context, tx *sql.Tx, taskID string, evidenceJSON []byte, now int64) (bool, error) {
+	var evidence struct {
+		RunEnd *protocol.RunEndData `json:"runEnd"`
+	}
+	if err := json.Unmarshal(evidenceJSON, &evidence); err != nil || evidence.RunEnd == nil || evidence.RunEnd.TerminalReason != "verified-early" || evidence.RunEnd.VerifierVerdict == nil || evidence.RunEnd.VerifierVerdict.Status != "pass" {
+		return false, nil
+	}
+	var graphID, role, runStatus, graphStatus string
+	var deleted int
+	if err := tx.QueryRowContext(ctx, `SELECT t.graph_id, t.role, r.status, r.delete_requested, g.status FROM orchestration_tasks t JOIN orchestration_task_graphs g ON g.id=t.graph_id JOIN orchestration_runs r ON r.id=g.run_id WHERE t.id=?`, taskID).Scan(&graphID, &role, &runStatus, &deleted, &graphStatus); err != nil {
+		return false, err
+	}
+	if role != TaskRoleWorker && role != TaskRoleIntegrator && role != TaskRoleReviewer || deleted != 0 || graphStatus != TaskGraphRunning || runStatus != "running" && runStatus != "queued" {
+		return false, nil
+	}
+	var active int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM orchestration_tasks WHERE graph_id=? AND id!=? AND status IN ('dispatching','running','unknown')`, graphID, taskID).Scan(&active); err != nil {
+		return false, err
+	}
+	if active != 0 {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE orchestration_tasks SET status='canceled', error='Not needed after independent completion', updated_at=?, finished_at=? WHERE graph_id=? AND status IN ('pending','ready')`, now, now, graphID); err != nil {
+		return false, err
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE orchestration_task_graphs SET status='completed', updated_at=?, finished_at=? WHERE id=? AND status='running'`, now, now, graphID)
+	return err == nil, err
 }
 
 func taskAttemptTerminal(status string) bool {

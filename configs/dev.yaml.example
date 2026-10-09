@@ -19,9 +19,9 @@ hub:
   browser_lease_ttl: 5m
   allowed_origins:
     - https://sparkapi.tech
-  # Empty means /install.sh downloads the currently running Hub binary from
-  # /downloads/codex-bridge-linux-amd64. Set this to a release asset URL only
-  # when you publish external binaries.
+  # Empty uses the Hub's Linux/macOS platform downloads. Other-platform artifacts
+  # live in downloads/ beside the Hub binary. External URLs may use {os} and
+  # {arch}; legacy {arch}-only URLs remain Linux-only, literals Linux amd64-only.
   bridge_download_url: ""
   max_bridge_send_queue: 128
   max_browser_send_queue: 128
@@ -32,6 +32,8 @@ hub:
   feature_rollouts:
     strict-workspace: all
     orchestration-plan-workspace: all
+    native-user-input: all
+    official-codex-worker-models: all
 
 bridge:
   hub_url: http://127.0.0.1:8088
@@ -54,6 +56,12 @@ bridge:
   strict_workspace_read_only: []
   # Disable only while rolling out alongside a legacy Bridge binary.
   durable_task_graph: true
+  # Managed TBCI is carried by supported Bridge builds and prepared once at
+  # startup. Set enabled=false to opt out, or path to override the managed
+  # artifact with an administrator-supplied executable.
+  tbci_enabled: true
+  tbci_path: ""
+  tbci_timeout: 2m
   reconnect_min: 5s
   reconnect_max: 30s
   heartbeat_interval: 15s
@@ -82,6 +90,8 @@ auth:
   jwt_secret: dev-only-change-me-32-byte-minimum-secret
   access_token_ttl: 24h
   bootstrap_username: admin
+  # Additional existing administrator accounts; restart the Hub after editing.
+  admin_usernames: []
   bootstrap_password: ""
   registration:
     enabled: false

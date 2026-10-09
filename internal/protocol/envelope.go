@@ -17,10 +17,17 @@ const (
 	TypePromptComplete                = "prompt_complete"
 	TypeApprovalRequest               = "approval_request"
 	TypeApprovalResponse              = "approval_response"
+	TypeUserInputRequest              = "user_input_request"
+	TypeUserInputResponse             = "user_input_response"
+	TypeUserInputStatus               = "user_input_status"
+	TypeUserInputSync                 = "user_input_sync"
+	TypeUserInputSnapshot             = "user_input_snapshot"
 	TypeCancel                        = "cancel"
 	TypeCloseSession                  = "close_session"
 	TypeOrchestrationStart            = "orchestration_start"
 	TypeOrchestrationEvent            = "orchestration_event"
+	TypeOrchestrationInput            = "orchestration_input"
+	TypeOrchestrationInputStatus      = "orchestration_input_status"
 	TypeOrchestrationCancel           = "orchestration_cancel"
 	TypeOrchestrationUsageSyncRequest = "orchestration_usage_sync_request"
 	TypeOrchestrationUsageSyncResult  = "orchestration_usage_sync_result"
@@ -28,6 +35,7 @@ const (
 	TypeCLIConfigApply                = "cli_config_apply"
 	TypeCLIConfigReset                = "cli_config_reset"
 	TypeCLIConfigExport               = "cli_config_export"
+	TypeCLIConfigOfficialModels       = "cli_config_official_models"
 	TypeCLIConfigResult               = "cli_config_result"
 	TypeAgentShutdown                 = "agent_shutdown"
 	TypeError                         = "error"
@@ -95,20 +103,48 @@ type AgentShutdownPayload struct {
 }
 
 type BridgeCapabilities struct {
-	Runner           string                         `json:"runner,omitempty"`
-	Sandbox          string                         `json:"sandbox,omitempty"`
-	ApprovalPolicy   string                         `json:"approvalPolicy,omitempty"`
-	Chat             map[string]BridgeCLICapability `json:"chat,omitempty"`
-	Orchestration    map[string]BridgeCLICapability `json:"orchestration,omitempty"`
-	Metadata         map[string]string              `json:"metadata,omitempty"`
-	ACP              *ACPCapability                 `json:"acp,omitempty"`
-	DurableTaskGraph bool                           `json:"durableTaskGraph,omitempty"`
-	UsageLedger      bool                           `json:"usageLedger,omitempty"`
-	ConfigSwitcher   *CLIConfigSwitcherCapability   `json:"configSwitcher,omitempty"`
+	OrchestrationLiveInputCLIs map[string]bool                      `json:"orchestrationLiveInputCLIs,omitempty"`
+	OrchestrationLiveInput     int                                  `json:"orchestrationLiveInput,omitempty"`
+	UsageModelRecovery         int                                  `json:"usageModelRecovery,omitempty"`
+	Runner                     string                               `json:"runner,omitempty"`
+	Sandbox                    string                               `json:"sandbox,omitempty"`
+	ApprovalPolicy             string                               `json:"approvalPolicy,omitempty"`
+	Chat                       map[string]BridgeCLICapability       `json:"chat,omitempty"`
+	Orchestration              map[string]BridgeCLICapability       `json:"orchestration,omitempty"`
+	NativeUserInput            map[string]NativeUserInputCapability `json:"nativeUserInput,omitempty"`
+	Metadata                   map[string]string                    `json:"metadata,omitempty"`
+	ACP                        *ACPCapability                       `json:"acp,omitempty"`
+	DurableTaskGraph           bool                                 `json:"durableTaskGraph,omitempty"`
+	UsageLedger                bool                                 `json:"usageLedger,omitempty"`
+	ConfigSwitcher             *CLIConfigSwitcherCapability         `json:"configSwitcher,omitempty"`
+	TBCI                       *TBCICapability                      `json:"tbci,omitempty"`
 	// IsolatedWorkerProfiles confirms that this Bridge materializes orchestration
 	// slot presets into private native CLI homes. Older Bridges accepted the
 	// payload but used their legacy global configuration path instead.
 	IsolatedWorkerProfiles bool `json:"isolatedWorkerProfiles,omitempty"`
+}
+
+// NativeUserInputCapability reports a tested orchestration adapter, not merely
+// the presence of a CLI binary or a wire protocol frame.
+type NativeUserInputCapability struct {
+	Version         int      `json:"version"`
+	Available       bool     `json:"available"`
+	Blocking        bool     `json:"blocking,omitempty"`
+	NonBlocking     bool     `json:"nonBlocking,omitempty"`
+	PermissionModes []string `json:"permissionModes,omitempty"`
+	Reason          string   `json:"reason,omitempty"`
+}
+
+// TBCICapability reports whether the connected Bridge can execute the
+// selectable formal-proof TBCI verifier. Paths stay private to the Bridge.
+type TBCICapability struct {
+	Available      bool   `json:"available"`
+	Managed        bool   `json:"managed,omitempty"`
+	State          string `json:"state,omitempty"`
+	Platform       string `json:"platform,omitempty"`
+	Version        string `json:"version,omitempty"`
+	ArtifactSHA256 string `json:"artifactSha256,omitempty"`
+	Reason         string `json:"reason,omitempty"`
 }
 
 type CLIConfigSwitcherCapability struct {
@@ -143,19 +179,39 @@ type CLIConfigRequest struct {
 }
 
 type CLIConfigResult struct {
-	RequestID     string            `json:"requestId"`
-	OK            bool              `json:"ok"`
-	CLI           string            `json:"cli,omitempty"`
-	BaseURL       string            `json:"baseUrl,omitempty"`
-	Protocol      string            `json:"protocol,omitempty"`
-	Models        []string          `json:"models,omitempty"`
-	ModelsListed  bool              `json:"modelsListed,omitempty"`
-	ModelMetadata *CLIModelMetadata `json:"modelMetadata,omitempty"`
-	AppliedModel  string            `json:"appliedModel,omitempty"`
-	Message       string            `json:"message,omitempty"`
-	Error         string            `json:"error,omitempty"`
-	ConfigChanged bool              `json:"configChanged,omitempty"`
-	Secret        EncryptedSecret   `json:"secret,omitempty"`
+	OfficialModels []OfficialCLIModelMetadata `json:"officialModels,omitempty"`
+	RequestID      string                     `json:"requestId"`
+	OK             bool                       `json:"ok"`
+	CLI            string                     `json:"cli,omitempty"`
+	BaseURL        string                     `json:"baseUrl,omitempty"`
+	Protocol       string                     `json:"protocol,omitempty"`
+	Models         []string                   `json:"models,omitempty"`
+	ModelsListed   bool                       `json:"modelsListed,omitempty"`
+	ModelMetadata  *CLIModelMetadata          `json:"modelMetadata,omitempty"`
+	AppliedModel   string                     `json:"appliedModel,omitempty"`
+	Message        string                     `json:"message,omitempty"`
+	Error          string                     `json:"error,omitempty"`
+	ConfigChanged  bool                       `json:"configChanged,omitempty"`
+	Secret         EncryptedSecret            `json:"secret,omitempty"`
+}
+
+// OfficialCLIModelMetadata comes from the endpoint's native Codex model/list,
+// separately from the Hub-reviewed third-party provider catalog.
+// Official model metadata limits apply at both ends of the Bridge protocol.
+const (
+	MaxOfficialModels                = 500
+	MaxOfficialModelIDBytes          = 256
+	MaxOfficialModelDisplayNameBytes = 512
+	MaxOfficialReasoningEfforts      = 16
+	MaxOfficialReasoningEffortBytes  = 32
+)
+
+type OfficialCLIModelMetadata struct {
+	Model                     string   `json:"model"`
+	DisplayName               string   `json:"displayName"`
+	SupportedReasoningEfforts []string `json:"supportedReasoningEfforts"`
+	DefaultReasoningEffort    string   `json:"defaultReasoningEffort,omitempty"`
+	IsDefault                 bool     `json:"isDefault,omitempty"`
 }
 
 // CLIModelMetadata is sourced only from the Hub's reviewed model catalog.
@@ -271,37 +327,147 @@ type ApprovalResponsePayload struct {
 	Decision  string `json:"decision"`
 }
 
+// User input is distinct from command or file-change approval. The Bridge
+// holds the native request and only uses these payloads to collect an answer.
+type UserInputOption struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+type UserInputQuestion struct {
+	ID            string            `json:"id"`
+	Header        string            `json:"header,omitempty"`
+	Question      string            `json:"question"`
+	Options       []UserInputOption `json:"options,omitempty"`
+	SelectionMode string            `json:"selectionMode"` // single or multiple
+	AllowCustom   bool              `json:"allowCustom,omitempty"`
+	Secret        bool              `json:"secret,omitempty"`
+}
+
+type UserInputRequestPayload struct {
+	RequestID   string              `json:"requestId"`
+	RunID       string              `json:"runId"`
+	ExecutionID string              `json:"executionId"`
+	InstanceID  string              `json:"instanceId,omitempty"`
+	WorkerID    string              `json:"workerId,omitempty"`
+	TurnID      string              `json:"turnId,omitempty"`
+	CLI         string              `json:"cli"`
+	Blocking    bool                `json:"blocking"`
+	Questions   []UserInputQuestion `json:"questions"`
+	Revision    uint64              `json:"revision"`
+}
+
+type UserInputResponsePayload struct {
+	RequestID    string                     `json:"requestId"`
+	RunID        string                     `json:"runId"`
+	SubmissionID string                     `json:"submissionId"`
+	Answers      map[string]UserInputAnswer `json:"answers"`
+}
+
+type UserInputAnswer struct {
+	OptionIDs  []string `json:"optionIds,omitempty"`
+	CustomText *string  `json:"customText,omitempty"`
+}
+
+// Status is authoritative only for the Bridge's knowledge of the native
+// request. "delivered" means its response was written, not model-consumed.
+type UserInputStatusPayload struct {
+	SyncID       string                   `json:"syncId,omitempty"` // Hub query rejection only; never a delivery receipt.
+	RequestID    string                   `json:"requestId"`
+	RunID        string                   `json:"runId"`
+	ExecutionID  string                   `json:"executionId,omitempty"`
+	InstanceID   string                   `json:"instanceId,omitempty"`
+	SubmissionID string                   `json:"submissionId,omitempty"`
+	Status       string                   `json:"status"`              // queued, delivered, closed, or rejected
+	Lifecycle    string                   `json:"lifecycle,omitempty"` // open or closed; independent of delivery
+	Receipt      *UserInputReceiptPayload `json:"receipt,omitempty"`
+	Source       string                   `json:"source,omitempty"` // bridge or hub
+	Phase        string                   `json:"phase,omitempty"`  // route, validate, or queue
+	Reason       string                   `json:"reason,omitempty"`
+	Revision     uint64                   `json:"revision"`
+}
+
+// A receipt records only a submission's transport result. It never contains
+// questions or answers and may outlive the native request for a bounded time.
+type UserInputReceiptPayload struct {
+	RequestID    string `json:"requestId"`
+	RunID        string `json:"runId"`
+	ExecutionID  string `json:"executionId"`
+	InstanceID   string `json:"instanceId"`
+	SubmissionID string `json:"submissionId"`
+	Outcome      string `json:"outcome"` // delivered, not_sent, or unknown
+	Revision     uint64 `json:"revision"`
+}
+
+type UserInputSyncPayload struct {
+	RunID      string `json:"runId"`
+	SyncID     string `json:"syncId"`
+	InstanceID string `json:"instanceId,omitempty"`
+	// ClientVersion 3 supports atomic submission reconciliation. Older pages
+	// cannot safely unlock a submission after an ambiguous route failure.
+	ClientVersion      int                          `json:"clientVersion,omitempty"`
+	PendingSubmissions []UserInputPendingSubmission `json:"pendingSubmissions,omitempty"`
+}
+
+type UserInputPendingSubmission struct {
+	RequestID    string `json:"requestId"`
+	SubmissionID string `json:"submissionId"`
+	ExecutionID  string `json:"executionId"`
+}
+
+type UserInputSnapshotPayload struct {
+	RunID           string                    `json:"runId"`
+	SyncID          string                    `json:"syncId"`
+	InstanceID      string                    `json:"instanceId,omitempty"`
+	Revision        uint64                    `json:"revision"`
+	Requests        []UserInputRequestPayload `json:"requests"`
+	Statuses        []UserInputStatusPayload  `json:"statuses,omitempty"`
+	Closed          []UserInputStatusPayload  `json:"closed,omitempty"`
+	Receipts        []UserInputReceiptPayload `json:"receipts,omitempty"`
+	Reconciliations []UserInputStatusPayload  `json:"reconciliations,omitempty"`
+	ReconcileError  string                    `json:"reconcileError,omitempty"`
+}
+
 type OrchestrationStartPayload struct {
-	RunID                   string                          `json:"runId"`
-	Mode                    string                          `json:"mode"`
-	WorkerPair              string                          `json:"workerPair,omitempty"`
-	FirstCLI                string                          `json:"firstCli,omitempty"`
-	Prompt                  string                          `json:"prompt"`
-	Context                 string                          `json:"context,omitempty"`
-	Resume                  bool                            `json:"resume,omitempty"`
-	PromptSeq               int64                           `json:"promptSeq,omitempty"`
-	MaxTurns                int                             `json:"maxTurns,omitempty"`
-	MaxTurnsRequested       int                             `json:"maxTurnsRequested,omitempty"`
-	Round                   int                             `json:"round,omitempty"`
-	MaxRounds               int                             `json:"maxRounds,omitempty"`
-	CWD                     string                          `json:"cwd,omitempty"`
-	Files                   []AttachmentPayload             `json:"files,omitempty"`
-	CodexThreadID           string                          `json:"codexThreadId,omitempty"`
-	CodexThreadIDs          map[string]string               `json:"codexThreadIds,omitempty"`
-	ClaudeStarted           bool                            `json:"claudeStarted,omitempty"`
-	ClaudeSessionIDs        map[string]string               `json:"claudeSessionIds,omitempty"`
-	ClaudeStartedSlots      map[string]bool                 `json:"claudeStartedSlots,omitempty"`
-	RunCWD                  string                          `json:"runCwd,omitempty"`
-	Profile                 string                          `json:"profile,omitempty"`
-	NativeContextCompaction string                          `json:"nativeContextCompaction,omitempty"`
-	PlanWorkspace           bool                            `json:"planWorkspace,omitempty"`
-	TaskGraph               *TaskGraphPayload               `json:"taskGraph,omitempty"`
-	WorkerProfiles          map[string]WorkerProfileBinding `json:"workerProfiles,omitempty"`
+	InputVersion                   int                             `json:"inputVersion,omitempty"`
+	ExecutionMode                  string                          `json:"executionMode,omitempty"`
+	RunID                          string                          `json:"runId"`
+	Mode                           string                          `json:"mode"`
+	WorkerPair                     string                          `json:"workerPair,omitempty"`
+	FirstCLI                       string                          `json:"firstCli,omitempty"`
+	Prompt                         string                          `json:"prompt"`
+	TaskPrompt                     string                          `json:"taskPrompt,omitempty"`
+	Context                        string                          `json:"context,omitempty"`
+	Resume                         bool                            `json:"resume,omitempty"`
+	PromptSeq                      int64                           `json:"promptSeq,omitempty"`
+	MaxTurns                       int                             `json:"maxTurns,omitempty"`
+	MaxTurnsRequested              int                             `json:"maxTurnsRequested,omitempty"`
+	Round                          int                             `json:"round,omitempty"`
+	MaxRounds                      int                             `json:"maxRounds,omitempty"`
+	CWD                            string                          `json:"cwd,omitempty"`
+	Files                          []AttachmentPayload             `json:"files,omitempty"`
+	CodexThreadID                  string                          `json:"codexThreadId,omitempty"`
+	CodexThreadIDs                 map[string]string               `json:"codexThreadIds,omitempty"`
+	ClaudeStarted                  bool                            `json:"claudeStarted,omitempty"`
+	ClaudeSessionIDs               map[string]string               `json:"claudeSessionIds,omitempty"`
+	ClaudeStartedSlots             map[string]bool                 `json:"claudeStartedSlots,omitempty"`
+	RunCWD                         string                          `json:"runCwd,omitempty"`
+	Profile                        string                          `json:"profile,omitempty"`
+	VerificationMode               string                          `json:"verificationMode,omitempty"`
+	NativeContextCompaction        string                          `json:"nativeContextCompaction,omitempty"`
+	PlanWorkspace                  bool                            `json:"planWorkspace,omitempty"`
+	NativeUserInput                bool                            `json:"nativeUserInput,omitempty"`
+	NativeUserInputProtocolVersion int                             `json:"nativeUserInputProtocolVersion,omitempty"`
+	CompletionHistory              []CompletionObservation         `json:"completionHistory,omitempty"`
+	TaskGraph                      *TaskGraphPayload               `json:"taskGraph,omitempty"`
+	WorkerProfiles                 map[string]WorkerProfileBinding `json:"workerProfiles,omitempty"`
 }
 
 // WorkerProfileBinding is an immutable Hub-authorized worker snapshot. The
 // credential remains encrypted end-to-end for the selected Bridge.
 type WorkerProfileBinding struct {
+	OfficialLogin                              bool            `json:"officialLogin,omitempty"`
 	PresetID                                   string          `json:"presetId"`
 	CLI                                        string          `json:"cli"`
 	Name                                       string          `json:"name"`
@@ -359,9 +525,22 @@ type OrchestrationUsageSession struct {
 	Isolated bool `json:"isolated,omitempty"`
 }
 
+// OrchestrationUsageRecovery identifies a lost first planning session without
+// exposing native log contents. InputTokens uses the Codex inclusive-cache convention.
+type OrchestrationUsageRecovery struct {
+	WorkerSlot      string `json:"workerSlot"`
+	CWD             string `json:"cwd"`
+	StartedAt       int64  `json:"startedAt"`
+	EndedAt         int64  `json:"endedAt"`
+	InputTokens     int64  `json:"inputTokens"`
+	CacheReadTokens int64  `json:"cacheReadTokens"`
+	OutputTokens    int64  `json:"outputTokens"`
+}
+
 type OrchestrationUsageSyncRequest struct {
-	RunID    string                      `json:"runId"`
-	Sessions []OrchestrationUsageSession `json:"sessions"`
+	RunID    string                       `json:"runId"`
+	Sessions []OrchestrationUsageSession  `json:"sessions"`
+	Recovery []OrchestrationUsageRecovery `json:"recovery,omitempty"`
 }
 
 type OrchestrationUsageEvent struct {
@@ -456,6 +635,7 @@ type RunStartData struct {
 	MaxRounds               int    `json:"maxRounds,omitempty"`
 	PromptSeq               int64  `json:"promptSeq,omitempty"`
 	Profile                 string `json:"profile,omitempty"`
+	VerificationMode        string `json:"verificationMode,omitempty"`
 	NativeContextCompaction string `json:"nativeContextCompaction,omitempty"`
 }
 
@@ -485,16 +665,29 @@ type TurnEndData struct {
 }
 
 type RunEndData struct {
-	CodexThreadID      string             `json:"codexThreadId,omitempty"`
-	CodexThreadIDs     map[string]string  `json:"codexThreadIds,omitempty"`
-	ClaudeSessionID    string             `json:"claudeSessionId,omitempty"`
-	ClaudeSessionIDs   map[string]string  `json:"claudeSessionIds,omitempty"`
-	WorkerPair         string             `json:"workerPair,omitempty"`
-	NativeResume       []NativeResumeInfo `json:"nativeResume,omitempty"`
-	CodexNativeResume  *NativeResumeInfo  `json:"codexNativeResume,omitempty"`
-	ClaudeNativeResume *NativeResumeInfo  `json:"claudeNativeResume,omitempty"`
-	TerminalReason     string             `json:"terminalReason,omitempty"`
-	VerifierVerdict    *VerifierVerdict   `json:"verifierVerdict,omitempty"`
+	CodexThreadID         string                 `json:"codexThreadId,omitempty"`
+	CodexThreadIDs        map[string]string      `json:"codexThreadIds,omitempty"`
+	ClaudeSessionID       string                 `json:"claudeSessionId,omitempty"`
+	ClaudeSessionIDs      map[string]string      `json:"claudeSessionIds,omitempty"`
+	WorkerPair            string                 `json:"workerPair,omitempty"`
+	NativeResume          []NativeResumeInfo     `json:"nativeResume,omitempty"`
+	CodexNativeResume     *NativeResumeInfo      `json:"codexNativeResume,omitempty"`
+	ClaudeNativeResume    *NativeResumeInfo      `json:"claudeNativeResume,omitempty"`
+	TerminalReason        string                 `json:"terminalReason,omitempty"`
+	VerifierVerdict       *VerifierVerdict       `json:"verifierVerdict,omitempty"`
+	CompletionObservation *CompletionObservation `json:"completionObservation,omitempty"`
+}
+
+// CompletionObservation is bounded private diagnostic state, never proof of
+// completion. Hub carries reviewer samples across rounds of the same user task.
+type CompletionObservation struct {
+	Round        int    `json:"round"`
+	TaskDigest   string `json:"taskDigest,omitempty"`
+	SourceDigest string `json:"sourceDigest,omitempty"`
+	UsageKey     string `json:"usageKey,omitempty"`
+	OutputTokens int64  `json:"outputTokens,omitempty"`
+	BlockerKey   string `json:"blockerKey,omitempty"`
+	Plateau      bool   `json:"plateau,omitempty"`
 }
 
 type VerifierVerdict struct {
@@ -505,11 +698,15 @@ type VerifierVerdict struct {
 }
 
 // VerifierCheck is one bounded model or local adjudication result. A passed
-// verdict requires every invoked Agent Verifier and local hard gate to pass.
+// verdict requires both invoked Agent Verifiers to return, with at least one
+// Agent Verifier with no concrete evidence conflict, and applicable hard gates passing.
 type VerifierCheck struct {
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	Reason string `json:"reason"`
+	Name     string `json:"name"`
+	Status   string `json:"status"`
+	Reason   string `json:"reason"`
+	Code     string `json:"code,omitempty"`
+	Target   string `json:"target,omitempty"`
+	Evidence string `json:"evidence,omitempty"`
 }
 
 type BridgeNoteData struct {
@@ -536,6 +733,8 @@ const (
 	WorkerPairClaudeCodex            = "claude-codex"
 	WorkerPairCodexCodex             = "codex-codex"
 	WorkerPairClaudeClaude           = "claude-claude"
+	VerificationModeAgent            = "agent"
+	VerificationModeTBCI             = "tbci"
 )
 
 func NormalizeNativeContextCompaction(value string) string {
@@ -558,10 +757,36 @@ func NormalizeOrchestrationWorkerPair(value string) string {
 	}
 }
 
+func NormalizeVerificationMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case VerificationModeTBCI:
+		return VerificationModeTBCI
+	default:
+		return VerificationModeAgent
+	}
+}
+
 type RunConclusion struct {
 	Outcome              string   `json:"outcome"`
+	VerificationStatus   string   `json:"verificationStatus,omitempty"`
 	Summary              string   `json:"summary"`
 	BuildOrAuditCommands []string `json:"buildOrAuditCommands,omitempty"`
 	UnmetObligations     []string `json:"unmetObligations,omitempty"`
 	EvidenceRefs         []string `json:"evidenceRefs,omitempty"`
+}
+
+// OrchestrationInputPayload targets one active attempt; never silently retarget it.
+type OrchestrationInputPayload struct {
+	RunID        string `json:"runId"`
+	MessageID    string `json:"messageId"`
+	ExecutionID  string `json:"executionId"`
+	Prompt       string `json:"prompt"`
+	DeliveryMode string `json:"deliveryMode"`
+}
+type OrchestrationInputStatusPayload struct {
+	RunID       string `json:"runId"`
+	MessageID   string `json:"messageId"`
+	ExecutionID string `json:"executionId"`
+	Status      string `json:"status"`
+	Error       string `json:"error,omitempty"`
 }

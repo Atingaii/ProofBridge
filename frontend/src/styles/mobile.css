@@ -1,0 +1,104 @@
+/* Existing tokens and desktop layouts remain the source of visual styling. */
+.phone-only, .mobile-surface-heading { display: none; }
+.mobile-surface-body { display: contents; }
+
+@media (max-width: 767px), (max-height: 500px) and (pointer: coarse) {
+  .phone-only { display: flex; }
+  .phone-desktop-only { display: none; }
+  .phone-workspace {
+    height: var(--phone-viewport-height, 100dvh);
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .phone-workspace header { min-height: 56px; height: auto; }
+  .phone-workspace header > div:first-child { flex: 1; min-width: 0; }
+  .phone-workspace button, .phone-workspace select,
+  .phone-modal button, .phone-modal select, [data-slot="dialog-content"] button {
+    min-height: 48px;
+  }
+  .phone-workspace button[aria-label], .phone-workspace header > button,
+  .mobile-surface-heading button, .phone-modal button[aria-label],
+  [data-slot="dialog-content"] > button, [data-slot="dialog-content"] button[aria-label],
+  [data-slot="sheet-content"] > button, [data-slot="sheet-content"] button[aria-label] { min-width: 48px; }
+  [data-slot="sheet-content"] button { min-height: 48px; }
+  .phone-workspace input:not([type="checkbox"]):not([type="radio"]),
+  .phone-workspace textarea, .phone-modal input:not([type="checkbox"]):not([type="radio"]),
+  .phone-modal textarea, [data-slot="dialog-content"] input, [data-slot="dialog-content"] textarea,
+  [data-slot="sheet-content"] input { font-size: 16px; }
+  .phone-status { flex-wrap: wrap; gap: 6px 14px; white-space: normal; flex-shrink: 0; padding: 6px 12px; }
+  .phone-status > div { min-width: 0; }
+  .phone-status > label { order: -1; width: 100%; min-width: 0; display: inline-flex; flex-shrink: 1; }
+  .phone-status > .phone-desktop-only { display: none; }
+  .phone-status > div:not(:first-child) { display: none; }
+  .phone-status > div:not(.phone-desktop-only):has(svg.lucide-command), .phone-status > div:has(svg.lucide-activity) { display: flex; }
+  .phone-orchestration-layout { display: flex; overflow: hidden; }
+  .phone-transcript-column { width: 100%; min-height: 0; flex: 1; }
+  .phone-transcript { min-height: 0; max-height: none; }
+  .phone-workspace .phone-jump-latest { top: auto; left: auto; right: 12px; bottom: 12px; transform: none; translate: none; width: 48px; height: 48px; min-width: 48px; min-height: 48px; }
+  .phone-run-navigation { flex-shrink: 0; padding: 4px 8px; gap: 4px; }
+  .mobile-surface { display: none !important; }
+  .mobile-surface.mobile-surface-open {
+    display: flex !important; flex-direction: column; align-items: stretch;
+    position: fixed; inset: var(--phone-viewport-top, 0px) 0 auto; z-index: 50;
+    width: 100%; height: var(--phone-viewport-height, 100dvh); max-height: 100dvh;
+    min-height: 0; opacity: 1; overflow: hidden; padding: 0;
+    border: 0; background: var(--background); color: var(--foreground);
+    padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px);
+  }
+  .mobile-surface-heading { display: flex; flex-shrink: 0; align-items: center; gap: 12px; min-height: 56px; padding: 4px 12px; border-bottom: 1px solid var(--border); }
+  .mobile-surface-body { display: flex; min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+  .phone-action-surface .mobile-surface-body { align-items: stretch; }
+  .phone-action-surface .mobile-surface-body > button { display: flex; width: 100%; justify-content: flex-start; gap: 12px; padding: 12px; }
+  .phone-action-surface .mobile-surface-body > label { display: inline-flex; width: 100%; min-width: 0; }
+  .phone-action-surface .mobile-surface-body > button svg { width: 20px; height: 20px; }
+  .phone-action-surface .mobile-surface-body > button[title]::after { content: attr(title); }
+  .phone-action-surface .mobile-surface-body > button[title]:has(span)::after { content: none; }
+  .phone-config-surface .mobile-surface-body { display: block; }
+  .phone-modal-overlay { align-items: stretch; padding: 0; top: var(--phone-viewport-top, 0px); bottom: auto; height: var(--phone-viewport-height, 100dvh); }
+  .phone-modal { max-width: none; max-height: none; height: 100%; border-radius: 0; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .phone-modal-body { flex: 1; max-height: none; overscroll-behavior: contain; }
+  [data-slot="dialog-content"] { max-width: calc(100vw - 16px); max-height: var(--phone-viewport-height, 100dvh); overflow-y: auto; }
+  [data-slot="dialog-content"][class*="h-["] { width: 100%; max-width: none; height: var(--phone-viewport-height, 100dvh); border-radius: 0; }
+  [data-slot="dialog-content"] > button { top: 8px; right: 8px; }
+  .phone-workspace pre, .phone-modal pre { max-width: 100%; overflow-x: auto; }
+  .phone-workspace .prose { overflow-wrap: anywhere; }
+  .phone-workspace .prose table { display: block; max-width: 100%; overflow-x: auto; }
+}
+
+@media (max-width: 767px), (max-height: 500px) and (pointer: coarse) {
+  .phone-history-actions { flex-wrap: wrap; }
+  .phone-history-actions > button:not(:has(span)) { min-width: 48px; }
+  .phone-page { padding-inline: env(safe-area-inset-left, 0px) env(safe-area-inset-right, 0px); overflow-wrap: anywhere; }
+  .phone-auth { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .phone-page button, .phone-page header a, .phone-page select { min-height: 48px; }
+  .phone-page button[aria-label], .phone-page header button { min-width: 48px; }
+  .phone-page [role="tablist"] { height: auto; min-height: 56px; }
+  .phone-page header > div { height: auto; min-height: 56px; flex-wrap: wrap; padding-top: 4px; padding-bottom: 4px; gap: 6px; }
+  .phone-page header { padding-top: env(safe-area-inset-top, 0px); }
+  .phone-page table { display: block; max-width: 100%; overflow-x: auto; }
+  .phone-page pre { max-width: 100%; overflow-x: auto; }
+  .phone-page input:not([type="checkbox"]):not([type="radio"]), .phone-page textarea { font-size: 16px; min-height: 48px; }
+  .phone-page .recharts-responsive-container { min-width: 0; }
+  .phone-workspace button, .phone-modal button { white-space: normal; }
+}
+
+@media (max-width: 767px), (max-height: 500px) and (pointer: coarse) {
+  .mobile-surface button[class*="w-6"], .mobile-surface button[class*="w-7"] { min-width: 48px; }
+  .phone-page > header { flex-wrap: wrap; }
+  .phone-page > header > div { min-width: 0; max-width: 100%; }
+  .phone-page > header > div:last-child { flex-wrap: wrap; }
+  .phone-workspace > main { padding-bottom: 0; }
+}
+@media (max-height: 500px) and (pointer: coarse) {
+  .phone-workspace .phone-status { padding-block: 2px; }
+  .phone-status > div { display: none !important; }
+  .phone-run-navigation { padding-block: 0; }
+}
+
+@media (max-width: 767px), (max-height: 500px) and (pointer: coarse) {
+  .phone-workspace button, .phone-modal button, .phone-page button { height: auto; }
+  .phone-run-navigation button { min-width: 0; padding-inline: 6px; }
+}

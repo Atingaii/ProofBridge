@@ -21,6 +21,11 @@ const maxUsageLogLineBytes = 16 << 20
 func scanOrchestrationUsage(request protocol.OrchestrationUsageSyncRequest) protocol.OrchestrationUsageSyncResult {
 	result := protocol.OrchestrationUsageSyncResult{RunID: request.RunID, ScannedAt: time.Now().Unix()}
 	complete := 0
+	// Recovery is bounded and optional; old Hub requests retain their behavior.
+	recovered, recoveryResults := recoverPlanningUsage(request.Recovery, request.Sessions)
+	request.Sessions = append(request.Sessions, recovered...)
+	result.Sessions = append(result.Sessions, recoveryResults...)
+
 	for _, session := range request.Sessions {
 		events, err := scanUsageSession(session)
 		item := protocol.OrchestrationUsageSessionResult{
@@ -44,6 +49,11 @@ func scanOrchestrationUsage(request protocol.OrchestrationUsageSyncRequest) prot
 	default:
 		result.Status = "complete"
 	}
+	for _, recovery := range recoveryResults {
+		if recovery.Status != "complete" && result.Status == "complete" {
+			result.Status = "partial"
+		}
+	}
 	return result
 }
 
@@ -60,7 +70,7 @@ func scanUsageSession(session protocol.OrchestrationUsageSession) ([]protocol.Or
 	}
 	switch strings.ToLower(strings.TrimSpace(session.CLI)) {
 	case "codex":
-		path, err := findNativeSessionLog(filepath.Join(home, ".codex", "sessions"), session.SessionID)
+		path, err := findNativeSessionLog(filepath.Join(effectiveCodexUsageHome(home), "sessions"), session.SessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -161,6 +171,9 @@ func parseCodexUsageLog(path string, session protocol.OrchestrationUsageSession)
 		}
 		switch record.Type {
 		case "session_meta":
+			if record.Payload.Model != "" {
+				model = record.Payload.Model
+			}
 			provider = strings.TrimSpace(record.Payload.ModelProvider)
 		case "turn_context":
 			if record.Payload.Model != "" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,9 +20,10 @@ func TestConfiguredReviewerRoundCompletion(t *testing.T) {
 		fail, cancel         bool
 		wantKind, wantReason string
 	}{
-		{"final", 12, 12, false, false, "run.end", "max-turns"},
-		{"single", 1, 1, false, false, "run.end", "max-turns"},
+		{"final", 12, 12, false, false, "run.end", "verified-early"},
+		{"single", 1, 1, false, false, "run.end", "verified-early"},
 		{"intermediate", 1, 2, false, false, "run.end", "verified-early"},
+		{"final incomplete", 12, 12, false, false, "run.end", "max-turns"},
 		{"worker error", 1, 1, true, false, "run.error", ""},
 		{"canceled", 1, 1, false, true, "run.cancelled", ""},
 	} {
@@ -30,6 +32,9 @@ func TestConfiguredReviewerRoundCompletion(t *testing.T) {
 			path := filepath.Join(dir, "codex")
 			content := "最终结论：证明已完成。\n[PLAN_ITEM id=\"P1\" status=\"pending\"] old plan\nHandoff: status=resolved; changed=Main.v; verified=coqc Main.v; next=none; risks=none"
 			script := fakeCodexExecScript(content)
+			if test.wantReason == "max-turns" {
+				script = strings.ReplaceAll(script, `"status":"pass"`, `"status":"continue"`)
+			}
 			if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -76,11 +81,11 @@ func TestConfiguredReviewerRoundCompletion(t *testing.T) {
 			if test.wantReason != "" && (terminal.RunEndData == nil || terminal.RunEndData.TerminalReason != test.wantReason) {
 				t.Fatalf("reason = %#v", terminal.RunEndData)
 			}
-			if test.wantReason == "max-turns" && (verdicts != 0 || terminal.RunEndData.VerifierVerdict != nil || terminal.Status != store.OrchestrationCompleted) {
-				t.Fatalf("final round invoked verifier or failed: %#v", terminal)
+			if test.wantReason == "max-turns" && (verdicts == 0 || terminal.RunConclusion == nil || terminal.RunConclusion.Outcome != "blocked") {
+				t.Fatalf("unverified final round claimed completion: %#v", terminal)
 			}
-			if test.name == "intermediate" && verdicts == 0 {
-				t.Fatal("intermediate verifier was skipped")
+			if test.wantReason == "verified-early" && verdicts == 0 {
+				t.Fatal("completion verifier was skipped")
 			}
 		})
 	}

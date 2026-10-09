@@ -1,5 +1,9 @@
 # ProofBridge Plan
 
+Native Mac installation: platform downloads and cross-builds are implemented;
+actual Mac install/link validation remains an operator exit gate. See
+[macOS installation](features/macos-installation.md).
+
 ## Goal
 
 Let a single user talk from any browser to Codex CLI running on a private machine.
@@ -41,6 +45,12 @@ Let a single user talk from any browser to Codex CLI running on a private machin
 | P10.1 | Orchestration runtime, token usage, cost estimates, one-turn mode, and prominent final conclusion | implemented |
 | P10.2 | Administrator activity and usage dashboard with user aggregates and read-only conversation detail | implemented |
 | P10.3 | Isolated Codex/Claude worker profiles, dual-provider pairs, and deterministic quorum early-stop | implemented |
+| P10.4 | [Intermediate completion and actual-model usage fixes](features/early-completion-model-accounting.md), including verifier usage and partial cost display | implemented; local verification |
+| P10.4 | Selectable formal-proof verifier and Bridge-managed TBCI capability | implemented |
+| P10.5 | [Independent early completion and completed lifecycle results](features/independent-early-run-completion.md) | Go/frontend checks passed; experimental v0.3.66 deployed |
+| P10.6 | [Native structured orchestration questions](features/native-structured-user-input.md) | v3 remediation implemented with historical automated checks; [queued native interaction](features/native-structured-user-input-runtime-plan.md) approved and in implementation; real model/browser acceptance and target component versions remain unverified |
+| P10.7 | [Official Codex A/B model and reasoning selections](features/official-codex-worker-models.md) with a shared-data enhanced leading website | website deployed 2026-10-08; runtime selections require ConfigSwitcher v3 |
+| P10.8 | [Lightweight Android host and shared phone presentation](features/android-mobile-redesign.md) | software published 2026-10-08 on codex.sparkon.cn; signed Android 1.1.0 available; actual-device footprint/memory acceptance pending |
 
 ## Engineering Workflow
 
@@ -63,14 +73,12 @@ Let a single user talk from any browser to Codex CLI running on a private machin
   `claude-b` sessions. Native sessions are reused across turns so the
   user can `resume` them from the workspace. The Bridge only relays worker
   output and turn context; it does not inject remediation into worker sessions.
-  After an intermediate round's durable reviewer, two fresh Agent Verifiers use the role
-  presets to assess the recorded handoff and evidence. Local checker facts are
-  supplied to them but do not short-circuit review. A run ends early only when
-  both agents accept the structured, independently evidenced final handoff;
-  otherwise it continues through intermediate configured rounds. A normally
-  completed final configured reviewer succeeds without another verifier or
-  initial-plan comparison; see
-  [configured-round-completion-and-usage.md](features/configured-round-completion-and-usage.md).
+  After every round's durable reviewer, two fresh Agent Verifiers
+  independently inspect the original task and real workspace using the role
+  presets. Either passing verdict ends unused rounds early. Final rounds also
+  verify; repeated unchanged blockers can stop as incomplete, and the initial
+  plan remains advisory. See
+  [independent-early-run-completion.md](features/independent-early-run-completion.md).
   Saved CLI presets can be pinned independently to `claude`, `codex-a`,
   `codex-b`, `claude-a`, and `claude-b` worker slots without changing
   machine-wide configuration.
@@ -89,6 +97,45 @@ Let a single user talk from any browser to Codex CLI running on a private machin
 
 ## Maintenance Log
 
+- 2026-10-03: Deployed the standard frontend and shared Hub as
+  `v0.3.82-input-recovery-20261003`. Structured-input query errors now correlate
+  by syncId, distinguish discovery failure from unknown answer delivery, and
+  recover without stale notices or answer replay. The standard site also picks
+  up the desktop repairs below; test retains its leading frontend. No Bridge
+  was upgraded or restarted. See [native structured input](features/native-structured-user-input.md)
+  and [deployment variants](deployment.md#leading-and-experimental-websites).
+  Eleven desktop recovery scenarios, targeted checks, frontend tests and builds
+  pass. Full Go testing reported two timing-sensitive connection/lease failures;
+  both passed individual rechecks, without making the full run all-green.
+- 2026-09-30: Desktop audit repairs are implemented and deployed to the leading
+  website and shared Hub as `v0.3.82-desktop-fixes-20260930`: isolated drafts,
+  recoverable authentication/statistics requests, history search and reversible
+  archive, plus accurate bilingual help/version information. See
+  [desktop audit fixes](features/desktop-audit-fixes.md). The separately authorized
+  website release retains the previous site's frontend and running Bridges;
+  public health, resources, desktop pages, history and statistics reads were
+  verified. The first post-release usage overview timed out; a bounded retry
+  returned successfully in about three seconds, without establishing the cause.
+  Mobile changes and notification/budget suggestions remain outside this work item.
+  Desktop browser, Hub/Store and integration checks pass; the full Go gate still
+  exposes an existing intermittent Bridge CLI stderr collection failure.
+- 2026-09-11: Added participant/model charts with historical slot and native-log
+  recovery, and a cached automatic model capability/reference-price catalog.
+  Preset probes survive reselecting the same model. See
+  [participant usage](features/orchestration-worker-usage.md) and
+  [catalog ADR](adr/021-refreshable-model-catalog.md).
+- 2026-09-08: Added Linux ARM64 endpoint downloads, platform detection and
+  pre-replacement execution checks in the installer, with sequential dual-arch
+  builds. See [Linux ARM64 installation](features/linux-arm64-installation.md).
+
+- 2026-09-01: Made TBCI baselines submission-scoped and persistent across
+  durable graph nodes, generated contracts for unique Rocq/Lean/Isabelle
+  targets after upload preparation, and added bounded namespaced Rocq project
+  support without narrowing the Lean or Isabelle paths.
+- 2026-09-01: Embedded the pinned Linux/amd64 TBCI runtime in supported Bridge
+  builds, added private atomic installation and digest verification at startup,
+  reported readiness to the Hub, and rejected unavailable TBCI selections
+  before run creation while preserving Agent Verifier as the default.
 - 2026-08-15: Delayed durable task recovery until the existing bounded Bridge
   reconnect window after Hub startup, so a brief Hub-only reload preserves
   active attempt identity and buffered terminal evidence; only endpoints still

@@ -1,15 +1,44 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 )
+
+func TestNohupBridgeRetainsChildPID(t *testing.T) {
+	dir := t.TempDir()
+	opts := linkOptions{CWD: dir, StartPath: filepath.Join(dir, "start.sh"), LogPath: filepath.Join(dir, "bridge.log"), PIDPath: filepath.Join(dir, "bridge.pid")}
+	if err := os.WriteFile(opts.StartPath, []byte("#!/bin/sh\necho '[bridge] connected'\nexec sleep 60\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := startNohupBridge(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(opts.PIDPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 1 {
+		t.Fatalf("invalid detached child PID %q", raw)
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = process.Kill(); _, _ = process.Wait() }()
+	if err := process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("recorded PID is not alive: %v", err)
+	}
+}
 
 func TestPrepareLinkOptionsDefaults(t *testing.T) {
 	tmp := t.TempDir()

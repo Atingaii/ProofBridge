@@ -1,9 +1,28 @@
 package hub
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 )
+
+func TestHubProbeInferenceRejectsWebsiteAndJSONErrors(t *testing.T) {
+	for _, body := range []string{"<html>New API</html>", `{"error":{"message":"private-key"}}`, `{}`, ""} {
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+		status, err := hubProbeInference(context.Background(), s.Client(), s.URL, "model", "test-key", "codex")
+		s.Close()
+		if status != 200 || err == nil {
+			t.Fatalf("body %q: status=%d err=%v", body, status, err)
+		}
+		if strings.Contains(err.Error(), "private-key") {
+			t.Fatal("provider response leaked")
+		}
+	}
+}
 
 func TestCLIConfigProbeRejectsNonPublicDestinations(t *testing.T) {
 	for _, host := range []string{"localhost", "api.localhost", "127.0.0.1", "10.0.0.1", "169.254.169.254", "[::1]", "[fc00::1]"} {

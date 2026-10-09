@@ -1,4 +1,15 @@
+> Completion-policy update: [independent early run completion](independent-early-run-completion.md) supersedes the reviewer-only barrier and incomplete stagnation result described below. Completion decisions ignore planning; all automatic early closures show completed while retaining factual checks. Other feature behavior remains applicable.
+
 # Configured-round completion and native usage
+
+> **DEPRECATED - final-round verification bypass was replaced**
+>
+> Current design: [completion-verification-and-stagnation.md](completion-verification-and-stagnation.md).
+> Historical only; do not implement the final-round bypass from this doc.
+> Native usage fixes remain described in the linked accounting follow-up.
+
+Follow-up fixes to intermediate completion, model attribution, pricing, and
+ledger precedence: [early-completion-model-accounting.md](early-completion-model-accounting.md).
 
 ## Goals
 

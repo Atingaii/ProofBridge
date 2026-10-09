@@ -147,6 +147,17 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("BRIDGE_DURABLE_TASK_GRAPH"); v != "" {
 		cfg.Bridge.DurableTaskGraph = parseBool(v, cfg.Bridge.DurableTaskGraph)
 	}
+	if v := os.Getenv("BRIDGE_TBCI_ENABLED"); v != "" {
+		cfg.Bridge.TBCIEnabled = parseBool(v, cfg.Bridge.TBCIEnabled)
+	}
+	if v := os.Getenv("BRIDGE_TBCI_PATH"); v != "" {
+		cfg.Bridge.TBCIPath = v
+	}
+	if v := os.Getenv("BRIDGE_TBCI_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.Bridge.TBCITimeout = Duration{Duration: d}
+		}
+	}
 	if v := os.Getenv("BRIDGE_ACP_CLI"); v != "" {
 		cfg.Bridge.ACP.CLI = v
 	}

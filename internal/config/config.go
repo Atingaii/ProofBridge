@@ -63,7 +63,13 @@ type BridgeConfig struct {
 	// DurableTaskGraph enables the bounded candidate/integrator/reviewer graph
 	// for orchestration. Keep this opt-out for staged rollouts and legacy
 	// Bridges; the default remains enabled.
-	DurableTaskGraph    bool                      `yaml:"durable_task_graph"`
+	DurableTaskGraph bool `yaml:"durable_task_graph"`
+	// TBCIEnabled allows the formal-proof reviewer to use TBCI. Supported
+	// Bridge builds carry a managed artifact; administrators may opt out.
+	TBCIEnabled bool `yaml:"tbci_enabled"`
+	// TBCIPath overrides the managed artifact when non-empty.
+	TBCIPath            string                    `yaml:"tbci_path"`
+	TBCITimeout         Duration                  `yaml:"tbci_timeout"`
 	MaxSessions         int                       `yaml:"max_sessions"`
 	LongCommandObserver LongCommandObserverConfig `yaml:"long_command_observer"`
 	ACP                 ACPConfig                 `yaml:"acp"`
@@ -97,6 +103,7 @@ type AuthConfig struct {
 	JWTSecret         string             `yaml:"jwt_secret"`
 	AccessTokenTTL    Duration           `yaml:"access_token_ttl"`
 	BootstrapUsername string             `yaml:"bootstrap_username"`
+	AdminUsernames    []string           `yaml:"admin_usernames"`
 	BootstrapPassword string             `yaml:"bootstrap_password"`
 	Registration      RegistrationConfig `yaml:"registration"`
 }
@@ -144,6 +151,8 @@ func Default() Config {
 			FeatureRollouts: map[string]string{
 				"strict-workspace":             "all",
 				"orchestration-plan-workspace": "all",
+				"native-user-input":            "all",
+				"official-codex-worker-models": "all",
 			},
 		},
 		Bridge: BridgeConfig{
@@ -162,6 +171,9 @@ func Default() Config {
 			ReconnectMax:      Duration{Duration: 30_000_000_000},
 			HeartbeatInterval: Duration{Duration: 15_000_000_000},
 			DurableTaskGraph:  true,
+			TBCIEnabled:       true,
+			TBCIPath:          "",
+			TBCITimeout:       Duration{Duration: 2 * 60 * 1_000_000_000},
 			MaxSessions:       8,
 			LongCommandObserver: LongCommandObserverConfig{
 				Enabled:         false,

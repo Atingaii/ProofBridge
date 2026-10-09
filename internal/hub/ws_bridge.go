@@ -96,6 +96,10 @@ func (s *Server) handleBridgeWS(w http.ResponseWriter, r *http.Request) {
 				readErr <- err
 				return
 			}
+			if !s.pool.CurrentAgent(agent.ID, conn) {
+				readErr <- errors.New("superseded bridge connection")
+				return
+			}
 			_ = ws.SetReadDeadline(time.Now().Add(s.bridgeReadTimeout()))
 			s.handleBridgeEnvelope(r.Context(), agent.ID, env)
 		}
@@ -127,14 +131,30 @@ func (s *Server) scheduleHistoricalUsageBackfill(agentID string) {
 		}
 		for _, run := range runs {
 			syncs, err := s.store.ListOrchestrationUsageSyncs(ctx, run.ID)
-			if err != nil || len(syncs) > 0 {
-				continue
-			}
-			events, err := s.store.ListOrchestrationEvents(ctx, run.ID, 10000)
 			if err != nil {
 				continue
 			}
-			if err := s.requestOrchestrationUsageSync(run, events); err != nil {
+			events, err := s.store.ListOrchestrationUsageTimeline(ctx, run.ID)
+			if err != nil {
+				continue
+			}
+			due := historicalUsageSyncDue(syncs, time.Now().Unix())
+			if !due && s.supportsModelRecovery(agentID) {
+				graphs, err := s.store.ListTaskGraphMetadataByRun(ctx, run.ID)
+				if err != nil {
+					continue
+				}
+				ledger, err := s.store.ListOrchestrationUsageEvents(ctx, run.ID)
+				if err != nil {
+					continue
+				}
+				events = enrichSnapshotModelsFromLedger(enrichOrchestrationUsageTimeline(events, graphs), ledger)
+				due = modelRecoveryDue(planningUsageRecoveryHints(events, graphs), syncs, time.Now().Unix())
+			}
+			if !due {
+				continue
+			}
+			if err := s.requestOrchestrationUsageSync(ctx, run, events); err != nil {
 				slog.Debug("[hub] historical usage backfill unavailable", "run_id", run.ID, "error", err)
 			}
 		}
@@ -222,6 +242,7 @@ func (s *Server) scheduleAgentRunFailure(agentID, instance string, delay time.Du
 		} else {
 			reason = fmt.Sprintf("Bridge did not reconnect within %s after transport loss: %s", delay, reason)
 		}
+		_ = s.store.FailOrchestrationMessagesForAgent(ctx, agentID, reason+"; instruction delivery uncertain, automatic retry disabled")
 		if n, err := s.store.MarkActiveRunsForAgentFailed(ctx, agentID, reason); err != nil {
 			slog.Error("[hub] mark active agent runs failed", "agent_id", agentID, "error", err)
 		} else if n > 0 {
@@ -286,6 +307,10 @@ func (s *Server) handleBridgeEnvelope(ctx context.Context, agentID string, env p
 			return
 		}
 		s.pool.BroadcastToBrowsers(env.Sid, env)
+	case protocol.TypeUserInputRequest, protocol.TypeUserInputStatus, protocol.TypeUserInputSnapshot:
+		s.handleUserInputFromBridge(ctx, agentID, env)
+	case protocol.TypeOrchestrationInputStatus:
+		s.handleOrchestrationInputStatus(ctx, agentID, env)
 	case protocol.TypeOrchestrationEvent:
 		s.handleOrchestrationEventFromAgent(ctx, agentID, env)
 	case protocol.TypeOrchestrationUsageSyncResult:

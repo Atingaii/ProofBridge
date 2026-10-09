@@ -337,20 +337,21 @@ func TestStoreOrchestrationRunEventFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	run, err := st.CreateOrchestrationRun(ctx, CreateOrchestrationRunParams{
-		UserID:   user.ID,
-		AgentID:  agent.ID,
-		Title:    "Debate",
-		Mode:     "debate",
-		FirstCLI: "codex",
-		Profile:  "formal-proof",
-		Prompt:   "prove a theorem",
-		MaxTurns: 2,
-		Files:    []OrchestrationFile{{Name: "A.v", MimeType: "text/plain", Size: 10}},
+		UserID:           user.ID,
+		AgentID:          agent.ID,
+		Title:            "Debate",
+		Mode:             "debate",
+		FirstCLI:         "codex",
+		Profile:          "formal-proof",
+		VerificationMode: "tbci",
+		Prompt:           "prove a theorem",
+		MaxTurns:         2,
+		Files:            []OrchestrationFile{{Name: "A.v", MimeType: "text/plain", Size: 10}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != OrchestrationQueued || run.Mode != "debate" || run.FirstCLI != "codex" || run.Profile != "formal-proof" || len(run.Files) != 1 {
+	if run.Status != OrchestrationQueued || run.Mode != "debate" || run.FirstCLI != "codex" || run.Profile != "formal-proof" || run.VerificationMode != "tbci" || len(run.Files) != 1 {
 		t.Fatalf("unexpected run: %+v", run)
 	}
 	if _, err := st.AddOrchestrationEvent(ctx, OrchestrationEvent{
@@ -414,10 +415,10 @@ func TestStoreOrchestrationRunEventFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Status != OrchestrationCompleted || loaded.FinishedAt == 0 {
+	if loaded.Status != OrchestrationCompleted || loaded.FinishedAt == 0 || loaded.VerificationMode != "tbci" {
 		t.Fatalf("unexpected loaded run: %+v", loaded)
 	}
-	if err := st.UpdateOrchestrationRunSettings(ctx, run.ID, agent.ID, run.Mode, run.WorkerPair, "claude", run.Profile, run.CWD, "after-turn", run.MaxTurns, run.Files); err != nil {
+	if err := st.UpdateOrchestrationRunSettings(ctx, run.ID, agent.ID, run.Mode, run.WorkerPair, "claude", run.Profile, "agent", run.CWD, "after-turn", run.MaxTurns, run.Files); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.UpdateOrchestrationRunStatus(ctx, run.ID, OrchestrationRunning, ""); err != nil {
@@ -430,7 +431,7 @@ func TestStoreOrchestrationRunEventFlow(t *testing.T) {
 	if loaded.Status != OrchestrationRunning || loaded.FinishedAt != 0 {
 		t.Fatalf("resumed run kept terminal state: %+v", loaded)
 	}
-	if loaded.FirstCLI != "claude" || loaded.Profile != "formal-proof" || loaded.NativeContextCompaction != "after-turn" {
+	if loaded.FirstCLI != "claude" || loaded.Profile != "formal-proof" || loaded.VerificationMode != "agent" || loaded.NativeContextCompaction != "after-turn" {
 		t.Fatalf("resumed settings = %+v", loaded)
 	}
 	if err := st.UpdateOrchestrationRunSession(ctx, run.ID, "thread_1", true, "/abs/repo"); err != nil {
@@ -528,11 +529,20 @@ func TestListOrchestrationEventsReturnsLatestWindowInAscendingOrder(t *testing.T
 	if _, err := st.AddOrchestrationEvent(ctx, OrchestrationEvent{RunID: run.ID, Kind: "turn.usage", Data: map[string]any{"round": 1}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.AddOrchestrationEvent(ctx, OrchestrationEvent{RunID: run.ID, Kind: "verifier.verdict", Data: map[string]any{"verifiers": []map[string]string{{"agent": "agent-1", "slot": "codex-a", "cli": "codex"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddOrchestrationEvent(ctx, OrchestrationEvent{RunID: run.ID, Kind: "bridge.note", Data: map[string]any{"category": "native-identity", "nativeSessionId": "canceled-plan-session", "model": "resolved-model"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddOrchestrationEvent(ctx, OrchestrationEvent{RunID: run.ID, Kind: "bridge.note", Task: &protocol.TaskAttemptRef{Role: "planner"}, Data: map[string]any{"category": "native-identity", "nativeSessionId": "task-plan-session"}}); err != nil {
+		t.Fatal(err)
+	}
 	usageTimeline, err := st.ListOrchestrationUsageTimeline(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(usageTimeline) != 3 || usageTimeline[0].Kind != "run.end" || usageTimeline[1].Kind != "run.start" || usageTimeline[2].Kind != "turn.usage" {
+	if len(usageTimeline) != 6 || usageTimeline[5].Data["nativeSessionId"] != "task-plan-session" || usageTimeline[4].Data["nativeSessionId"] != "canceled-plan-session" || usageTimeline[3].Kind != "verifier.verdict" || usageTimeline[3].Data["verifiers"] == nil || usageTimeline[0].Kind != "run.end" || usageTimeline[1].Kind != "run.start" || usageTimeline[2].Kind != "turn.usage" {
 		t.Fatalf("unexpected usage timeline: %+v", usageTimeline)
 	}
 	events, err = st.ListOrchestrationEventsAfter(ctx, run.ID, 4, 1)

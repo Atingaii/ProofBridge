@@ -5,12 +5,21 @@ This is the detailed "I want to change X, where do I edit?" source. Keep
 
 ## Top-Level Shape
 
+Linux/macOS endpoint downloads: `internal/hub/server.go:handleInstallScript`,
+`internal/hub/bridge_download.go:serveBridgePlatformBinary`, and `Makefile:bridge-downloads`
+select, validate (ELF/Mach-O), and build matching amd64/arm64 artifacts.
+
+Administrator membership: `internal/config/config.go:AuthConfig` and
+`internal/hub/server.go:isAdminUser` share the bootstrap and additional username
+allowlist across authorization, user metadata, and rollout evaluation.
+
 | Area | Files |
 | --- | --- |
 | CLI entry and subcommands | `main.go` |
 | Config structs/load | `internal/config/config.go`, `internal/config/load.go`, `internal/config/duration.go` |
 | User feature rollouts | `internal/rollout/rollout.go:Evaluator`, `internal/hub/server.go:featureEnabled`, `internal/hub/server.go:decorateUser` |
-| User-scoped CLI provider library, credential vault, Hub-side provider probe, and reviewed reasoning catalog | `internal/hub/model_catalog.go`, `internal/hub/cli_config.go`, `internal/hub/cli_config_probe.go`, `internal/hub/cli_config_vault.go`, `internal/bridge/cli_config.go`, `internal/store/store.go:CLIConfigPreset`, `frontend/src/app/components/CLIConfigSwitcher.tsx` |
+| User-scoped CLI provider library, credential vault, Hub-side provider probe, and reviewed reasoning catalog | `internal/hub/model_catalog.go`, `internal/hub/cli_config.go`, `internal/hub/cli_config_probe.go`, `internal/providerprobe/inference.go`, `internal/hub/cli_config_vault.go`, `internal/bridge/cli_config.go`, `internal/store/store.go:CLIConfigPreset`, `frontend/src/app/components/CLIConfigSwitcher.tsx` |
+| Official Codex worker models and efforts | `internal/protocol/envelope.go:OfficialCLIModelMetadata`, `internal/hub/orchestration.go:resolveWorkerProfiles`, `internal/bridge/orchestration_worker_profiles.go:workerRuntime`, `internal/bridge/appserver_runner.go:turnStartParams`, `frontend/src/app/pages/OrchestrationWorkspace.tsx:renderWorkerProfileSelectors`, [feature contract](features/official-codex-worker-models.md) |
 | Isolated native resume visibility | `internal/bridge/orchestration_native.go:materializeCodexPickerVisibility`, `internal/bridge/orchestration_native.go:materializeClaudePickerVisibility`, `internal/protocol/envelope.go:NativeResumeInfo` |
 | Hub routes, auth, static serving | `internal/hub/server.go`, `internal/hub/registration.go` |
 | Public conversation shares | `internal/hub/share.go` |
@@ -21,18 +30,31 @@ This is the detailed "I want to change X, where do I edit?" source. Keep
 | Browser/Bridge connection pools | `internal/hub/pool.go` |
 | Orchestration HTTP/WS, profiles, verdicts, event history, run navigation, and turn timing | `internal/hub/orchestration.go:resolveWorkerProfiles`, `internal/hub/task_graph.go:handleTaskGraphEvent`, `internal/bridge/orchestration_worker_profiles.go:workerRuntime`, `internal/bridge/orchestration_verifier.go:evaluateAgentVerifierQuorum`, `frontend/src/app/pages/OrchestrationWorkspace.tsx`, `frontend/src/app/lib/utils.ts:visibleOrchestrationEvents` |
 | Orchestration plan/progress workspace | `internal/hub/task_graph.go:handleOrchestrationProgress`, `internal/hub/task_graph.go:reduceOrchestrationPlan`, `frontend/src/app/components/OrchestrationProofProgress.tsx:OrchestrationProofProgress`, `frontend/src/app/components/OrchestrationProgressMap.tsx:OrchestrationProgressMap`, `frontend/src/app/pages/OrchestrationWorkspace.tsx` |
+| Participant identity and question navigation | `frontend/src/app/lib/utils.ts:orchestrationParticipantLabel`, `frontend/src/app/components/OrchestrationComponents.tsx:OrchestrationTimelineGroupItem`, `frontend/src/app/components/UserInputCard.tsx:UserInputCard`, `internal/bridge/orchestration_claude.go:prepareClaudeApprovalServer`, `docs/features/participant-identity-and-question-flow.md` |
+| Native structured orchestration questions | `internal/bridge/user_input_version.go:userInputVersionAtLeast`, `internal/protocol/envelope.go:UserInputRequestPayload`, `internal/bridge/user_input.go:dispatchUserInput`, `internal/bridge/user_input.go:UserInputSync`, `internal/bridge/orchestration.go:AttachOut`, `internal/bridge/appserver_runner.go:readEvents` (synchronous request and asynchronous agent message), `internal/bridge/codex_user_input.go:decodeCodexAsyncUserInput`, `internal/hub/user_input.go:handleUserInputFromBridge`, `internal/hub/user_input.go:handleUserInputFromBrowser`, `internal/hub/pool.go:BroadcastNativeUserInput`, `internal/hub/orchestration.go:handleContinueOrchestration`, `frontend/src/app/components/UserInputCard.tsx:UserInputCard`, `frontend/src/app/lib/userInput.ts:receiveUserInputSnapshot`, `frontend/src/app/pages/OrchestrationWorkspace.tsx:connectRun`, `docs/features/native-structured-user-input.md` |
 | Orchestration cancel-before-delete state machine | `internal/store/store.go:RequestDeleteOrchestrationRun`, `internal/store/store.go:UpdateOrchestrationRunStatusIfAllowed`, `internal/store/task_graph.go:CreateNextOrchestrationTaskGraph`, `internal/hub/orchestration.go:handleDeleteOrchestration` |
+| Automatic public model metadata and pricing | `internal/modelcatalog/catalog.go:Catalog`, `internal/hub/model_catalog.go:reviewedModelMetadata`, `internal/usagepricing/catalog.go:Resolve`, `docs/adr/021-refreshable-model-catalog.md` |
+| Verifier model and billing identity | `internal/bridge/orchestration_verifier_model.go:resolveCodexVerifierModel`, `internal/hub/orchestration_verifier_usage.go:enrichVerifierUsage`, `docs/features/orchestration-worker-usage.md` |
+| Historical participant usage and charts | `internal/hub/orchestration_worker_usage.go:enrichOrchestrationUsageTimeline`, `frontend/src/app/components/RoundModelUsageCharts.tsx:RoundModelUsageCharts`, `frontend/src/app/lib/roundModelUsage.ts:roundModelUsage` |
 | Orchestration runtime/usage statistics | `internal/hub/orchestration.go:handleOrchestrationStats`, `internal/bridge/usage_ledger.go:scanOrchestrationUsage`, `internal/store/orchestration_usage.go:ReplaceOrchestrationUsage`, `internal/usagepricing/catalog.go:EstimateNormalized`, `frontend/src/app/pages/OrchestrationStatsPage.tsx` |
-| Configured-round completion and snapshot accounting | `internal/bridge/orchestration.go:configuredReviewerRoundsComplete`, `internal/bridge/appserver_usage.go:appServerUsageAccumulator`, `internal/hub/orchestration.go:orchestrationSnapshotUsage`, `docs/features/configured-round-completion-and-usage.md` |
-| Administrator activity/usage dashboard | `internal/hub/admin.go:handleAdminUsage`, `internal/hub/admin.go:handleAdminUserUsage`, `internal/store/admin_analytics.go:AdminUsageSnapshot`, `internal/store/admin_analytics.go:AdminUserDetailSnapshot`, `frontend/src/app/pages/AdminUsagePage.tsx`, `frontend/src/app/pages/AdminUserUsagePage.tsx` |
+| Usage read performance and request recovery | `internal/store/orchestration_usage_timeline.go:ListOrchestrationUsageTimeline`, `internal/store/task_graph.go:ListTaskGraphMetadataByRun`, `frontend/src/app/lib/statsRequest.ts:beginStatsRequest`, `docs/features/orchestration-usage-overview.md` |
+| Desktop draft isolation, history retrieval and failure recovery | `frontend/src/app/pages/OrchestrationWorkspace.tsx:OrchestrationWorkspace`, `frontend/src/app/lib/orchestrationDrafts.ts:useOrchestrationDraft`, `frontend/src/app/App.tsx:App`, `internal/hub/orchestration_history.go:handleListOrchestrations`, `internal/store/orchestration_history.go:ListOrchestrationHistory`, `internal/store/orchestration_history.go:UpdateOrchestrationMetadata`, `docs/features/desktop-audit-fixes.md`, `docs/adr/026-orchestration-history-metadata.md` |
+| Configured-round completion and snapshot accounting | `internal/bridge/orchestration.go:shouldRunAgentVerifier`, `internal/bridge/appserver_usage.go:appServerUsageAccumulator`, `internal/hub/orchestration.go:orchestrationSnapshotUsage`, `docs/features/independent-early-run-completion.md` |
+| Independent early graph closure | `internal/bridge/orchestration_completion.go:completionCandidate`, `internal/store/task_graph.go:closeVerifiedTaskGraphTx`, `internal/hub/task_graph.go:handleTaskGraphEvent`, `docs/adr/020-independent-early-run-completion.md` |
+| Early completion and per-model snapshot accounting | `internal/bridge/orchestration_verifier.go:composeAgentVerifierPrompt`, `internal/bridge/orchestration_usage.go:normalizeNativeUsage`, `internal/bridge/orchestration_relay.go:emitTurnUsage`, `internal/hub/orchestration.go:shouldUseOrchestrationUsageLedger`, `docs/features/early-completion-model-accounting.md` |
+| Administrator activity/usage dashboard | `internal/hub/admin.go:handleAdminUsage`, `internal/hub/admin.go:handleAdminUserUsage`, `internal/store/admin_analytics.go:AdminUsageSnapshot`, `internal/store/admin_analytics.go:AdminUserDetailSnapshot`, `internal/store/admin_content.go:AdminConversationContent`, `frontend/src/app/pages/AdminUsagePage.tsx`, `frontend/src/app/pages/AdminUserUsagePage.tsx` |
 | Runner abstraction | `internal/bridge/runner.go`, `internal/bridge/appserver_runner.go`, `internal/bridge/acp_runner.go`, `internal/bridge/acp_client.go`, `internal/bridge/session.go` |
 | Strict workspace child isolation | `internal/bridge/command_process.go:configureStrictWorkspaceCommand`, `internal/bridge/strict_workspace_linux.go:RunStrictWorkspaceSandbox`, `internal/bridge/strict_workspace_paths.go:strictWorkspaceReadOnlyPaths` |
+| Dynamic orchestration / live instructions | `internal/store/orchestration_dynamic.go:migrateDynamicExecutionMode`, `internal/store/orchestration_messages.go:CreateOrchestrationMessage`, `internal/hub/orchestration_messages.go:handleActiveOrchestrationMessage`, `internal/hub/task_graph.go:advanceCompletedTaskGraph`, `internal/bridge/orchestration_live_input.go:dispatchLiveInput`, `frontend/src/app/components/OrchestrationLiveInput.tsx` |
 | SQLite schema and CRUD | `internal/store/store.go`, `internal/store/id.go` |
+| Long-history read performance | `internal/store/store.go:ListOrchestrationPlanEvents`, `internal/store/admin_analytics.go:AdminUsageSnapshot`, `internal/hub/task_graph.go:handleOrchestrationProgress`; [design](features/site-loading-performance.md) |
 | Wire protocol | `internal/protocol/envelope.go` |
+| Selectable Agent/TBCI formal-proof verification | `internal/store/store.go:OrchestrationRun`, `internal/hub/orchestration.go:normalizeOrchestrationStart`, `internal/protocol/envelope.go:OrchestrationStartPayload`, `internal/bridge/orchestration_tbci.go:prepareTBCIVerifier`, `internal/bridge/tbci_runtime.go:prepareTBCIRuntime`, `frontend/src/app/pages/OrchestrationWorkspace.tsx`, `docs/adr/015-selectable-orchestration-verification-mode.md`, `docs/adr/016-managed-tbci-runtime.md`, `docs/adr/017-tbci-task-input-and-workspace-baseline.md`, `docs/features/tbci-formal-proof-verification.md` |
 | Frontend source | `frontend/src/app/App.tsx`, `frontend/src/app/pages/`, `frontend/src/app/components/`, `frontend/src/app/lib/`, `frontend/src/styles/` |
 | Public help guide | `frontend/src/app/pages/HelpPage.tsx`, `frontend/public/help/`, `frontend/scripts/generate-help-screenshots.cjs`, `docs/features/public-help-guide.md` |
+| Public orchestration design article | `frontend/src/app/pages/OrchestrationDesignPage.tsx:OrchestrationDesignPage`, `frontend/public/article-assets/orchestration-design/`, `docs/features/orchestration-design-article.md` |
 | Embedded frontend output | `internal/web/static/`, `internal/web/embed.go` |
-| Archived Android wrapper (unmaintained) | `android/`, `frontend/capacitor.config.ts` |
+| Lightweight Android host | `android/app/src/main/java/tech/sparkapi/codexbridge/MainActivity.java:MainActivity`, `android/app/build.gradle`, [mobile contract](features/android-mobile-redesign.md) |
 | Deployment | `deploy/Caddyfile`, `deploy/systemd-*.service`, `deploy/portable/`, `scripts/build-portable-package.sh`, `Dockerfile`, `Makefile`, `docs/deployment.md` |
 | Formal-proof benchmarks | `benchmarks/formal-proof/`, `scripts/run-formal-proof-benchmarks.sh`, `docs/features/formal-proof-offline-benchmarks.md` |
 
@@ -55,8 +77,10 @@ This is the detailed "I want to change X, where do I edit?" source. Keep
    deterministic demo data and regenerates `frontend/public/help/`.
 3. `frontend/help-page-check.mjs` protects the public routes, workflow coverage,
    screenshot count, and navigation links.
-4. Run `npm run help:screenshots`, `npm test`, and `npm run build`; commit the
-   resulting `internal/web/static/help/` assets with the frontend bundle.
+4. Run `npm run help:screenshots` when captures need updating; text-only changes
+   may retain clearly labeled illustrative captures. Run `npm test` and
+   `npm run build`; include any regenerated `internal/web/static/help/` assets
+   with the frontend bundle.
 5. Update [docs/features/public-help-guide.md](features/public-help-guide.md)
    when the guide's scope or capture contract changes.
 
@@ -341,12 +365,17 @@ This is the detailed "I want to change X, where do I edit?" source. Keep
    `internal/bridge/orchestration_relay.go:relayCanConverge` permits only an
    evidenced reviewer/critic turn to finish below the configured turn ceiling.
    `internal/bridge/orchestration_verifier.go:evaluateAgentVerifierQuorum`
-   runs two isolated role-preset judgments on intermediate rounds after recording
-   `internal/bridge/orchestration_verifier.go:collectOrchestrationVerifierFacts`;
-   the facts are visible evidence rather than a local completion gate, and the
-   quorum emits the visible early-stop verdict. A normally finished final
-   reviewer instead succeeds without another verifier, through
-   `internal/bridge/orchestration.go:configuredReviewerRoundsComplete`.
+   runs two isolated role-preset judgments after every reviewer round, each using
+   the full original `TaskPrompt` and real workspace, executes them serially,
+   and emits the visible early-stop verdict. Final rounds also require verification.
+   `internal/bridge/orchestration_completion.go:completionSourceDigest` bounds
+   source sampling; `internal/bridge/orchestration_completion.go:completionPlateau`
+   diagnoses comparable reviewer output, and
+   `internal/bridge/orchestration_completion.go:completionStalled` stops repeated
+   unchanged blockers without claiming success.
+   `internal/hub/task_graph.go:nextTaskGraphPayload` persists bounded observations
+   and prioritizes failed checks; `internal/hub/task_graph.go:advanceCompletedTaskGraph`
+   carries the reviewed plan without rerunning planner nodes.
 9. `internal/bridge/orchestration_relay.go:runRelayCLI`,
    `internal/bridge/orchestration_codex.go:runCodexInteractive`, and
    `internal/bridge/orchestration_claude.go:runClaudeInteractive` preserve the
@@ -432,3 +461,14 @@ This is the detailed "I want to change X, where do I edit?" source. Keep
 | Bridge runner/session | `/usr/local/go/bin/go test ./internal/bridge` |
 | End-to-end Hub/Bridge flow | `/usr/local/go/bin/go test ./internal/integration` |
 | Any shared change | `/usr/local/go/bin/go test ./...` |
+
+Canceled planning model recovery: `internal/hub/orchestration_planning_usage.go:planningUsageRecoveryHints`
+builds immutable official-login hints; `internal/bridge/usage_recovery.go:recoverPlanningUsageSessions`
+matches bounded native logs by metadata and token fingerprint. Early native
+identity: `internal/bridge/orchestration_native_identity.go:nativeIdentityEvent`.
+
+Retry lifecycle: `internal/hub/orchestration_model_recovery.go:modelRecoveryDue`
+and `internal/protocol/usage_recovery.go:RecoveryMarkerID`. The stats API exposes
+`modelRecoveryStatus`; zero-usage markers reuse existing session-sync persistence.
+Round totals and original call costs are projected by
+`frontend/src/app/lib/roundModelUsage.ts:roundModelUsage`.

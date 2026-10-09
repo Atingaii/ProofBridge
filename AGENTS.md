@@ -3,6 +3,16 @@
 This is the entry brief for AI coding sessions. Read this file first, then load
 the detailed docs linked below only when the task needs them.
 
+## Trellis (Codex)
+
+This repository is initialized with Trellis 0.6.17. Use `$trellis-start` to
+load session context and the relevant `.trellis/spec/` indexes. Setup and
+usage: [docs/dev-workflow.md](docs/dev-workflow.md#trellis-for-codex).
+Existing project rules and explicit user instructions take precedence over
+generated Trellis workflow defaults. Keep detailed architecture and coupling
+rules in the canonical docs below; Trellis specs link to them.
+Session/task auto-commit is disabled; retain the commit contract in R6.
+
 ## Positioning
 
 Single-user remote access, from any browser, to Codex and Claude Code CLIs
@@ -145,6 +155,17 @@ session/run. If a new task is meant to continue context:
 
 Only explicit New Session / New Run actions may create a new context.
 
+### R9. 默认只部署网站
+
+用户要求“部署最新版”时，默认仅部署 `https://proofbridge.sparkon.cn` 的网站：
+构建最新前端及承载嵌入页面的服务器本机架构 Hub 二进制，备份后更新 Hub，
+验证公网健康与页面资源。默认不运行 `make bridge-downloads`，不交叉编译、
+发布或验收 Linux/macOS 四个平台下载包，不把它们作为网站部署的前置条件。
+仅在用户明确要求发布端点安装包时执行对应平台构建；保留已有下载包。
+网站部署不自动升级或重启 Bridge；若某项修复依赖 Bridge 更新，说明依赖及
+当前生效范围，按用户明确要求另行处理。具体流程见
+[部署范围](docs/deployment.md#default-deployment-scope)。
+
 ## Feature Dev Loop
 
 1. Confirm the goal, boundaries, and affected surfaces.
@@ -165,13 +186,14 @@ Only explicit New Session / New Run actions may create a new context.
 | Wire protocol | `internal/protocol/` |
 | Embedded UI output | `internal/web/static/` |
 | Frontend source | `frontend/src/app/` |
-| Archived Android wrapper (unmaintained) | `android/` |
+| Lightweight Android system-WebView host | `android/` |
 
 Detailed "change X -> edit Y" guidance is in [docs/code-map.md](docs/code-map.md).
 
-The Android wrapper is archived and is not a release target or exit gate. Do
-not sync, build, test, or update it for Hub, Bridge, or frontend changes unless
-the user explicitly reactivates Android maintenance.
+Android maintenance was explicitly reactivated on 2026-10-08. For Android host
+or shared phone-presentation changes, follow [the mobile contract](docs/features/android-mobile-redesign.md)
+and [Android build steps](docs/dev-workflow.md#android-release). Routine Hub/Bridge
+website deployment still follows R9; APK publication remains an explicit target.
 
 ## Commands
 

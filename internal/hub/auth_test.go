@@ -56,14 +56,18 @@ func TestAuthResponsesExposeEnabledFeatures(t *testing.T) {
 	}
 
 	adminLogin := login(t, s, map[string]string{"username": "admin", "password": "secret12345"}, http.StatusOK)
-	assertUserFeatures(t, adminLogin, "strict-workspace", "orchestration-plan-workspace")
+	assertUserFeatures(t, adminLogin, "strict-workspace", "orchestration-plan-workspace", "native-user-input", "official-codex-worker-models")
 	adminCookie := loginCookie(t, s, map[string]string{"username": "admin", "password": "secret12345"})
-	assertUserFeatures(t, authRequestWithCookie(t, s, http.MethodGet, "/api/me", adminCookie, http.StatusOK), "strict-workspace", "orchestration-plan-workspace")
+	adminMe := authRequestWithCookie(t, s, http.MethodGet, "/api/me", adminCookie, http.StatusOK)
+	assertUserFeatures(t, adminMe, "strict-workspace", "orchestration-plan-workspace", "native-user-input", "official-codex-worker-models")
+	if adminMe["nativeUserInputProtocolVersion"] != float64(3) {
+		t.Fatalf("native input protocol version = %#v", adminMe["nativeUserInputProtocolVersion"])
+	}
 
 	workerLogin := login(t, s, map[string]string{"username": "worker", "password": "abc1234567"}, http.StatusOK)
-	assertUserFeatures(t, workerLogin, "strict-workspace", "orchestration-plan-workspace")
+	assertUserFeatures(t, workerLogin, "strict-workspace", "orchestration-plan-workspace", "native-user-input", "official-codex-worker-models")
 	workerCookie := loginCookie(t, s, map[string]string{"username": "worker", "password": "abc1234567"})
-	assertUserFeatures(t, authRequestWithCookie(t, s, http.MethodGet, "/api/me", workerCookie, http.StatusOK), "strict-workspace", "orchestration-plan-workspace")
+	assertUserFeatures(t, authRequestWithCookie(t, s, http.MethodGet, "/api/me", workerCookie, http.StatusOK), "strict-workspace", "orchestration-plan-workspace", "native-user-input", "official-codex-worker-models")
 }
 
 func assertUserFeatures(t *testing.T, body map[string]any, want ...string) {

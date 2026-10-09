@@ -1,0 +1,704 @@
+diff --git a/docs/adapter-conformance-zh-CN.md b/docs/adapter-conformance-zh-CN.md
+index f120f20..3f4ecc6 100644
+--- a/docs/adapter-conformance-zh-CN.md
++++ b/docs/adapter-conformance-zh-CN.md
+@@ -30,6 +30,10 @@
+   `Print Assumptions` report 与 observed direct-import set。为兼容既有 contract，空 allowlist
+   明确表示未约束 direct import，此时 `.glob` 不可用不会单独使 trust fail closed。该机制只检查
+   已编译 target module 的 direct import，不声称建立 transitive dependency closure。
++  adapter v3 还只接受根 `_CoqProject` 中有界的 `-Q`/`-R` 映射，推导限定
++  target module，并在验证器拥有的干净副本中串行编译其本地源码依赖闭包。
++  它不执行生产者构建脚本；不支持或有歧义的项目语法失败关闭。没有项目文件
++  时继续保留平铺模块行为。
+ - `internal/prover/lean` 保留 flat-module regression，并增加 bounded Lake project mode。Lake mode 绑定
+   `lean-toolchain`、declarative `lakefile.toml` 与 `lake-manifest.json`，递归 hash 每份 reachable local
+   imported source，排除 producer `.lake` 与 compiled artifact，在 fresh copy 中执行 `lake build`，再通过
+diff --git a/docs/adapter-conformance.md b/docs/adapter-conformance.md
+index d39c980..aa8f51c 100644
+--- a/docs/adapter-conformance.md
++++ b/docs/adapter-conformance.md
+@@ -36,6 +36,12 @@ The concrete adapters are deliberately restricted:
+   explicitly unconstrained direct-import policy and does not fail when `.glob`
+   observation is unavailable. This is a direct-import check for the compiled
+   target module, not a transitive dependency-closure claim.
++  Adapter v3 additionally accepts only bounded `-Q`/`-R` mappings from a root
++  `_CoqProject`, derives the qualified target module, and serially compiles its
++  local source dependency closure in a verifier-owned clean copy. It does not
++  execute producer build scripts; unsupported or ambiguous project syntax
++  fails closed. The flat-module behavior remains available when no project
++  file exists.
+ - `internal/prover/lean` retains the flat-module regression and adds a bounded
+   Lake project mode. Lake mode binds `lean-toolchain`, declarative
+   `lakefile.toml`, and `lake-manifest.json`; recursively hashes every reachable local
+diff --git a/docs/adr/074-restricted-coqproject-mappings.md b/docs/adr/074-restricted-coqproject-mappings.md
+new file mode 100644
+index 0000000..e3d6a5d
+--- /dev/null
++++ b/docs/adr/074-restricted-coqproject-mappings.md
+@@ -0,0 +1,54 @@
++# ADR 074: Restricted `_CoqProject` mappings for Rocq
++
++## Status
++
++Accepted for the ProofBridge managed-artifact integration.
++
++## Threat addressed
++
++The verifier previously compiled only a flat `Module.v` under the synthetic
++`-Q . TBCI` namespace. A valid Rocq project whose target identity depends on
++repository mappings could therefore not be reconstructed independently. The
++verifier must derive that identity without executing producer-controlled build
++logic.
++
++## Decision
++
++The Rocq adapter may read a root `_CoqProject` containing only complete
++`-Q <directory> <logical>` and `-R <directory> <logical>` triples. Paths must
++remain inside the verifier-owned clean workspace and logical names must be
++valid Rocq module names. The target source basename must be unique. The
++adapter derives the qualified module and compiles the target's local import
++closure serially in dependency order before checking the target.
++
++Unknown `_CoqProject` tokens, ambiguity, cycles, path escape, oversized files,
++or malformed local dependency declarations fail closed. When `_CoqProject` is
++absent, the existing flat `-Q . TBCI` behavior remains unchanged.
++
++## Non-goals
++
++- Executing `Makefile`, `dune`, shell flags, or arbitrary project commands.
++- Claiming support for every Rocq build-system feature or generated source.
++- Expanding the trusted result beyond the frozen task contract and observed
++  source-only workspace.
++- Changing the Lean or Isabelle adapters.
++
++## TCB impact
++
++The trusted computing base gains only the bounded mapping/import parser and
++the verifier-owned dependency-order planner. Producer build scripts remain
++outside the TCB because they are never executed.
++
++## Verdict semantics
++
++An accepted mapping changes how the contracted module is located and checked;
++it does not relax target, environment, kernel, trust, snapshot, or delta
++evidence. Unsupported or ambiguous project state is an error and cannot yield
++`Trusted`.
++
++## Exit checks
++
++- Flat Rocq regression remains green.
++- A namespaced `_CoqProject` fixture with a local imported theorem verifies.
++- Unsupported options, ambiguous target basenames, and dependency cycles fail.
++- Portable Lean and Isabelle adapter regressions remain green.
+diff --git a/docs/adr/074-restricted-coqproject-mappings.zh-CN.md b/docs/adr/074-restricted-coqproject-mappings.zh-CN.md
+new file mode 100644
+index 0000000..a548010
+--- /dev/null
++++ b/docs/adr/074-restricted-coqproject-mappings.zh-CN.md
+@@ -0,0 +1,48 @@
++# ADR 074：Rocq 的受限 `_CoqProject` 映射
++
++## 状态
++
++已接受，用于 ProofBridge 托管产物集成。
++
++## 所应对的威胁
++
++验证器此前只会在合成的 `-Q . TBCI` 命名空间下编译平铺的
++`Module.v`。因此，只要有效 Rocq 工程的目标身份依赖仓库映射，验证器就无法
++独立重建。验证器必须自行推导该身份，同时不能执行生产者控制的构建逻辑。
++
++## 决策
++
++Rocq 适配器可以读取根目录 `_CoqProject`，但只接受完整的
++`-Q <directory> <logical>` 与 `-R <directory> <logical>` 三元组。路径必须
++留在验证器拥有的干净工作区内，逻辑名必须是合法 Rocq 模块名。目标源码的
++基名必须唯一。适配器推导限定模块名，并按依赖顺序串行编译目标的本地导入
++闭包，然后检查目标。
++
++未知 `_CoqProject` 标记、歧义、依赖环、路径逃逸、超大文件或畸形的本地
++依赖声明均失败关闭。缺少 `_CoqProject` 时，保留既有的平铺
++`-Q . TBCI` 行为。
++
++## 非目标
++
++- 执行 `Makefile`、`dune`、shell 参数或任意项目命令。
++- 声称支持全部 Rocq 构建系统特性或生成源码。
++- 将可信结论扩大到冻结任务契约和已观察的纯源码工作区之外。
++- 修改 Lean 或 Isabelle 适配器。
++
++## TCB 影响
++
++可信计算基只增加有界映射/导入解析器和验证器拥有的依赖排序器。生产者构建
++脚本从不执行，因此仍在 TCB 之外。
++
++## 判定语义
++
++被接受的映射只改变契约模块的定位和检查方式；不会放宽目标、环境、内核、
++信任、快照或增量证据。不支持或有歧义的项目状态只能报错，不能得到
++`Trusted`。
++
++## 退出检查
++
++- 平铺 Rocq 回归保持通过。
++- 带本地导入定理的 `_CoqProject` 命名空间样例通过验证。
++- 不支持的选项、歧义目标基名和依赖环均失败。
++- Lean 与 Isabelle 的便携适配器回归保持通过。
+diff --git a/docs/change-impact.md b/docs/change-impact.md
+index 39d01f2..5a3b834 100644
+--- a/docs/change-impact.md
++++ b/docs/change-impact.md
+@@ -20,6 +20,7 @@ together.
+ | Trace requirement, receipt structure, event-chain producer, or observation surface | `internal/integrity/trace.go`, trace schema, signature/binding/capability tests, ADR-021/030/040 bilingual copies, CLI and TCB documentation |
+ | Detached completion signature | `internal/integrity/envelope_signature.go`, signature schema/vectors, core and CLI rejection tests, ADR-031 bilingual copies, portable-format docs, paper and claim matrix signature limitations |
+ | Adapter capability | adapter implementation/tests/fixture, `docs/adapter-conformance*.md`, relevant ADR bilingual copies, README limitations; Rocq direct-import policy changes additionally require ADR-066, exact `.glob` parser tests, native allow/reject matrices, and a separately bound remediation replay that cannot overwrite prospective evidence |
++| Restricted Rocq project mapping or local import planning | `internal/prover/rocq/`, positive/negative project tests, ADR-074 bilingual copies, bilingual adapter docs, and portable Lean/Isabelle non-regression tests; never execute producer build scripts |
+ | Lean project/import closure | `internal/prover/lean/`, medium Lake fixture, project mutation tests, ADR-046 bilingual copies, adapter docs, plan and claim matrix |
+ | Bounded Rocq/Lean/Isabelle native-conformance release | ADR-061 bilingual copies, frozen requirement manifest, prover fixture/adapter tests, aggregate/verification tools, release capture script, CI role, bilingual adapter/README text, clean Linux single-snapshot evidence, and claim/evidence matrix; `unavailable`, dirty, mixed-host, or diagnostic records never count |
+ | Replay behavior | `internal/integrity/replay.go`, verifier tests, contract/attestation schema, paper replay claim boundary |
+diff --git a/docs/code-map.md b/docs/code-map.md
+index 55b3c46..c3c8669 100644
+--- a/docs/code-map.md
++++ b/docs/code-map.md
+@@ -20,6 +20,7 @@ This map describes only maintained TBCI research-artifact code.
+ | Replay semantics | `internal/integrity/replay.go`, `internal/integrity/verifier.go` | replay tests, contract/attestation schema, ADR and claim boundary |
+ | Linux declared-surface replay and mediation | `internal/integrity/hermetic_trace.go`, `internal/integrity/hermetic_trace_test.go`, `tools/{capture,verify}_declared_surface_evidence.py` | ADR-056 bilingual copies, canonical operation order, fresh-workspace/omission/tamper/rebinding/bypass tests, verifier-owned capsule closure, Linux namespace preflight, explicit `--no-healthcheck`, pre-start daemon-hook denial, independent archive verification; never claim complete OS mediation |
+ | Prover adapter | `internal/prover/<prover>/` | positive/negative fixture, shared clean and target-mutation conformance, bilingual adapter documentation, limitations statement |
++| Restricted Rocq project mapping | `internal/prover/rocq/project.go` | ADR-074, namespaced/local-import fixtures, bilingual adapter docs; keep producer build scripts outside the TCB |
+ | Rocq direct-import trust policy | `internal/prover/rocq/`, `benchmarks/natural-failures/prospective-collected/codex-dual-review-v1/{b5-finalization-v1,b5-remediation-v1}/` | ADR-066 bilingual copies, exact `.glob` direct-import parsing, Rocq 9/legacy namespace normalization, non-empty allowlist fail-closed tests, ordinary-reference exclusion tests, native Rocq matrices, and a non-replacing remediation comparison |
+ | Lean Lake project closure | `internal/prover/lean/`, `benchmarks/prover-adapters/lean/medium/` | native clean build, target/axiom/cache/dependency/config mutation matrix, ADR-046, paper/claim boundary |
+ | Bounded three-prover plus declared-surface native release | `benchmarks/prover-adapters/{native-conformance-requirements.json,lean/offline/,isabelle/session-reference/}`, `vendor/`, `scripts/{benchmark_release_container,capture_native_conformance_release,run_native_conformance_runner}.sh`, `toolchains/native-conformance-runner/`, `tools/{aggregate,verify}_native_conformance.py`, `tools/{audit,load}_release_image_archive.py`, `tools/prepare_native_runner_supersession.py` | three native records plus declared-surface archive, vendored Go module closure with proxy/checksum services disabled, same-path external temporary binaries for nested Docker, all seven common scenarios, ten trace negative markers, explicit no-healthcheck at every controlled launch, hook-free scratch final stage, exact raw runtime-config audit, load-record v2 current-auditor/runtime-projection binding, non-promotable historical archive plus external supersession path, exact command/tool/file/operation bindings with independent source-input re-hashing, same clean Linux commit/tree and host, strict independent verification, external output directory, ADR-061 bilingual copies; never substitute the external Mathlib diagnostic |
+diff --git a/internal/prover/rocq/contract.go b/internal/prover/rocq/contract.go
+index 57c1339..9401822 100644
+--- a/internal/prover/rocq/contract.go
++++ b/internal/prover/rocq/contract.go
+@@ -57,23 +57,24 @@ func (a *Adapter) checkedStatement(ctx context.Context, root, module, name strin
+ 	}
+ 	defer os.RemoveAll(clean)
+ 	cleanRoot := filepath.Join(clean, "workspace")
+-	if _, err := os.Stat(filepath.Join(cleanRoot, filepath.FromSlash(module+".v"))); err != nil {
+-		return "", fmt.Errorf("Rocq target source %s: %w", module, err)
++	invocation, err := rocqProjectInvocation(cleanRoot, module)
++	if err != nil {
++		return "", err
+ 	}
+ 	coqc, err := resolve(a.CoqBin, "coqc")
+ 	if err != nil {
+ 		return "", err
+ 	}
+-	if _, err := commandIn(ctx, cleanRoot, coqc, "-q", "-Q", ".", "TBCI", module+".v"); err != nil {
++	if _, err := compileRocqProject(ctx, cleanRoot, coqc, invocation); err != nil {
+ 		return "", fmt.Errorf("compile target source: %w", err)
+ 	}
+ 	coqtop, err := resolve(a.CoqTop, "coqtop")
+ 	if err != nil {
+ 		return "", err
+ 	}
+-	qualifiedModule := "TBCI." + module
++	qualifiedModule := invocation.qualifiedModule
+ 	script := fmt.Sprintf("Require Import %s.\nCheck %s.%s.\n", qualifiedModule, qualifiedModule, name)
+-	output, err := commandInputIn(ctx, cleanRoot, coqtop, script, "-quiet", "-Q", ".", "TBCI")
++	output, err := commandInputIn(ctx, cleanRoot, coqtop, script, invocation.topArgs...)
+ 	if err != nil {
+ 		return "", fmt.Errorf("inspect target: %w", err)
+ 	}
+diff --git a/internal/prover/rocq/project.go b/internal/prover/rocq/project.go
+new file mode 100644
+index 0000000..8e4892f
+--- /dev/null
++++ b/internal/prover/rocq/project.go
+@@ -0,0 +1,365 @@
++package rocq
++
++import (
++	"bufio"
++	"context"
++	"errors"
++	"fmt"
++	"io/fs"
++	"os"
++	"path/filepath"
++	"regexp"
++	"sort"
++	"strings"
++)
++
++type projectInvocation struct {
++	sourceRel       string
++	compileBase     []string
++	topArgs         []string
++	qualifiedModule string
++	mappings        []projectMapping
++}
++
++type projectMapping struct {
++	directory string
++	logical   string
++	flag      string
++}
++
++func rocqProjectInvocation(root, module string) (projectInvocation, error) {
++	sourceRel, err := uniqueRocqTargetSource(root, module)
++	if err != nil {
++		return projectInvocation{}, err
++	}
++	mappings, err := readCoqProjectMappings(root)
++	if err != nil {
++		return projectInvocation{}, err
++	}
++	if len(mappings) == 0 {
++		mappings = []projectMapping{{directory: ".", logical: "TBCI", flag: "-Q"}}
++	}
++	compileArgs := []string{"-q"}
++	topArgs := []string{"-quiet"}
++	qualified := ""
++	bestDepth := -1
++	for _, mapping := range mappings {
++		compileArgs = append(compileArgs, mapping.flag, mapping.directory, mapping.logical)
++		topArgs = append(topArgs, mapping.flag, mapping.directory, mapping.logical)
++		relFromMapping, ok := pathWithinMapping(sourceRel, mapping.directory)
++		if !ok {
++			continue
++		}
++		depth := strings.Count(filepath.ToSlash(mapping.directory), "/")
++		if depth < bestDepth {
++			continue
++		}
++		modulePath := strings.TrimSuffix(filepath.ToSlash(relFromMapping), ".v")
++		qualified = mapping.logical + "." + strings.ReplaceAll(modulePath, "/", ".")
++		bestDepth = depth
++	}
++	if qualified == "" {
++		return projectInvocation{}, fmt.Errorf("Rocq target source %s is outside every accepted _CoqProject mapping", sourceRel)
++	}
++	return projectInvocation{
++		sourceRel:       filepath.ToSlash(sourceRel),
++		compileBase:     compileArgs,
++		topArgs:         topArgs,
++		qualifiedModule: qualified,
++		mappings:        mappings,
++	}, nil
++}
++
++const (
++	maxRocqProjectSources = 512
++	maxRocqSourceBytes    = 2 * 1024 * 1024
++)
++
++var rocqRequire = regexp.MustCompile(`(?ms)(?:\bFrom\s+([[:alpha:]_][[:alnum:]_']*(?:\.[[:alpha:]_][[:alnum:]_']*)*)\s+)?\bRequire(?:\s+(?:Import|Export))?\s+(.+?)\.(?:\s|$)`)
++
++// compileRocqProject compiles only the target's verifier-derived local source
++// closure. It deliberately does not invoke a producer Makefile, dune file, or
++// command line from _CoqProject.
++func compileRocqProject(ctx context.Context, root, coqc string, invocation projectInvocation) (string, error) {
++	plan, err := rocqCompilePlan(root, invocation)
++	if err != nil {
++		return "", err
++	}
++	var targetOutput string
++	for _, sourceRel := range plan {
++		args := append(append([]string(nil), invocation.compileBase...), sourceRel)
++		output, err := commandIn(ctx, root, coqc, args...)
++		if err != nil {
++			return output, fmt.Errorf("compile %s: %w", sourceRel, err)
++		}
++		if sourceRel == invocation.sourceRel {
++			targetOutput = output
++		}
++	}
++	return targetOutput, nil
++}
++
++func rocqCompilePlan(root string, invocation projectInvocation) ([]string, error) {
++	type sourceNode struct {
++		rel     string
++		imports []string
++	}
++	byModule := make(map[string]sourceNode)
++	byRel := make(map[string]sourceNode)
++	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
++		if walkErr != nil {
++			return walkErr
++		}
++		if entry.IsDir() {
++			switch entry.Name() {
++			case ".git", ".tbci", ".codex-bridge", "_build":
++				if path != root {
++					return filepath.SkipDir
++				}
++			}
++			return nil
++		}
++		if !entry.Type().IsRegular() || filepath.Ext(entry.Name()) != ".v" {
++			return nil
++		}
++		if len(byRel) >= maxRocqProjectSources {
++			return fmt.Errorf("Rocq project exceeds %d source files", maxRocqProjectSources)
++		}
++		info, err := entry.Info()
++		if err != nil {
++			return err
++		}
++		if info.Size() > maxRocqSourceBytes {
++			return fmt.Errorf("Rocq source %s exceeds %d bytes", entry.Name(), maxRocqSourceBytes)
++		}
++		rel, err := filepath.Rel(root, path)
++		if err != nil {
++			return err
++		}
++		rel = filepath.ToSlash(rel)
++		qualified, ok := qualifiedRocqSource(rel, invocation.mappings)
++		if !ok {
++			return nil
++		}
++		if previous, exists := byModule[qualified]; exists && previous.rel != rel {
++			return fmt.Errorf("Rocq module %s is ambiguous", qualified)
++		}
++		data, err := os.ReadFile(path)
++		if err != nil {
++			return err
++		}
++		node := sourceNode{rel: rel, imports: rocqSourceImports(string(data))}
++		byModule[qualified] = node
++		byRel[rel] = node
++		return nil
++	})
++	if err != nil {
++		return nil, err
++	}
++	if _, ok := byRel[invocation.sourceRel]; !ok {
++		return nil, fmt.Errorf("Rocq target source %s is unavailable", invocation.sourceRel)
++	}
++
++	state := make(map[string]uint8)
++	var plan []string
++	var visit func(string) error
++	visit = func(rel string) error {
++		switch state[rel] {
++		case 1:
++			return fmt.Errorf("Rocq local import cycle includes %s", rel)
++		case 2:
++			return nil
++		}
++		state[rel] = 1
++		node := byRel[rel]
++		imports := append([]string(nil), node.imports...)
++		sort.Strings(imports)
++		for _, imported := range imports {
++			dependency, local := byModule[imported]
++			if !local {
++				continue
++			}
++			if err := visit(dependency.rel); err != nil {
++				return err
++			}
++		}
++		state[rel] = 2
++		plan = append(plan, rel)
++		return nil
++	}
++	if err := visit(invocation.sourceRel); err != nil {
++		return nil, err
++	}
++	return plan, nil
++}
++
++func qualifiedRocqSource(sourceRel string, mappings []projectMapping) (string, bool) {
++	qualified := ""
++	bestDepth := -1
++	for _, mapping := range mappings {
++		relFromMapping, ok := pathWithinMapping(sourceRel, mapping.directory)
++		if !ok {
++			continue
++		}
++		depth := strings.Count(filepath.ToSlash(mapping.directory), "/")
++		if depth < bestDepth {
++			continue
++		}
++		modulePath := strings.TrimSuffix(filepath.ToSlash(relFromMapping), ".v")
++		qualified = mapping.logical + "." + strings.ReplaceAll(modulePath, "/", ".")
++		bestDepth = depth
++	}
++	return qualified, qualified != ""
++}
++
++func rocqSourceImports(source string) []string {
++	source = stripRocqComments(source)
++	seen := make(map[string]struct{})
++	var imports []string
++	for _, match := range rocqRequire.FindAllStringSubmatch(source, -1) {
++		prefix := strings.TrimSpace(match[1])
++		for _, name := range strings.Fields(match[2]) {
++			if !rocqModuleName.MatchString(name) {
++				continue
++			}
++			if prefix != "" {
++				name = prefix + "." + name
++			}
++			if _, exists := seen[name]; exists {
++				continue
++			}
++			seen[name] = struct{}{}
++			imports = append(imports, name)
++		}
++	}
++	return imports
++}
++
++func stripRocqComments(source string) string {
++	var result strings.Builder
++	depth := 0
++	for index := 0; index < len(source); index++ {
++		if index+1 < len(source) && source[index:index+2] == "(*" {
++			depth++
++			result.WriteString("  ")
++			index++
++			continue
++		}
++		if depth > 0 && index+1 < len(source) && source[index:index+2] == "*)" {
++			depth--
++			result.WriteString("  ")
++			index++
++			continue
++		}
++		if depth > 0 {
++			if source[index] == '\n' {
++				result.WriteByte('\n')
++			} else {
++				result.WriteByte(' ')
++			}
++			continue
++		}
++		result.WriteByte(source[index])
++	}
++	return result.String()
++}
++
++func uniqueRocqTargetSource(root, module string) (string, error) {
++	want := module + ".v"
++	var matches []string
++	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
++		if walkErr != nil {
++			return walkErr
++		}
++		if entry.IsDir() {
++			switch entry.Name() {
++			case ".git", ".tbci", ".codex-bridge", "_build":
++				if path != root {
++					return filepath.SkipDir
++				}
++			}
++			return nil
++		}
++		if entry.Type().IsRegular() && entry.Name() == want {
++			rel, err := filepath.Rel(root, path)
++			if err != nil {
++				return err
++			}
++			matches = append(matches, rel)
++		}
++		return nil
++	})
++	if err != nil {
++		return "", err
++	}
++	if len(matches) == 0 {
++		return "", fmt.Errorf("Rocq target source %s: %w", module, os.ErrNotExist)
++	}
++	if len(matches) != 1 {
++		return "", fmt.Errorf("Rocq target source %s is ambiguous across %d files", module, len(matches))
++	}
++	return matches[0], nil
++}
++
++func readCoqProjectMappings(root string) ([]projectMapping, error) {
++	path := filepath.Join(root, "_CoqProject")
++	info, err := os.Stat(path)
++	if errors.Is(err, os.ErrNotExist) {
++		return nil, nil
++	}
++	if err != nil {
++		return nil, err
++	}
++	if info.Size() > 64*1024 {
++		return nil, errors.New("_CoqProject is too large")
++	}
++	file, err := os.Open(path)
++	if err != nil {
++		return nil, err
++	}
++	defer file.Close()
++	var fields []string
++	scanner := bufio.NewScanner(file)
++	for scanner.Scan() {
++		line := scanner.Text()
++		if index := strings.IndexByte(line, '#'); index >= 0 {
++			line = line[:index]
++		}
++		fields = append(fields, strings.Fields(line)...)
++	}
++	if err := scanner.Err(); err != nil {
++		return nil, err
++	}
++	var mappings []projectMapping
++	for index := 0; index < len(fields); {
++		flag := fields[index]
++		if flag != "-Q" && flag != "-R" {
++			return nil, fmt.Errorf("unsupported _CoqProject option %s", flag)
++		}
++		if index+2 >= len(fields) {
++			return nil, fmt.Errorf("incomplete _CoqProject option %s", flag)
++		}
++		directory, logical := filepath.Clean(fields[index+1]), fields[index+2]
++		if filepath.IsAbs(directory) || directory == ".." || strings.HasPrefix(directory, ".."+string(filepath.Separator)) {
++			return nil, errors.New("_CoqProject mapping escapes the workspace")
++		}
++		if !rocqModuleName.MatchString(logical) {
++			return nil, errors.New("_CoqProject logical namespace is invalid")
++		}
++		mapped := filepath.Join(root, directory)
++		if rel, err := filepath.Rel(root, mapped); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
++			return nil, errors.New("_CoqProject mapping escapes the workspace")
++		}
++		mappings = append(mappings, projectMapping{directory: filepath.ToSlash(directory), logical: logical, flag: flag})
++		index += 3
++	}
++	return mappings, nil
++}
++
++func pathWithinMapping(sourceRel, directory string) (string, bool) {
++	rel, err := filepath.Rel(filepath.FromSlash(directory), filepath.FromSlash(sourceRel))
++	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
++		return "", false
++	}
++	return rel, true
++}
+diff --git a/internal/prover/rocq/project_test.go b/internal/prover/rocq/project_test.go
+new file mode 100644
+index 0000000..98ffc09
+--- /dev/null
++++ b/internal/prover/rocq/project_test.go
+@@ -0,0 +1,65 @@
++package rocq
++
++import (
++	"os"
++	"path/filepath"
++	"reflect"
++	"strings"
++	"testing"
++)
++
++func TestRocqProjectInvocationPlansNamespacedLocalImports(t *testing.T) {
++	root := t.TempDir()
++	writeRocqProjectFile(t, root, "_CoqProject", "-R . Top\n")
++	writeRocqProjectFile(t, root, "Dep.v", "Lemma helper : True. Proof. exact I. Qed.\n")
++	writeRocqProjectFile(t, root, "Main.v", "From Top Require Import Dep.\nTheorem target : True. Proof. exact helper. Qed.\n")
++
++	invocation, err := rocqProjectInvocation(root, "Main")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if invocation.qualifiedModule != "Top.Main" {
++		t.Fatalf("qualified module = %q", invocation.qualifiedModule)
++	}
++	plan, err := rocqCompilePlan(root, invocation)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if want := []string{"Dep.v", "Main.v"}; !reflect.DeepEqual(plan, want) {
++		t.Fatalf("compile plan = %#v, want %#v", plan, want)
++	}
++}
++
++func TestRocqProjectInvocationRejectsUnsupportedProjectOption(t *testing.T) {
++	root := t.TempDir()
++	writeRocqProjectFile(t, root, "_CoqProject", "-R . Top\n-arg -w\n")
++	writeRocqProjectFile(t, root, "Main.v", "Theorem target : True. Proof. exact I. Qed.\n")
++	if _, err := rocqProjectInvocation(root, "Main"); err == nil || !strings.Contains(err.Error(), "unsupported") {
++		t.Fatalf("expected unsupported option rejection, got %v", err)
++	}
++}
++
++func TestRocqCompilePlanRejectsLocalImportCycle(t *testing.T) {
++	root := t.TempDir()
++	writeRocqProjectFile(t, root, "_CoqProject", "-Q . Top\n")
++	writeRocqProjectFile(t, root, "A.v", "From Top Require Import B.\nTheorem a : True. Proof. exact I. Qed.\n")
++	writeRocqProjectFile(t, root, "B.v", "From Top Require Import A.\nTheorem b : True. Proof. exact I. Qed.\n")
++	invocation, err := rocqProjectInvocation(root, "A")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err := rocqCompilePlan(root, invocation); err == nil || !strings.Contains(err.Error(), "cycle") {
++		t.Fatalf("expected cycle rejection, got %v", err)
++	}
++}
++
++func writeRocqProjectFile(t *testing.T, root, name, content string) {
++	t.Helper()
++	path := filepath.Join(root, filepath.FromSlash(name))
++	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
++		t.Fatal(err)
++	}
++}
+diff --git a/internal/prover/rocq/rocq.go b/internal/prover/rocq/rocq.go
+index edf2593..527a546 100644
+--- a/internal/prover/rocq/rocq.go
++++ b/internal/prover/rocq/rocq.go
+@@ -21,7 +21,7 @@ import (
+ 	"github.com/tbci-research/tbci/internal/integrity"
+ )
+ 
+-const AdapterVersion = "rocq-adapter-v2"
++const AdapterVersion = "rocq-adapter-v3"
+ 
+ var (
+ 	forbiddenShortcut = regexp.MustCompile(`(?m)(^|[[:space:]])(Admitted|admit|Axiom|Conjecture|Parameter|Variable|Hypothesis|Abort)([[:space:].(:;]|$)`)
+@@ -165,10 +165,11 @@ func (a *Adapter) run(ctx context.Context, req integrity.AdapterRequest) (observ
+ 		return observation{}, fmt.Errorf("Rocq target requires goal module and name")
+ 	}
+ 	cleanRoot := filepath.Join(clean, "workspace")
+-	source := filepath.Join(cleanRoot, filepath.FromSlash(module+".v"))
+-	if _, err := os.Stat(source); err != nil {
+-		return observation{}, fmt.Errorf("Rocq target source %s: %w", module, err)
++	invocation, err := rocqProjectInvocation(cleanRoot, module)
++	if err != nil {
++		return observation{}, err
+ 	}
++	source := filepath.Join(cleanRoot, filepath.FromSlash(invocation.sourceRel))
+ 	coqc, err := resolve(a.CoqBin, "coqc")
+ 	if err != nil {
+ 		return observation{}, err
+@@ -196,7 +197,7 @@ func (a *Adapter) run(ctx context.Context, req integrity.AdapterRequest) (observ
+ 		environment.Detail = "task contract names a non-Rocq prover"
+ 	}
+ 
+-	compileOut, compileErr := commandIn(ctx, cleanRoot, coqc, "-q", "-Q", ".", "TBCI", module+".v")
++	compileOut, compileErr := compileRocqProject(ctx, cleanRoot, coqc, invocation)
+ 	shortcut := sourceHasShortcut(source)
+ 	kernel := integrity.Evidence{Kind: "kernel", Status: integrity.StatusSat, Digest: hash(compileOut), Subject: module + ".v"}
+ 	if compileErr != nil {
+@@ -208,9 +209,9 @@ func (a *Adapter) run(ctx context.Context, req integrity.AdapterRequest) (observ
+ 		kernel.Detail = "target source contains a forbidden trust shortcut"
+ 	}
+ 
+-	qualifiedModule := "TBCI." + module
++	qualifiedModule := invocation.qualifiedModule
+ 	script := fmt.Sprintf("Require Import %s.\nCheck %s.%s.\nPrint Assumptions %s.%s.\n", qualifiedModule, qualifiedModule, name, qualifiedModule, name)
+-	semanticOut, semanticErr := commandInputIn(ctx, cleanRoot, coqtop, script, "-quiet", "-Q", ".", "TBCI")
++	semanticOut, semanticErr := commandInputIn(ctx, cleanRoot, coqtop, script, invocation.topArgs...)
+ 	if semanticErr != nil {
+ 		return observation{}, fmt.Errorf("Rocq target inspection: %w", semanticErr)
+ 	}
+@@ -232,7 +233,7 @@ func (a *Adapter) run(ctx context.Context, req integrity.AdapterRequest) (observ
+ 		target.Detail = "checked statement digest does not satisfy task contract"
+ 	}
+ 	assumptions := assumptionReport(semanticOut)
+-	observedImports, importErr := directImportsFromGlob(filepath.Join(cleanRoot, filepath.FromSlash(module+".glob")))
++	observedImports, importErr := directImportsFromGlob(filepath.Join(cleanRoot, strings.TrimSuffix(filepath.FromSlash(invocation.sourceRel), ".v")+".glob"))
+ 	trust := integrity.Evidence{
+ 		Kind:    "trust",
+ 		Status:  integrity.StatusSat,

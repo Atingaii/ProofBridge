@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -20,6 +21,7 @@ import (
 )
 
 type Client struct {
+	usageScanMu    sync.Mutex
 	cfg            *config.Config
 	version        string
 	machineID      string
@@ -27,6 +29,7 @@ type Client struct {
 	instance       string
 	sessions       *SessionManager
 	orchestrations *OrchestrationManager
+	tbci           *tbciRuntime
 	cliConfig      *cliConfigManager
 	shutdown       chan struct{}
 	shutdownOnce   chan struct{}
@@ -51,6 +54,12 @@ func (c *Client) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	c.tbci = prepareTBCIRuntime(ctx, c.cfg)
+	if !c.tbci.capability.Available {
+		slog.Warn("[bridge] TBCI unavailable", "state", c.tbci.capability.State, "reason", c.tbci.capability.Reason)
+	} else {
+		slog.Info("[bridge] TBCI ready", "managed", c.tbci.capability.Managed, "platform", c.tbci.capability.Platform, "version", c.tbci.capability.Version)
+	}
 	hostname, _ := os.Hostname()
 	c.machineID = machineID
 	c.hostname = hostname
@@ -61,6 +70,7 @@ func (c *Client) Run(ctx context.Context) error {
 	}
 	c.sessions = NewSessionManager(c.cfg)
 	c.orchestrations = NewOrchestrationManager(c.cfg)
+	c.orchestrations.SetTBCIRuntime(c.tbci)
 	c.orchestrations.SetCLIConfigManager(c.cliConfig)
 
 	minDelay := c.cfg.Bridge.ReconnectMin.Duration
@@ -166,6 +176,10 @@ func (c *Client) connectOnce(ctx context.Context, token string) error {
 	defer ws.Close()
 
 	capabilities := BridgeCapabilities(c.cfg)
+	if c.tbci != nil {
+		tbci := c.tbci.capability
+		capabilities.TBCI = &tbci
+	}
 	capabilities.ConfigSwitcher = c.cliConfig.capability()
 	reg := protocol.RegisterPayload{
 		Name:         c.cfg.Bridge.Name,
@@ -344,9 +358,12 @@ func BridgeCapabilities(cfg *config.Config) *protocol.BridgeCapabilities {
 		ApprovalPolicy:         cfg.Bridge.ApprovalPolicy,
 		Chat:                   map[string]protocol.BridgeCLICapability{},
 		Orchestration:          map[string]protocol.BridgeCLICapability{},
+		NativeUserInput:        map[string]protocol.NativeUserInputCapability{},
 		Metadata:               map[string]string{"approvalMode": approvalMode(cfg)},
 		DurableTaskGraph:       cfg.Bridge.DurableTaskGraph,
 		UsageLedger:            true,
+		UsageModelRecovery:     2,
+		OrchestrationLiveInput: 1,
 		IsolatedWorkerProfiles: true,
 	}
 	caps.Chat["codex"] = protocol.BridgeCLICapability{
@@ -367,6 +384,36 @@ func BridgeCapabilities(cfg *config.Config) *protocol.BridgeCapabilities {
 		BrowserApproval: codexAvailable && reviewRequired,
 		ApprovalMode:    approvalMode(cfg),
 	}
+	codexUserInput := protocol.NativeUserInputCapability{Version: 3, Reason: "Codex CLI is unavailable"}
+	if codexAvailable {
+		codexUserInput.Reason = "Browser user input requires Codex CLI >= " + codexUserInputMinimumVersion + "; could not confirm a supported version"
+		if mode := approvalMode(cfg); mode != "auto-execute" && mode != "review-required" {
+			codexUserInput.Reason = "Codex browser user input has not been validated in this permission mode"
+		} else if supportedCodexUserInputVersion(bridgeCodexPath(cfg)) {
+			codexUserInput.Available = true
+			codexUserInput.Blocking = true
+			codexUserInput.NonBlocking = true
+			codexUserInput.PermissionModes = []string{"review-required", "auto-execute"}
+			codexUserInput.Reason = ""
+		}
+	}
+	caps.NativeUserInput["codex"] = codexUserInput
+	claudeUserInput := protocol.NativeUserInputCapability{Version: 3, Reason: "Claude CLI is unavailable"}
+	if claudeAvailable {
+		claudeUserInput.Reason = "Browser user input requires Claude Code >= " + claudeUserInputMinimumVersion + "; could not confirm a supported version"
+		if mode := approvalMode(cfg); mode != "auto-execute" && mode != "review-required" {
+			claudeUserInput.Reason = "Claude browser user input has not been validated in this permission mode"
+		} else if supportedClaudeUserInputVersion(bridgeClaudePath(cfg)) {
+			claudeUserInput.Available = true
+			claudeUserInput.Blocking = true
+			claudeUserInput.PermissionModes = []string{"review-required", "auto-execute"}
+			claudeUserInput.Reason = ""
+		}
+	}
+	caps.NativeUserInput["claude"] = claudeUserInput
+	// Claude 2.1.281 is this adapter's verified protocol floor, not a claim
+	// about the upstream introduction release. Future versions are accepted.
+	caps.OrchestrationLiveInputCLIs = map[string]bool{"codex": codexUserInput.Available, "claude": claudeAvailable && userInputVersionAtLeast(claudeRuntimeVersion(bridgeClaudePath(cfg)), "2.1.281")}
 	if runner == "acp" {
 		acpCLI := strings.ToLower(strings.TrimSpace(cfg.Bridge.ACP.CLI))
 		if acpCLI != "codex" {
@@ -392,6 +439,58 @@ func BridgeCapabilities(cfg *config.Config) *protocol.BridgeCapabilities {
 		}
 	}
 	return caps
+}
+
+func supportedCodexUserInputVersion(path string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, path, "--version").Output()
+	version, ok := strings.CutPrefix(strings.TrimSpace(string(output)), "codex-cli ")
+	return err == nil && ok && userInputVersionAtLeast(version, codexUserInputMinimumVersion)
+}
+
+var claudeUserInputVersionCache struct {
+	sync.Mutex
+	path      string
+	info      os.FileInfo
+	checkedAt time.Time
+	valid     bool
+	version   string
+}
+
+func supportedClaudeUserInputVersion(path string) bool {
+	return userInputVersionAtLeast(claudeRuntimeVersion(path), claudeUserInputMinimumVersion)
+}
+func claudeRuntimeVersion(path string) string {
+	resolved, err := exec.LookPath(path)
+	if err != nil {
+		return ""
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return ""
+	}
+	claudeUserInputVersionCache.Lock()
+	defer claudeUserInputVersionCache.Unlock()
+	if resolved == claudeUserInputVersionCache.path && claudeUserInputVersionCache.info != nil &&
+		os.SameFile(info, claudeUserInputVersionCache.info) && info.Size() == claudeUserInputVersionCache.info.Size() &&
+		info.ModTime().Equal(claudeUserInputVersionCache.info.ModTime()) && time.Since(claudeUserInputVersionCache.checkedAt) < 30*time.Second {
+		return claudeUserInputVersionCache.version
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, resolved, "--version").Output()
+	version, ok := strings.CutSuffix(strings.TrimSpace(string(output)), " (Claude Code)")
+	if err != nil || !ok {
+		version = ""
+	}
+	valid := userInputVersionAtLeast(version, claudeUserInputMinimumVersion)
+	claudeUserInputVersionCache.path = resolved
+	claudeUserInputVersionCache.info = info
+	claudeUserInputVersionCache.checkedAt = time.Now()
+	claudeUserInputVersionCache.valid = valid
+	claudeUserInputVersionCache.version = version
+	return version
 }
 
 func commandAvailable(path string) bool {
@@ -500,8 +599,36 @@ func (c *Client) handleEnvelope(ctx context.Context, env protocol.Envelope, out 
 		if !c.sessions.ApprovalResponse(env.Sid, payload) {
 			send(out, protocol.MustEnvelope(protocol.TypeError, env.Sid, protocol.ErrorPayload{Code: "APPROVAL_NOT_FOUND", Message: "approval request not found"}))
 		}
+	case protocol.TypeUserInputResponse:
+		payload, err := protocol.Decode[protocol.UserInputResponsePayload](env)
+		if err != nil || env.Sid != "" || payload.RequestID == "" || payload.RunID == "" || payload.SubmissionID == "" {
+			select {
+			case out <- protocol.MustEnvelope(protocol.TypeError, "", protocol.ErrorPayload{Code: "USER_INPUT_NOT_FOUND", Message: "native user input request is unavailable"}):
+			default:
+			}
+		} else if c.orchestrations != nil {
+			c.orchestrations.dispatchUserInput(payload)
+		} else {
+			select {
+			case out <- protocol.MustEnvelope(protocol.TypeUserInputStatus, "", protocol.UserInputStatusPayload{
+				RequestID: payload.RequestID, RunID: payload.RunID, SubmissionID: payload.SubmissionID,
+				Status: "closed", Lifecycle: "closed", Source: "bridge", Reason: "native user input is unavailable",
+			}):
+			default:
+			}
+		}
+	case protocol.TypeUserInputSync:
+		payload, err := protocol.Decode[protocol.UserInputSyncPayload](env)
+		if err == nil && env.Sid == "" && c.orchestrations != nil && payload.RunID != "" {
+			c.orchestrations.UserInputSync(payload)
+		}
 	case protocol.TypeCloseSession:
 		c.sessions.Close(env.Sid)
+	case protocol.TypeOrchestrationInput:
+		payload, err := protocol.Decode[protocol.OrchestrationInputPayload](env)
+		if err == nil && c.orchestrations != nil {
+			c.orchestrations.dispatchLiveInput(payload)
+		}
 	case protocol.TypeOrchestrationStart:
 		payload, err := protocol.Decode[protocol.OrchestrationStartPayload](env)
 		if err != nil {
@@ -521,10 +648,15 @@ func (c *Client) handleEnvelope(ctx context.Context, env protocol.Envelope, out 
 			return
 		}
 		go func() {
+			c.usageScanMu.Lock()
+			defer c.usageScanMu.Unlock()
+			if ctx.Err() != nil {
+				return
+			}
 			result := scanOrchestrationUsage(payload)
 			send(out, protocol.MustEnvelope(protocol.TypeOrchestrationUsageSyncResult, "", result))
 		}()
-	case protocol.TypeCLIConfigTest, protocol.TypeCLIConfigApply, protocol.TypeCLIConfigReset, protocol.TypeCLIConfigExport:
+	case protocol.TypeCLIConfigTest, protocol.TypeCLIConfigApply, protocol.TypeCLIConfigReset, protocol.TypeCLIConfigExport, protocol.TypeCLIConfigOfficialModels:
 		payload, err := protocol.Decode[protocol.CLIConfigRequest](env)
 		if err != nil || payload.RequestID == "" {
 			return

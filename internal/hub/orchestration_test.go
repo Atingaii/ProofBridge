@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/tencent/codex-bridge/internal/config"
 	"github.com/tencent/codex-bridge/internal/protocol"
 	"github.com/tencent/codex-bridge/internal/store"
@@ -57,12 +58,12 @@ func TestBuildOrchestrationRunStatsPreservesUsageProvenance(t *testing.T) {
 	}
 }
 
-func TestBuildOrchestrationRunStatsPricesLegacyCodexDefault(t *testing.T) {
+func TestBuildOrchestrationRunStatsPreservesUnpricedLegacyCodexDefault(t *testing.T) {
 	run := store.OrchestrationRun{ID: "orc_legacy_usage", CreatedAt: 100, FinishedAt: 110, Status: store.OrchestrationCompleted}
 	stats := buildOrchestrationRunStats(run, []store.OrchestrationEvent{{Kind: "turn.usage", CLI: "codex", Data: map[string]any{
 		"cli": "codex", "model": "default", "inputTokens": float64(23858), "outputTokens": float64(1605), "estimated": true, "costKnown": false, "costSource": "unavailable",
 	}}})
-	if !stats.CostKnown || stats.CostSource != "official-catalog" || len(stats.PricingModels) != 1 || stats.PricingModels[0] != "gpt-5.6-sol" || len(stats.ByCLI) != 1 || stats.ByCLI[0].PricingModel != "gpt-5.6-sol" || stats.EstimatedCostUSD < 0.167439 || stats.EstimatedCostUSD > 0.167441 {
+	if stats.CostKnown || stats.CostSource != "unavailable" || len(stats.PricingModels) != 0 || len(stats.ByCLI) != 1 || stats.ByCLI[0].PricingModel != "" || stats.EstimatedCostUSD != 0 || stats.TotalTokens != 25463 {
 		t.Fatalf("stats = %#v", stats)
 	}
 }
@@ -652,7 +653,7 @@ func TestOrchestrationEventsPersistRunSessionState(t *testing.T) {
 	}
 }
 
-func TestCompletedOrchestrationStreamIsRejected(t *testing.T) {
+func TestCompletedOrchestrationStreamAllowsReceiptSyncConnection(t *testing.T) {
 	t.Parallel()
 
 	s, st, userID, agentID := newOrchestrationTestServer(t)
@@ -665,12 +666,29 @@ func TestCompletedOrchestrationStreamIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/ws/orchestrations?runId="+run.ID, nil)
-	req.AddCookie(&http.Cookie{Name: accessCookieName, Value: token})
-	rr := httptest.NewRecorder()
-	s.httpSrv.Handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusConflict {
-		t.Fatalf("completed orchestration stream status = %d, want %d, body = %s", rr.Code, http.StatusConflict, rr.Body.String())
+	server := httptest.NewServer(s.httpSrv.Handler)
+	defer server.Close()
+	header := http.Header{}
+	header.Add("Cookie", (&http.Cookie{Name: accessCookieName, Value: token}).String())
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/orchestrations?runId=" + run.ID
+	conn, response, err := websocket.DefaultDialer.Dial(wsURL, header)
+	if err != nil {
+		status := 0
+		if response != nil {
+			status = response.StatusCode
+		}
+		t.Fatalf("completed orchestration receipt stream rejected: status=%d err=%v", status, err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var initial protocol.Envelope
+	if err := conn.ReadJSON(&initial); err != nil {
+		t.Fatal(err)
+	}
+	if initial.Type != protocol.TypeStatus {
+		t.Fatalf("completed orchestration initial frame = %s", initial.Type)
 	}
 }
 
@@ -843,6 +861,7 @@ func TestContinueOrchestrationSendsCompactedContext(t *testing.T) {
 		capabilities: &protocol.BridgeCapabilities{
 			Sandbox:        "danger-full-access",
 			ApprovalPolicy: "never",
+			TBCI:           &protocol.TBCICapability{Available: true, Managed: true, State: "ready"},
 			Orchestration: map[string]protocol.BridgeCLICapability{
 				"claude": {Available: true},
 				"codex":  {Available: true},
@@ -860,10 +879,11 @@ func TestContinueOrchestrationSendsCompactedContext(t *testing.T) {
 		"prompt":                  "second task",
 		"maxTurns":                20,
 		"profile":                 "formal-proof",
+		"verificationMode":        "tbci",
 		"nativeContextCompaction": "after-turn",
 	}, http.StatusOK)
 	loaded := body["run"].(map[string]any)
-	if loaded["id"] != run.ID || loaded["status"] != store.OrchestrationRunning {
+	if loaded["id"] != run.ID || loaded["status"] != store.OrchestrationRunning || loaded["verificationMode"] != "tbci" {
 		t.Fatalf("continue body = %#v", loaded)
 	}
 	var env protocol.Envelope
@@ -882,7 +902,7 @@ func TestContinueOrchestrationSendsCompactedContext(t *testing.T) {
 	if payload.CodexThreadID != "thread_resume" || !payload.ClaudeStarted || payload.RunCWD != "/abs/resume" {
 		t.Fatalf("payload session state = %#v", payload)
 	}
-	if payload.Profile != "formal-proof" || payload.NativeContextCompaction != "after-turn" || payload.MaxTurns != 12 || payload.MaxTurnsRequested != 20 {
+	if payload.Profile != "formal-proof" || payload.VerificationMode != "tbci" || payload.NativeContextCompaction != "after-turn" || payload.MaxTurns != 12 || payload.MaxTurnsRequested != 20 {
 		t.Fatalf("payload profile/maxTurns = %#v", payload)
 	}
 	if !strings.Contains(payload.Context, "first task") || !strings.Contains(payload.Context, "implemented first task") {
@@ -1129,6 +1149,7 @@ func TestCreateOrchestrationForwardsFirstCLI(t *testing.T) {
 		capabilities: &protocol.BridgeCapabilities{
 			Sandbox:        "danger-full-access",
 			ApprovalPolicy: "never",
+			TBCI:           &protocol.TBCICapability{Available: true, Managed: true, State: "ready"},
 			Orchestration: map[string]protocol.BridgeCLICapability{
 				"claude": {Available: true},
 				"codex":  {Available: true},
@@ -1143,13 +1164,15 @@ func TestCreateOrchestrationForwardsFirstCLI(t *testing.T) {
 	defer s.pool.UnregisterAgent(agentID, conn)
 
 	body := createOrchestrationHTTP(t, s, userID, map[string]any{
-		"agentId":  agentID,
-		"prompt":   "run visible proof smoke",
-		"firstCli": "codex",
-		"maxTurns": 2,
+		"agentId":          agentID,
+		"prompt":           "run visible proof smoke",
+		"firstCli":         "codex",
+		"profile":          "formal-proof",
+		"verificationMode": "tbci",
+		"maxTurns":         2,
 	}, http.StatusCreated)
 	run := body["run"].(map[string]any)
-	if run["firstCli"] != "codex" {
+	if run["firstCli"] != "codex" || run["verificationMode"] != "tbci" {
 		t.Fatalf("run firstCli = %#v", run["firstCli"])
 	}
 
@@ -1158,8 +1181,67 @@ func TestCreateOrchestrationForwardsFirstCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload.FirstCLI != "codex" {
+	if payload.FirstCLI != "codex" || payload.VerificationMode != "tbci" {
 		t.Fatalf("payload first cli = %q", payload.FirstCLI)
+	}
+}
+
+func TestNormalizeOrchestrationRejectsTBCIWithoutFormalProof(t *testing.T) {
+	t.Parallel()
+	s, _, _, _ := newOrchestrationTestServer(t)
+	w := httptest.NewRecorder()
+	_, ok := s.normalizeOrchestrationStart(w, orchestrationStartRequest{
+		Prompt: "ordinary task", Profile: "default", VerificationMode: "tbci", MaxTurns: 2,
+	})
+	if ok || w.Code != http.StatusBadRequest {
+		t.Fatalf("TBCI/default normalization = ok:%v status:%d body:%s", ok, w.Code, w.Body.String())
+	}
+}
+
+func TestValidateVerificationCapabilityRequiresReadyTBCI(t *testing.T) {
+	t.Parallel()
+
+	s, _, _, agentID := newOrchestrationTestServer(t)
+	conn := &BridgeConn{
+		agentID: agentID,
+		capabilities: &protocol.BridgeCapabilities{
+			TBCI: &protocol.TBCICapability{Available: false, State: "unsupported", Reason: "unsupported platform"},
+		},
+		wsSender: wsSender{send: make(chan protocol.Envelope, 1), done: make(chan struct{})},
+	}
+	s.pool.RegisterAgent(conn)
+	defer s.pool.UnregisterAgent(agentID, conn)
+
+	if err := s.validateVerificationCapability(agentID, "default", "agent"); err != nil {
+		t.Fatalf("ordinary mode rejected: %v", err)
+	}
+	if err := s.validateVerificationCapability(agentID, "formal-proof", "tbci"); err == nil || !strings.Contains(err.Error(), "unsupported platform") {
+		t.Fatalf("unavailable TBCI error = %v", err)
+	}
+	conn.capabilities.TBCI = &protocol.TBCICapability{Available: true, Managed: true, State: "ready"}
+	if err := s.validateVerificationCapability(agentID, "formal-proof", "tbci"); err != nil {
+		t.Fatalf("ready TBCI rejected: %v", err)
+	}
+	conn.capabilities.TBCI = &protocol.TBCICapability{Available: true, Managed: true, State: "starting"}
+	if err := s.validateVerificationCapability(agentID, "formal-proof", "tbci"); err == nil || !strings.Contains(err.Error(), "starting") {
+		t.Fatalf("non-ready TBCI error = %v", err)
+	}
+}
+
+func TestValidateVerificationCapabilityRejectsLegacyBridge(t *testing.T) {
+	t.Parallel()
+
+	s, _, _, agentID := newOrchestrationTestServer(t)
+	conn := &BridgeConn{
+		agentID:      agentID,
+		capabilities: &protocol.BridgeCapabilities{},
+		wsSender:     wsSender{send: make(chan protocol.Envelope, 1), done: make(chan struct{})},
+	}
+	s.pool.RegisterAgent(conn)
+	defer s.pool.UnregisterAgent(agentID, conn)
+
+	if err := s.validateVerificationCapability(agentID, "formal-proof", "tbci"); err == nil || !strings.Contains(err.Error(), "update and reconnect") {
+		t.Fatalf("legacy Bridge error = %v", err)
 	}
 }
 

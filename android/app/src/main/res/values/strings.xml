@@ -1,7 +1,14 @@
-<?xml version='1.0' encoding='utf-8'?>
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Codex Bridge</string>
-    <string name="title_activity_main">Codex Bridge</string>
-    <string name="package_name">tech.sparkapi.codexbridge</string>
-    <string name="custom_url_scheme">tech.sparkapi.codexbridge</string>
+    <string name="load_failed">暂时无法打开页面</string>
+    <string name="load_failed_hint">请检查网络后重试。已分派的远程任务继续运行，重试不会重新提交任务。</string>
+    <string name="retry">重新打开</string>
+    <string name="no_file_picker">设备上没有可用的文件选择器</string>
+    <string name="unsupported_link">无法打开此链接类型</string>
+    <string name="no_link_handler">设备上没有可以打开此链接的应用</string>
+    <string name="downloading">正在保存文件，请保持应用开启</string>
+    <string name="download_saved">文件已保存到所选位置</string>
+    <string name="download_failed">文件保存失败，请重试并检查目标文件</string>
+    <string name="download_busy">请先完成当前文件保存</string>
 </resources>

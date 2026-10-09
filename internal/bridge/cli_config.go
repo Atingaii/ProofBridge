@@ -25,6 +25,7 @@ import (
 
 	"github.com/tencent/codex-bridge/internal/config"
 	"github.com/tencent/codex-bridge/internal/protocol"
+	"github.com/tencent/codex-bridge/internal/providerprobe"
 	"golang.org/x/crypto/hkdf"
 )
 
@@ -130,7 +131,7 @@ func (m *cliConfigManager) capability() *protocol.CLIConfigSwitcherCapability {
 	pub := m.private.PublicKey().Bytes()
 	sum := sha256.Sum256(pub)
 	return &protocol.CLIConfigSwitcherCapability{
-		Version:   2,
+		Version:   3,
 		PublicKey: base64.RawStdEncoding.EncodeToString(pub),
 		KeyID:     base64.RawURLEncoding.EncodeToString(sum[:9]),
 		CLIs:      []string{"codex", "claude"},
@@ -145,6 +146,21 @@ func (m *cliConfigManager) handle(ctx context.Context, typ string, req protocol.
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if typ == protocol.TypeCLIConfigOfficialModels {
+		if req.CLI != "codex" {
+			res.Error = "official model discovery is only supported for Codex"
+			return res
+		}
+		models, err := m.officialCodexModels(ctx)
+		if err != nil {
+			res.Error = "could not load the native official Codex model directory"
+			return res
+		}
+		res.OK = true
+		res.OfficialModels = models
+		return res
+	}
 
 	if typ == protocol.TypeCLIConfigReset {
 		err := m.reset(req.CLI)
@@ -331,7 +347,7 @@ func probeProvider(parent context.Context, cli, rawBase, model, key string) (str
 				authFailed = true
 			}
 			if inferenceErr != nil {
-				messages = append(messages, boundedProbeError(inferenceErr))
+				messages = append(messages, fmt.Sprintf("%s inference (HTTP %d): %s", base, inferenceStatus, boundedProbeError(inferenceErr)))
 			} else {
 				messages = append(messages, fmt.Sprintf("%s inference returned HTTP %d", base, inferenceStatus))
 			}
@@ -350,6 +366,12 @@ func probeProvider(parent context.Context, cli, rawBase, model, key string) (str
 			if inferenceStatus == http.StatusUnauthorized || inferenceStatus == http.StatusForbidden {
 				authFailed = true
 			}
+			if inferenceErr != nil {
+				messages = append(messages, fmt.Sprintf("%s inference (HTTP %d): %s", base, inferenceStatus, boundedProbeError(inferenceErr)))
+			} else {
+				messages = append(messages, fmt.Sprintf("%s inference returned HTTP %d", base, inferenceStatus))
+			}
+			continue
 		}
 		if fetchErr != nil {
 			messages = append(messages, boundedProbeError(fetchErr))
@@ -462,8 +484,7 @@ func probeInference(ctx context.Context, client *http.Client, base, model, key, 
 		return 0, err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-	return resp.StatusCode, nil
+	return resp.StatusCode, providerprobe.ValidateInferenceResponse(resp, cli)
 }
 
 func setProviderHeaders(req *http.Request, key, cli string) {

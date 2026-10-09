@@ -476,7 +476,7 @@ func (m *OrchestrationManager) send(env protocol.Envelope) {
 		return
 	}
 	m.mu.Unlock()
-	if env.Type != protocol.TypeOrchestrationEvent {
+	if env.Type != protocol.TypeOrchestrationEvent && !isUserInputEnvelope(env.Type) {
 		send(out, env)
 		return
 	}
@@ -512,7 +512,7 @@ func (m *OrchestrationManager) send(env protocol.Envelope) {
 }
 
 func (m *OrchestrationManager) bufferPendingLocked(env protocol.Envelope) bool {
-	if env.Type != protocol.TypeOrchestrationEvent {
+	if env.Type != protocol.TypeOrchestrationEvent && !isUserInputEnvelope(env.Type) {
 		return false
 	}
 	m.pending = append(m.pending, env)
@@ -520,4 +520,13 @@ func (m *OrchestrationManager) bufferPendingLocked(env protocol.Envelope) bool {
 		m.pending = m.pending[len(m.pending)-1000:]
 	}
 	return true
+}
+
+func isUserInputEnvelope(kind string) bool {
+	switch kind {
+	case protocol.TypeUserInputRequest, protocol.TypeUserInputStatus, protocol.TypeUserInputSnapshot, protocol.TypeOrchestrationInputStatus:
+		return true
+	default:
+		return false
+	}
 }

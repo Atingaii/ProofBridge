@@ -131,17 +131,17 @@ context in the same `runID`.
   receive lightweight, browser-visible proof workflow reminders up front so the
   CLI records target obligations, build/scan/audit evidence, and blockers in
   its normal result.
-- After an intermediate round's durable reviewer, Bridge records local evidence facts and runs
-  two fresh Agent Verifiers with role 1 and role 2's bound presets. Each
-  independently evaluates handoff completeness, command/proof evidence, and
-  the reviewer boundary; neither can see the other's answer or enter the
-  worker's native session. Bridge emits a visible `verifier.verdict`; only a
-  two-Agent unanimous pass may set
+- After an intermediate round's durable reviewer, Bridge runs two fresh Agent Verifiers with
+  role 1 and role 2's bound presets. Each receives only the original task and
+  independently inspects the actual project workspace with read-only checks;
+  neither can see the other's answer or enter the worker's native session.
+  Bridge waits for both results, emits a visible `verifier.verdict`, and a
+  one-of-two-Agent pass may set
   `run.end.data.terminalReason=verified-early` and end unused scheduled turns;
   every other verdict leaves the relay schedule unchanged. A normally finished
-  final configured reviewer ends with `max-turns`, without another verifier or
-  initial-plan comparison. Follow-ups still reuse the same run ID; see
-  [configured-round-completion-and-usage.md](configured-round-completion-and-usage.md).
+  final configured reviewer instead ends with `max-turns`, without another
+  verifier or initial-plan comparison. Follow-ups still reuse the same run ID;
+  see [configured-round-completion-and-usage.md](configured-round-completion-and-usage.md).
 - Uploaded orchestration file contents are sent to the Bridge with the current
   prompt, while `user.message` events persist only file metadata in
   `event.data.files` so the timeline can show what was attached without
@@ -225,8 +225,8 @@ CLI answer after command events instead of visually ending on the last
 CLI has supplied a final conclusion or handoff summary; progress-only text such
 as "next I will..." is retried in the same turn first. Bridge does not append
 proof-specific acceptance summaries. Two isolated Agent Verifiers may append
-an explicit safe `verifier.verdict` event derived from the structured handoff,
-recorded command evidence, and recorded local evidence facts. The event contains only bounded
+an explicit safe `verifier.verdict` event based on each verifier's independent
+task, workspace, and verification checks. The event contains only bounded
 structured verdicts, not hidden model prose; if a CLI response is sparse, the
 browser still shows the recorded command events and relay terminal message.
 The browser event stream is only kept open for active runs. Completed, failed,
@@ -241,8 +241,9 @@ history is fetched on demand with `beforeSeq` from the same endpoint. This keeps
 slow historical runs from forcing SQLite to return, the network to transfer, and
 the browser to render the full transcript before the newest result is usable.
 The initial run list can be scoped by endpoint through
-`internal/hub/orchestration.go:handleListOrchestrations` to avoid loading other
-endpoints' runs before the user switches to them.
+`internal/hub/orchestration_history.go:handleListOrchestrations` to avoid loading
+other endpoints' runs before the user switches to them. Server-side filters and
+stable pagination also cover older runs; see [desktop audit fixes](desktop-audit-fixes.md).
 
 ## Implementation Steps
 
@@ -311,7 +312,7 @@ endpoints' runs before the user switches to them.
     shares.
 31. After durable reviewer turns, record local facts and run two isolated Agent
     Verifiers; render every checker result and stop the remaining schedule only
-    for a unanimous pass.
+    when either verifier passes.
 
 ## Exit Gates
 
@@ -411,10 +412,10 @@ endpoints' runs before the user switches to them.
   APIs or public shares.
 - Switching worker pairs cannot leak a stale preset or reasoning-effort slot
   into the new run request, and direct requests receive a slot-specific error.
-- A passing two-Agent plus local-hard-gate quorum is visible in the timeline
-  and terminates remaining turns with `verified-early`; any model disagreement,
-  invalid verdict, missing handoff condition, evidence, reviewer boundary,
-  failed command, or unresolved formal-proof work continues the normal schedule.
+- A passing one-of-two-Agent verdict is visible in the timeline and terminates
+  remaining turns with `verified-early`. The verifiers receive no Worker
+  handoff, command, reviewer-boundary, or formal-proof facts; only two
+  continuing or invalid verdicts continue the normal schedule.
 - `turn.start.content` does not contain the full relay prompt or compacted
   context; the full prompt is carried only in typed `TurnStartData.PromptText`
   for authenticated local diagnostics and is stripped from public shares.
@@ -449,3 +450,14 @@ you look first?**
 A: Check whether the UI cleared `codexBridge.activeOrchestrationRunId`, whether
 `startRun` used `/api/orchestrations` instead of the run-specific prompts
 endpoint, and whether Hub logged `Resume=true` in the Bridge start payload.
+
+## Official Codex worker parameters
+
+[Official model selection](official-codex-worker-models.md) extends the
+existing worker binding snapshot with model and effort. A continuation that
+omits the profile mapping reuses that snapshot; an explicit mapping follows
+existing replacement rules. Model/effort changes restart only the assigned
+native app-server process and resume the original thread ID. Returning to
+parameter-free official defaults must also override persisted native model
+metadata so the old model/effort cannot reappear. Roles and dispatch remain
+unchanged.

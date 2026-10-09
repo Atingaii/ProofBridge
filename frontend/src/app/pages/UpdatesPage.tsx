@@ -19,6 +19,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { Language } from '../lib/i18n';
+import { SiteBuildInfo } from '../components/SiteBuildInfo';
 
 type UpdatesPageProps = {
   language: Language;
@@ -190,19 +191,20 @@ const releases: Array<{ date: string; version: string; summary: string; items: U
   },
 ];
 
-const highlights = [
-  { icon: Settings2, label: '模型切换', value: 'Hub 直接配置' },
-  { icon: Network, label: '多机器', value: '离线仍可查看' },
-  { icon: Zap, label: '长编排', value: '更轻、更稳定' },
-] as const;
-
 export function UpdatesPage({ language, setLanguage, isDarkMode, setIsDarkMode }: UpdatesPageProps) {
+  const text = (zh: string, en: string) => language === 'zh' ? zh : en;
+  const latestDocumentedRelease = releases[0];
+  const highlights = [
+    { icon: Zap, label: text('动态执行', 'Dynamic execution'), value: text('按完成或停滞判定结束；旧运行保留原模式。', 'Ends on completion or a stall; existing runs retain their mode.') },
+    { icon: Network, label: text('同一运行追加', 'Follow up in the same run'), value: text('支持的端点可排队或立即接收补充指令。', 'Supported endpoints can queue input or receive it immediately.') },
+    { icon: Bot, label: text('原生问答', 'Native questions'), value: text('问题卡是否可用取决于账户与端点能力。', 'Question cards depend on account and endpoint capabilities.') },
+  ];
   useEffect(() => {
-    document.title = 'ProofBridge 更新记录';
-  }, []);
+    document.title = text('ProofBridge 更新记录', 'ProofBridge Release Notes');
+  }, [language]);
 
   return (
-    <div className="min-h-screen bg-background text-foreground font-sans">
+    <div lang={language === 'zh' ? 'zh-CN' : 'en'} className="phone-page min-h-screen bg-background text-foreground font-sans">
       <header className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85">
         <div className="mx-auto flex h-14 max-w-5xl items-center gap-3 px-4 md:px-6">
           <a href="/" className="flex items-center gap-2 font-medium">
@@ -210,26 +212,28 @@ export function UpdatesPage({ language, setLanguage, isDarkMode, setIsDarkMode }
             <span className="text-sm">ProofBridge</span>
           </a>
           <span className="hidden h-4 w-px bg-border sm:block" />
-          <span className="hidden text-sm text-muted-foreground sm:block">更新记录</span>
+          <span className="hidden text-sm text-muted-foreground sm:block">{text('更新记录', 'Release notes')}</span>
           <nav className="ml-auto flex items-center gap-1">
-            <a href="/help" className="hidden h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground sm:inline-flex"><BookOpen className="h-3.5 w-3.5" />使用帮助</a>
-            <button type="button" className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setLanguage(language === 'zh' ? 'en' : 'zh')} aria-label="切换语言"><Globe className="h-3.5 w-3.5" />{language === 'zh' ? '中文' : 'EN'}</button>
-            <button type="button" className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setIsDarkMode(!isDarkMode)} aria-label={isDarkMode ? '切换浅色模式' : '切换深色模式'}>{isDarkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</button>
-            <a href="/" className="ml-1 inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary/90">打开应用 <ArrowRight className="h-3.5 w-3.5" /></a>
+            <a href="/help" className="hidden h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground sm:inline-flex"><BookOpen className="h-3.5 w-3.5" />{text('使用帮助', 'Help')}</a>
+            <button type="button" className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setLanguage(language === 'zh' ? 'en' : 'zh')} aria-label={text('切换语言', 'Change language')}><Globe className="h-3.5 w-3.5" />{language === 'zh' ? '中文' : 'EN'}</button>
+            <button type="button" className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setIsDarkMode(!isDarkMode)} aria-label={isDarkMode ? text('切换浅色模式', 'Switch to light mode') : text('切换深色模式', 'Switch to dark mode')}>{isDarkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</button>
+            <a href="/" className="ml-1 inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary/90">{text('打开应用', 'Open app')} <ArrowRight className="h-3.5 w-3.5" /></a>
           </nav>
         </div>
       </header>
 
       <main className="mx-auto max-w-5xl px-4 pb-24 pt-12 md:px-6 md:pt-16">
         <section className="border-b border-border pb-12">
-          <div className="mb-4 flex items-center gap-2 text-xs font-medium text-emerald-600 dark:text-emerald-400"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />当前版本 v0.3.44</div>
+          <div className="mb-4 flex items-center gap-2 text-xs font-medium text-muted-foreground"><History className="h-3.5 w-3.5" />{text('最新收录的历史版本', 'Latest documented release')} {latestDocumentedRelease.version}</div>
           <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
             <div>
-              <h1 className="text-3xl font-semibold leading-tight sm:text-4xl">最近更新</h1>
-              <p className="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">品牌、模型切换、多机器稳定性和长编排体验，最近几次更新集中解决了这些高频问题。</p>
+              <h1 className="text-3xl font-semibold leading-tight sm:text-4xl">{text('更新记录与版本信息', 'Release notes and build information')}</h1>
+              <p className="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">{text('这里保留已整理的历史发布说明，并单独列出当前页面构建与实时 Hub 版本。历史记录可能不包含后续部署；当前动态执行、追加输入和原生问答的操作请查看使用帮助。', 'This page preserves documented releases and separately reports the frontend build and live Hub version. The archive may not include later deployments. See Help for current dynamic execution, follow-up input and native question workflows.')}</p>
             </div>
-            <a href="https://github.com/Atingaii/ProofBridge/releases/tag/v0.3.44" target="_blank" rel="noreferrer" className="inline-flex h-9 w-fit items-center gap-2 rounded-md border border-border px-3 text-xs font-medium hover:bg-muted">查看 Release <ExternalLink className="h-3.5 w-3.5" /></a>
+            <a href="https://github.com/Atingaii/ProofBridge/releases" target="_blank" rel="noreferrer" className="inline-flex h-9 w-fit items-center gap-2 rounded-md border border-border px-3 text-xs font-medium hover:bg-muted">{text('GitHub 发布记录', 'GitHub releases')} <ExternalLink className="h-3.5 w-3.5" /></a>
           </div>
+          <a href="/help#live-input" className="mt-4 inline-flex items-center gap-1 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">{text('查看当前操作说明', 'Read the current guide')} <ArrowRight className="h-3 w-3" /></a>
+          <SiteBuildInfo language={language} />
           <div className="mt-8 grid gap-px overflow-hidden rounded-md border border-border bg-border sm:grid-cols-3">
             {highlights.map(({ icon: Icon, label, value }) => (
               <div key={label} className="bg-background p-4">
@@ -241,13 +245,15 @@ export function UpdatesPage({ language, setLanguage, isDarkMode, setIsDarkMode }
         </section>
 
         <section className="pt-12" aria-labelledby="timeline-title">
-          <div className="mb-8 flex items-center gap-2"><History className="h-4 w-4 text-muted-foreground" /><h2 id="timeline-title" className="text-sm font-semibold">修正时间线</h2></div>
+          <div className="mb-3 flex items-center gap-2"><History className="h-4 w-4 text-muted-foreground" /><h2 id="timeline-title" className="text-sm font-semibold">{text('修正时间线', 'Documented release timeline')}</h2></div>
+          <p className="mb-8 text-xs leading-6 text-muted-foreground">{text('以下条目保留发布时的中文原文，描述当时行为；它们不是当前站点、Hub 或端点的版本检测结果。', 'Historical entries below remain in their original Chinese and describe behavior at the time of release. They are not a version check for this site, its Hub or your endpoints.')}</p>
           <div className="space-y-12">
             {releases.map((release) => (
-              <article key={release.date} className="grid gap-5 md:grid-cols-[160px_minmax(0,1fr)] md:gap-8">
+              <article key={release.version} lang="zh-CN" className="grid gap-5 md:grid-cols-[160px_minmax(0,1fr)] md:gap-8">
                 <div>
                   <time className="text-sm font-medium">{release.date}</time>
                   <p className="mt-1 font-mono text-[11px] text-muted-foreground">{release.version}</p>
+                  {language === 'en' && <p lang="en" className="mt-2 text-[11px] leading-5 text-muted-foreground">Original release notes (Chinese)</p>}
                 </div>
                 <div className="relative border-l border-border pl-6">
                   <span className="absolute -left-[4.5px] top-1.5 h-2 w-2 rounded-full border-2 border-background bg-emerald-500 ring-1 ring-border" />

@@ -82,6 +82,8 @@ type SessionHandle struct {
 }
 
 type RunnerRequest struct {
+	LiveInput      *liveInputMailbox
+	LiveInputReady <-chan struct{}
 	SID            string
 	Content        string
 	RemoteThreadID string
@@ -89,10 +91,18 @@ type RunnerRequest struct {
 	PromptID       string
 	CWD            string
 	Approvals      ApprovalRequester
+	// UserInput is set only for orchestration runs whose browser can receive
+	// native questions. The runner never starts a new turn to answer one.
+	UserInput       UserInputRequester
+	NativeUserInput bool
 	// Env and Model are orchestration-only process overrides. They remain local
 	// to the spawned CLI and never enter a browser payload or transcript.
-	Env   []string
-	Model string
+	Env             []string
+	Model           string
+	ReasoningEffort string
+	OfficialLogin   bool
+	// Orchestration persists native identity before a turn can be canceled.
+	OnNativeIdentity func(threadID, model string)
 }
 
 type RunnerResult struct {
@@ -134,6 +144,11 @@ type RunnerToolEvent struct {
 
 type ApprovalRequester interface {
 	RequestApproval(ctx context.Context, req protocol.ApprovalRequestPayload) (protocol.ApprovalResponsePayload, error)
+}
+
+type UserInputRequester interface {
+	RegisterUserInput(ctx context.Context, blocking bool, questions []protocol.UserInputQuestion, deliver func(context.Context, protocol.UserInputResponsePayload) error) (string, error)
+	CloseUserInput(requestID, reason string)
 }
 
 func NewRunner(cfg *config.Config) (Runner, error) {

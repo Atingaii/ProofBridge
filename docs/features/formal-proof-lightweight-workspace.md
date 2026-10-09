@@ -35,7 +35,9 @@ state for a later turn; Bridge does not structurally validate it after every
 turn.
 
 A follow-up reuses the persisted `RunCWD` and records the latest user request in
-the same document. `internal/bridge/orchestration_harness.go:appendFormalProofFollowup`
+the same document. Preparation is idempotent by `(runID, promptSeq)`, so durable
+node isolation may clear native `Resume` without dropping or duplicating the
+follow-up uploads and ledger entry. `internal/bridge/orchestration_harness.go:appendFormalProofFollowup`
 maintains only a delimited Bridge-owned block: each request is bounded, the
 newest eight remain verbatim, and a counter records compacted predecessors.
 Worker-maintained goals, obligations, validation evidence, blockers, and
@@ -53,7 +55,8 @@ commands directly and record only important evidence. It does not require
 
 ## Data And Protocol Impact
 
-- No stored fields or wire payloads change.
+- `internal/protocol.OrchestrationStartPayload.taskPrompt` preserves the exact
+  user submission separately from durable-node instructions.
 - `RunStartData.CWD` remains the user-selected project directory.
 - Existing bootstrap notes remain browser-visible but describe the lightweight
   workspace rather than a Harness.
@@ -90,6 +93,9 @@ turning orchestration metadata maintenance into a second task.
 
 ### Who verifies the proof now?
 
-As before, Codex or Claude runs the actual project-specific Coq/Rocq, Isabelle,
-or Lean commands. Their visible command output is the evidence; Bridge does not
-replace the proof assistant with a shell wrapper.
+In the default `agent` verification mode, Codex or Claude runs the actual
+project-specific Coq/Rocq, Isabelle, or Lean commands and the two Agent
+Verifiers judge completion. In explicitly selected `tbci` mode, Bridge freezes
+and invokes its managed TBCI verifier as the sole completion authority. The
+proof assistant remains the native checker underneath TBCI; there is no Agent
+Verifier fallback.

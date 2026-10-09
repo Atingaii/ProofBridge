@@ -14,6 +14,7 @@ import {
   orchestrationApprovalMode,
   orchestrationCapability,
   orchestrationEventKey,
+  orchestrationParticipantLabel,
   orchestrationTurnLabel,
   stripMachineContractLines,
 } from '../lib/utils';
@@ -28,9 +29,9 @@ export function RunConclusionCard({ conclusion, status, t }: { conclusion: NonNu
         {positive ? <CircleCheckBig className="h-5 w-5" /> : <CircleX className="h-5 w-5" />}
       </div>
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2"><h2 className="text-base font-bold">{t.runConclusion}</h2><span className="rounded-full border border-current/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">{outcome}</span></div>
+        <div className="flex flex-wrap items-center gap-2"><h2 className="text-base font-bold">{t.runConclusion}</h2><span className="rounded-full border border-current/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">{positive ? t.executionCompleted : outcome}</span></div>
         <div className="mt-2 text-sm leading-6"><MessageContent content={conclusion.summary || t.noVisibleAnswer} /></div>
-        {obligations.length ? <div className="mt-3 border-t border-current/15 pt-3 text-xs"><div className="mb-1 font-semibold">{t.unmetObligations}</div><ul className="list-disc space-y-1 pl-4">{obligations.map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
+        {obligations.length ? <div className="mt-3 border-t border-current/15 pt-3 text-xs"><div className="mb-1 font-semibold">{positive ? t.verificationRecords : t.unmetObligations}</div><ul className="list-disc space-y-1 pl-4">{[...new Set(obligations)].map((item) => <li key={item}>{item}</li>)}</ul></div> : null}
         {conclusion.buildOrAuditCommands?.length ? <div className="mt-3 space-y-1 text-xs text-muted-foreground"><div className="font-semibold">{t.commands}</div>{conclusion.buildOrAuditCommands.map((command) => <code key={command} className="block rounded bg-background/60 px-2 py-1">{command}</code>)}</div> : null}
       </div>
     </div>
@@ -45,6 +46,8 @@ export function CapabilityMatrix({ agent, t }: { agent: Agent | null; t: UIText 
   const approvalMode = orchestrationApprovalMode(agent);
   const auto = approvalMode === 'auto-execute' || approvalMode === 'strict-workspace';
   const modeLabel = approvalMode === 'strict-workspace' ? t.strictWorkspace : auto ? t.autoExecute : t.reviewRequired;
+	const tbci = agent?.capabilities?.tbci;
+	const tbciReady = Boolean(tbci?.available && tbci.state === 'ready');
   return (
     <div className="rounded-md border border-border bg-muted/20 p-2.5">
       <div className="mb-2 flex items-center justify-between gap-2">
@@ -70,6 +73,19 @@ export function CapabilityMatrix({ agent, t }: { agent: Agent | null; t: UIText 
             </div>
           );
         })}
+		<div className="grid grid-cols-[96px_minmax(0,1fr)_auto] items-center gap-2 text-xs">
+			<span className="font-medium">TBCI</span>
+			<span className="truncate text-muted-foreground" title={tbci?.reason || ''}>
+				{tbciReady ? (tbci?.managed ? t.tbciManagedRuntime : t.tbciExternalRuntime) : (tbci?.reason || t.tbciUpdateBridgeHint)}
+			</span>
+			<span className={cn(
+				"inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px]",
+				tbciReady ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "border-destructive/20 bg-destructive/10 text-destructive"
+			)}>
+				{tbciReady ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
+				{tbciReady ? t.available : t.notAvailable}
+			</span>
+		</div>
       </div>
     </div>
   );
@@ -78,12 +94,15 @@ export function CapabilityMatrix({ agent, t }: { agent: Agent | null; t: UIText 
 export function OrchestrationEventItem({ item, t }: { item: OrchestrationVisibleEvent, t: UIText }) {
   const isUser = item.kind === 'user.message';
   const isRun = item.kind.startsWith('run.');
+  const isTbci = (item.kind === 'bridge.note' && item.category === 'tbci-verification') || (item.kind === 'verifier.verdict' && item.cli === 'tbci');
   const avatar = orchestrationAvatar(item, t);
   const roleLabel = orchestrationRoleLabel(item.role, item.taskName, t);
-  const title = isUser ? t.user : isRun ? t.run : item.type === 'command' ? t.commands : `${roleLabel}${item.cli ? ` · ${avatar.label}` : ''}`;
+  const participant = orchestrationParticipantLabel(item.cli, item.workerSlot);
+  const title = isTbci ? t.tbciVerification : isUser ? t.user : isRun ? t.run : participant || roleLabel;
+  const detailLabel = isTbci || isUser || isRun ? '' : item.type === 'command' ? t.commands : participant ? roleLabel : '';
   const rawContent = item.content || item.error || '';
   const content = isUser ? rawContent : stripMachineContractLines(rawContent);
-  const status = isUser ? '' : item.status;
+  const status = isUser ? '' : isTbci ? tbciStatusLabel(item.status, t) : item.status;
   const roleTone = orchestrationRoleTone(item.role, item.taskName);
 	const model = item.turnStartData?.model || (typeof item.data?.model === 'string' ? item.data.model : '');
 	const effort = item.turnStartData?.reasoningEffort || (typeof item.data?.reasoningEffort === 'string' ? item.data.reasoningEffort : '');
@@ -100,8 +119,9 @@ export function OrchestrationEventItem({ item, t }: { item: OrchestrationVisible
         </div>
       </div>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 mb-1 min-h-6">
-          <span className={cn('rounded-md px-1.5 py-0.5 text-xs font-semibold', roleTone.badge)}>{title}</span>
+        <div className="flex flex-wrap items-center gap-2 mb-1 min-h-6">
+          <span className={cn('shrink-0 rounded-md px-1.5 py-0.5 text-xs font-semibold', roleTone.badge)}>{title}</span>
+          {detailLabel && <span className="text-[10px] text-muted-foreground">{detailLabel}</span>}
           {item.turnInfo && <span className="text-[10px] font-medium text-muted-foreground">{orchestrationTurnLabel(item.turnInfo, t)}</span>}
 		  {model && <span className="max-w-[18rem] truncate font-mono text-[10px] text-muted-foreground" title={[preset, model, effort].filter(Boolean).join(' · ')}>{[preset, model, effort].filter(Boolean).join(' · ')}</span>}
           {item.createdAt && <span className="text-[10px] text-muted-foreground">{formatTime(item.createdAt)}</span>}
@@ -134,6 +154,19 @@ export function OrchestrationEventItem({ item, t }: { item: OrchestrationVisible
       </div>
     </div>
   );
+}
+
+function tbciStatusLabel(status: string | undefined, t: UIText) {
+  switch (status) {
+    case 'preparing': return t.tbciVerificationPreparing;
+    case 'prepared': return t.tbciVerificationPrepared;
+    case 'running': return t.tbciVerificationRunning;
+    case 'success': return t.tbciVerificationPassed;
+    case 'continue': return t.tbciVerificationContinue;
+    case 'fallback': return t.tbciVerificationFallback;
+    case 'unavailable': return t.tbciVerificationUnavailable;
+    default: return status || '';
+  }
 }
 
 export function defaultCollapsedTimelineGroups(groups: OrchestrationTimelineGroup[]) {
@@ -201,6 +234,7 @@ export function OrchestrationTimelineGroupItem({
   const avatar = orchestrationAvatar({ kind: 'turn.delta', cli: group.cli, role: group.role }, t);
   const turnLabel = orchestrationTurnLabel(group.turnInfo || {}, t) || group.turnId || t.thread;
   const roleLabel = orchestrationRoleLabel(group.role, group.taskName, t);
+  const participant = orchestrationParticipantLabel(group.cli, group.workerSlot);
   const roleTone = orchestrationRoleTone(group.role, group.taskName);
   const roundTone = orchestrationRoundTone(group.turnInfo?.ordinal);
   const countLabel = orchestrationTimelineGroupCountLabel(group, t);
@@ -228,9 +262,10 @@ export function OrchestrationTimelineGroupItem({
             {group.incomplete || group.hasError ? <AlertTriangle className="h-3.5 w-3.5" /> : avatar.icon}
           </div>
           <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               <span className={cn('shrink-0 rounded-md px-2 py-0.5 text-xs font-bold', roundTone.badge)}>{turnLabel}</span>
-              <span className={cn('truncate rounded-md px-1.5 py-0.5 text-[10px] font-semibold', roleTone.badge)}>{roleLabel}{group.cli ? ` · ${avatar.label}` : ''}</span>
+              <span className={cn('shrink-0 rounded-md px-1.5 py-0.5 text-xs font-semibold', roleTone.badge)}>{participant || roleLabel}</span>
+              {participant && <span className="text-[10px] text-muted-foreground">{roleLabel}</span>}
               {group.createdAt && <span className="hidden text-[10px] text-muted-foreground sm:inline">{formatTime(group.createdAt)}</span>}
             </div>
             <div className="mt-0.5 flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground">
@@ -412,7 +447,7 @@ function orchestrationAvatar(event: Pick<OrchestrationEvent, 'kind' | 'cli' | 'r
   }
   if (event.kind.startsWith('command.')) {
     return {
-      label: cli === 'claude' ? 'Claude' : cli === 'codex' ? 'GPT' : 'Command',
+      label: cli === 'claude' ? 'Claude' : cli === 'codex' ? 'Codex' : 'Command',
       className: cli === 'claude'
         ? 'bg-[#d97757]/10 border-[#d97757]/25 text-[#d97757]'
         : cli === 'codex'
@@ -437,7 +472,7 @@ function orchestrationAvatar(event: Pick<OrchestrationEvent, 'kind' | 'cli' | 'r
   }
   if (cli === 'codex' || cli === 'gpt' || cli.startsWith('gpt-')) {
     return {
-      label: 'GPT',
+      label: 'Codex',
       className: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-300',
       icon: <OpenAIMark />,
     };
