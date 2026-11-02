@@ -61,7 +61,7 @@ export function SettingsModal({
     try {
       const data = await api<BridgeTokenResponse>('/api/bridge-tokens', {
         method: 'POST',
-        body: JSON.stringify({ label: label.trim() || 'wsl2-cli', permissionProfile }),
+        body: JSON.stringify({ label: label.trim() || 'wsl2-cli', name: label.trim(), permissionProfile }),
       });
       setTokenInfo(data);
       await onAgentsChanged();
@@ -390,7 +390,8 @@ export function SettingsModal({
               </div>
               <label className="space-y-1.5 block">
                 <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.endpointLabel}</span>
-                <Input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="wsl2-cli" className="h-8 bg-background/60" />
+                <Input value={label} onChange={(event) => setLabel(event.target.value)} placeholder={t.endpointNamePlaceholder} className="h-8 bg-background/60" />
+                <span className="block text-xs text-muted-foreground">{t.endpointNameHint}</span>
               </label>
               <div className="space-y-2">
                 <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.permissionProfile}</span>

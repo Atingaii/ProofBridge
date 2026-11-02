@@ -546,6 +546,7 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request, uid s
 func (s *Server) handleCreateBridgeToken(w http.ResponseWriter, r *http.Request, uid string) {
 	var req struct {
 		Label             string `json:"label"`
+		Name              string `json:"name"`
 		TTL               string `json:"ttl"`
 		PermissionProfile string `json:"permissionProfile"`
 	}
@@ -568,6 +569,10 @@ func (s *Server) handleCreateBridgeToken(w http.ResponseWriter, r *http.Request,
 	}
 	if runes := []rune(label); len(runes) > 80 {
 		label = string(runes[:80])
+	}
+	name := strings.TrimSpace(req.Name)
+	if runes := []rune(name); len(runes) > 80 {
+		name = string(runes[:80])
 	}
 	profile := normalizePermissionProfile(req.PermissionProfile)
 	if profile == "" {
@@ -594,6 +599,7 @@ func (s *Server) handleCreateBridgeToken(w http.ResponseWriter, r *http.Request,
 		Token:             value,
 		ExpiresAt:         expiresAt,
 		Label:             label,
+		Name:              name,
 		PermissionProfile: profile,
 		AllowStrict:       allowStrictWorkspace,
 	}))
@@ -672,6 +678,7 @@ type bridgeTokenResponseParams struct {
 	Token             string
 	ExpiresAt         time.Time
 	Label             string
+	Name              string
 	PermissionProfile string
 	Agent             *store.Agent
 	CWD               string
@@ -682,17 +689,15 @@ type bridgeTokenResponseParams struct {
 func (s *Server) bridgeTokenResponse(r *http.Request, params bridgeTokenResponseParams) map[string]any {
 	hubURL := s.publicBaseURL(r)
 	installCommand := s.bridgeInstallCommand(hubURL)
-	connectCommand := s.bridgeConnectCommand(hubURL, params.Token, params.PermissionProfile, bridgeConnectOptions{
+	opts := bridgeConnectOptions{
 		Agent:     params.Agent,
+		Name:      params.Name,
 		CWD:       params.CWD,
 		MachineID: params.MachineID,
-	})
+	}
+	connectCommand := s.bridgeConnectCommand(hubURL, params.Token, params.PermissionProfile, opts)
 	setupCommand := bridgeSetupCommand(installCommand, connectCommand)
-	profiles := s.bridgePermissionProfiles(hubURL, params.Token, installCommand, bridgeConnectOptions{
-		Agent:     params.Agent,
-		CWD:       params.CWD,
-		MachineID: params.MachineID,
-	}, params.AllowStrict)
+	profiles := s.bridgePermissionProfiles(hubURL, params.Token, installCommand, opts, params.AllowStrict)
 	out := map[string]any{
 		"token":              params.Token,
 		"expiresAt":          params.ExpiresAt.Unix(),
@@ -756,6 +761,7 @@ func bridgeSetupCommand(installCommand, connectCommand string) string {
 
 type bridgeConnectOptions struct {
 	Agent     *store.Agent
+	Name      string
 	CWD       string
 	MachineID string
 }
@@ -779,8 +785,12 @@ func bridgeConnectArgs(hubURL, token, permissionProfile string, opts bridgeConne
 	if strings.TrimSpace(opts.CWD) != "" {
 		args = append(args, "--cwd", shellQuote(strings.TrimSpace(opts.CWD)))
 	}
+	name := strings.TrimSpace(opts.Name)
 	if opts.Agent != nil && strings.TrimSpace(opts.Agent.Name) != "" {
-		args = append(args, "--name", shellQuote(strings.TrimSpace(opts.Agent.Name)))
+		name = strings.TrimSpace(opts.Agent.Name)
+	}
+	if name != "" {
+		args = append(args, "--name", shellQuote(name))
 	}
 	args = append(args, shellQuote(token))
 	return args

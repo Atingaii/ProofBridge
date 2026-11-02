@@ -22,3 +22,7 @@
 
 按变更范围执行定向验证和仓库退出门禁；详见[质量规范](quality-guidelines.md)。
 会话连续性、反向连接、Hub 独占持久化均为必须保留的边界。
+
+端点命名请求的可选 `name` 与令牌 `label` 必须独立；旧页面默认标签不能隐式
+变成机器名称。具体请求、默认/错误矩阵、shell 引用与修复契约见
+[可选机器名称](../../../docs/features/optional-machine-name.md#compatibility-contract)。

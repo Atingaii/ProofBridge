@@ -62,8 +62,8 @@ is needed on the endpoint.**
    Bridge. The generated setup command checks for both CLIs.
 2. Sign in to your Hub. The project's current leading interface is at
    [test.sparkon.cn](https://test.sparkon.cn); use your own Hub URL when self-hosting.
-3. Open **Settings → Add CLI endpoint**, choose the permission profile, and copy
-   the generated **Install and connect** command.
+3. Open **Settings → Add CLI endpoint**, optionally enter a machine name, choose
+   the permission profile, and copy the generated **Install and connect** command.
 4. Run that command from the project directory, as the same OS user. Select the
    online endpoint in the browser and start a conversation or task.
 
@@ -71,6 +71,9 @@ The setup command installs Bridge and links that directory. On Linux it prefers
 `systemd --user`; otherwise it uses a background process. Logs are under
 `~/.codex-bridge/logs/`. For an existing endpoint, use its **Repair connection**
 command to preserve its identity.
+
+The machine name is optional. Leave it blank to use the hostname, workspace
+directory name, and path hash suffix; manual `link` commands can use `--name`.
 
 <details>
 <summary>Manual foreground connection for an already installed Bridge</summary>

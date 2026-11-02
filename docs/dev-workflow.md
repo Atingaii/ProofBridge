@@ -146,6 +146,15 @@ wrong-hostname results before creating a user. Never commit the secret.
 
 ## CLI Install Flow
 
+The optional machine name in Settings supplies the optional `name` field to
+`internal/hub/server.go:handleCreateBridgeToken`, which trims it and limits it
+to 80 Unicode characters before adding `--name` to every permission-profile
+command. The existing `label` remains token metadata with its original fallback
+and length limit. Old requests with only `label`, or a blank `name`, emit no
+`--name`, so `link.go:defaultLinkName` still supplies the hostname, directory
+name, and path hash suffix. Repair commands preserve the existing agent name
+and identity.
+
 `POST /api/bridge-tokens` returns `setupCommand` for the settings UI. It is a
 single copyable shell line that runs `/install.sh` and then starts the Bridge;
 `installCommand` and `connectCommand` are the same flow split into two commands
