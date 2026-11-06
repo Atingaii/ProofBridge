@@ -46,8 +46,6 @@ export function CapabilityMatrix({ agent, t }: { agent: Agent | null; t: UIText 
   const approvalMode = orchestrationApprovalMode(agent);
   const auto = approvalMode === 'auto-execute' || approvalMode === 'strict-workspace';
   const modeLabel = approvalMode === 'strict-workspace' ? t.strictWorkspace : auto ? t.autoExecute : t.reviewRequired;
-	const tbci = agent?.capabilities?.tbci;
-	const tbciReady = Boolean(tbci?.available && tbci.state === 'ready');
   return (
     <div className="rounded-md border border-border bg-muted/20 p-2.5">
       <div className="mb-2 flex items-center justify-between gap-2">
@@ -73,19 +71,7 @@ export function CapabilityMatrix({ agent, t }: { agent: Agent | null; t: UIText 
             </div>
           );
         })}
-		<div className="grid grid-cols-[96px_minmax(0,1fr)_auto] items-center gap-2 text-xs">
-			<span className="font-medium">TBCI</span>
-			<span className="truncate text-muted-foreground" title={tbci?.reason || ''}>
-				{tbciReady ? (tbci?.managed ? t.tbciManagedRuntime : t.tbciExternalRuntime) : (tbci?.reason || t.tbciUpdateBridgeHint)}
-			</span>
-			<span className={cn(
-				"inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px]",
-				tbciReady ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "border-destructive/20 bg-destructive/10 text-destructive"
-			)}>
-				{tbciReady ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
-				{tbciReady ? t.available : t.notAvailable}
-			</span>
-		</div>
+
       </div>
     </div>
   );
@@ -97,15 +83,14 @@ export function OrchestrationEventItem({ item, t }: {
 }) {
   const isUser = item.kind === 'user.message';
   const isRun = item.kind.startsWith('run.');
-  const isTbci = (item.kind === 'bridge.note' && item.category === 'tbci-verification') || (item.kind === 'verifier.verdict' && item.cli === 'tbci');
   const avatar = orchestrationAvatar(item, t);
   const roleLabel = orchestrationRoleLabel(item.role, item.taskName, t);
   const participant = orchestrationParticipantLabel(item.cli, item.workerSlot);
-  const title = isTbci ? t.tbciVerification : isUser ? t.user : isRun ? t.run : participant || roleLabel;
-  const detailLabel = isTbci || isUser || isRun ? '' : item.type === 'command' ? t.commands : participant ? roleLabel : '';
+  const title = isUser ? t.user : isRun ? t.run : participant || roleLabel;
+  const detailLabel = isUser || isRun ? '' : item.type === 'command' ? t.commands : participant ? roleLabel : '';
   const rawContent = item.content || item.error || '';
   const content = isUser ? rawContent : stripMachineContractLines(rawContent);
-  const status = isUser ? '' : isTbci ? tbciStatusLabel(item.status, t) : item.status;
+  const status = isUser ? '' : item.status;
   const roleTone = orchestrationRoleTone(item.role, item.taskName);
 	const model = item.turnStartData?.model || (typeof item.data?.model === 'string' ? item.data.model : '');
 	const effort = item.turnStartData?.reasoningEffort || (typeof item.data?.reasoningEffort === 'string' ? item.data.reasoningEffort : '');
@@ -157,19 +142,6 @@ export function OrchestrationEventItem({ item, t }: {
       </div>
     </div>
   );
-}
-
-function tbciStatusLabel(status: string | undefined, t: UIText) {
-  switch (status) {
-    case 'preparing': return t.tbciVerificationPreparing;
-    case 'prepared': return t.tbciVerificationPrepared;
-    case 'running': return t.tbciVerificationRunning;
-    case 'success': return t.tbciVerificationPassed;
-    case 'continue': return t.tbciVerificationContinue;
-    case 'fallback': return t.tbciVerificationFallback;
-    case 'unavailable': return t.tbciVerificationUnavailable;
-    default: return status || '';
-  }
 }
 
 export function defaultCollapsedTimelineGroups(groups: OrchestrationTimelineGroup[]) {

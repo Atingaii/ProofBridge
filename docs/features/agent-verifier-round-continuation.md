@@ -27,8 +27,6 @@
   existing endpoint compatibility.
 - Do not let Worker messages, handoffs, plans, command summaries, or recorded
   local facts influence an Agent Verifier's decision.
-- TBCI is a separately selected `formal-proof` verification mode. When TBCI is
-  selected, this Agent Verifier barrier is not invoked.
 
 ## Data And Protocol Impact
 

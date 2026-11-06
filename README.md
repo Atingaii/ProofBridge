@@ -43,7 +43,7 @@ a **Bridge** on each private machine connects outward and runs the tools locally
   and add instructions to running tasks where the connected endpoint supports them.
 - **Choose your setup.** Use local CLI login or saved provider presets, select an
   execution permission profile, and opt into formal-proof workflows with agent
-  verification or TBCI.
+  verification.
 - **Use natural language from a terminal.** Copy your personal MCP configuration,
   install the ProofBridge Skill, and submit work from Codex or Claude Code. Choose
   interactive results or event-triggered email from Hub.
@@ -118,7 +118,7 @@ Then open **Settings → Terminal & email**:
    enable both completion and attention email and select **Submit and email me**.
    The Hub administrator must configure SMTP first. Interactive monitoring works
    without SMTP.
-4. Ask, for example: “Use ProofBridge on my default endpoint. Read the README and
+4. Use the name ProofBridge, Codex Bridge or CodexBridge. Ask, for example: “Use ProofBridge on my default endpoint. Read the README and
    complete the project verification with my saved model combination. Email me
    when it finishes.” The Skill discovers available endpoints, configurations and
    defaults. Ask it explicitly to save a combination or default for future tasks.
@@ -140,6 +140,10 @@ rotation. For setup details, installation scopes and troubleshooting, see
 [MCP and Skill access](docs/dev-workflow.md#mcp-and-skill-access). Administrators
 configure `AUTOMATION_ENABLED`, `AUTOMATION_PUBLIC_URL` and SMTP using the
 [environment-variable reference](docs/dev-workflow.md#environment-variables).
+
+SMTP setup can use the explicit `CODEX_BRIDGE_ENV_FILE` and the provider/local
+templates in `configs/mail*.env.example`; the personal center can send a fixed
+test to your saved address. See [mail setup](docs/dev-workflow.md#smtp-setup-and-a-personal-delivery-test).
 
 ## Local quick start
 
@@ -255,10 +259,10 @@ and [dynamic input](docs/features/dynamic-orchestration-input.md) for the curren
 capability gates; CLI minimum versions alone do not prove every later version
 has been tested.
 
-Strict workspace isolation requires Linux with Landlock ABI 3 or newer. Managed
-TBCI is bundled only for Linux amd64; project-specific Rocq/Coq, Lean, or Isabelle
-toolchains are still required. See [strict workspace mode](docs/features/strict-workspace-auto-execute.md)
-and [TBCI verification](docs/features/tbci-formal-proof-verification.md).
+Strict workspace isolation requires Linux with Landlock ABI 3 or newer.
+Project-specific Rocq/Coq, Lean, or Isabelle toolchains must be available on the
+connected machine. See [strict workspace mode](docs/features/strict-workspace-auto-execute.md)
+and [Agent verification](docs/adr/030-agent-only-verification.md).
 
 ## Documentation
 

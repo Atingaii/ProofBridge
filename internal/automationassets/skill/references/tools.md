@@ -2,6 +2,7 @@
 
 The connected server's schemas are authoritative. This map describes intent,
 not substitute argument schemas. Resources must belong to the authenticated user.
+ProofBridge, Codex Bridge and CodexBridge all use the same `proofbridge_` tools.
 
 | Tool | Purpose |
 | --- | --- |

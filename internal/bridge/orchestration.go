@@ -23,7 +23,6 @@ import (
 
 type OrchestrationManager struct {
 	cfg                     *config.Config
-	tbci                    *tbciRuntime
 	cliConfig               *cliConfigManager
 	lifetime                context.Context
 	stop                    context.CancelFunc
@@ -154,7 +153,6 @@ func NewOrchestrationManager(cfg *config.Config) *OrchestrationManager {
 	lifetime, stop := context.WithCancel(context.Background())
 	return &OrchestrationManager{
 		cfg:                       cfg,
-		tbci:                      configuredTBCIRuntime(cfg),
 		lifetime:                  lifetime,
 		stop:                      stop,
 		userInputOutbox:           newUserInputOutbox(lifetime),
@@ -172,32 +170,6 @@ func NewOrchestrationManager(cfg *config.Config) *OrchestrationManager {
 		codexThreadBusyRetryWaits: append([]time.Duration(nil), defaultCodexThreadBusyRetryWaits...),
 		nativeUsage:               make(map[string][]orchestrationUsage),
 	}
-}
-
-func configuredTBCIRuntime(cfg *config.Config) *tbciRuntime {
-	if cfg == nil {
-		return unavailableTBCIRuntime("error", "", "Bridge configuration is unavailable")
-	}
-	if !cfg.Bridge.TBCIEnabled {
-		return unavailableTBCIRuntime("disabled", "", "TBCI was disabled by the Bridge administrator")
-	}
-	path := strings.TrimSpace(cfg.Bridge.TBCIPath)
-	if path == "" || strings.EqualFold(path, "auto") {
-		return unavailableTBCIRuntime("error", "", "managed TBCI was not prepared before orchestration")
-	}
-	return &tbciRuntime{path: path, capability: protocol.TBCICapability{Available: true, State: "ready"}}
-}
-
-func (m *OrchestrationManager) SetTBCIRuntime(runtime *tbciRuntime) {
-	m.mu.Lock()
-	m.tbci = runtime
-	m.mu.Unlock()
-}
-
-func (m *OrchestrationManager) tbciRuntime() *tbciRuntime {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.tbci
 }
 
 func (m *OrchestrationManager) SetCLIConfigManager(manager *cliConfigManager) {
@@ -856,10 +828,10 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 	runCWD := m.cwd(payload)
 	profile := normalizeOrchestrationProfile(payload.Profile)
 	verificationMode := protocol.NormalizeVerificationMode(payload.VerificationMode)
-	if profile != bridgeprofiles.Formal() {
-		verificationMode = protocol.VerificationModeAgent
+	if verificationMode != protocol.VerificationModeAgent {
+		m.emit(payload.RunID, protocol.OrchestrationEventPayload{Kind: "run.error", Status: store.OrchestrationFailed, Error: "unsupported verification mode; choose agent verification"})
+		return
 	}
-	originalPrompt := exactOrchestrationTaskPrompt(payload)
 	var bootstrapNote string
 	if profile == bridgeprofiles.Formal() {
 		harness, err := prepareFormalProofHarness(m.cfg, payload, runCWD)
@@ -1014,39 +986,6 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 				"cwd":      runCWD,
 			},
 		})
-	}
-	var tbciSession *tbciVerificationSession
-	if shouldPrepareTBCIVerifier(profile, verificationMode) {
-		m.emitTBCINote(payload.RunID, "preparing", "Preparing independent TBCI verification.", "")
-		var prepared *tbciVerificationSession
-		var err error
-		runtime := m.tbciRuntime()
-		if runtime == nil || !runtime.capability.Available {
-			reason := "TBCI is unavailable on this Bridge"
-			if runtime != nil && strings.TrimSpace(runtime.capability.Reason) != "" {
-				reason = runtime.capability.Reason
-			}
-			prepared = &tbciVerificationSession{unavailableWhy: reason}
-		} else {
-			prepared, err = m.prepareTBCIVerifier(ctx, payload, originalPrompt)
-		}
-		tbciSession = prepared
-		if err != nil {
-			reason := "TBCI preparation failed: " + boundedTBCIReason(err.Error())
-			m.emitTBCINote(payload.RunID, "unavailable", reason, reason)
-			m.emit(payload.RunID, protocol.OrchestrationEventPayload{Kind: "run.error", Status: store.OrchestrationFailed, Error: reason})
-			return
-		} else if prepared == nil || !prepared.available {
-			reason := "TBCI is unavailable; this verification remains unresolved."
-			if prepared != nil && strings.TrimSpace(prepared.unavailableWhy) != "" {
-				reason = prepared.unavailableWhy + "; this verification remains unresolved."
-			}
-			m.emitTBCINote(payload.RunID, "unavailable", reason, reason)
-			m.emit(payload.RunID, protocol.OrchestrationEventPayload{Kind: "run.error", Status: store.OrchestrationFailed, Error: reason})
-			return
-		} else {
-			m.emitTBCINote(payload.RunID, "prepared", "TBCI contract and initial workspace snapshot are frozen for this user task.", "")
-		}
 	}
 
 	var history []orchestrationTurn
@@ -1221,27 +1160,7 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 			var verdict protocol.VerifierVerdict
 			var verifierAgents []agentVerifierResult
 			verdictRecord := record
-			if verificationMode == protocol.VerificationModeTBCI {
-				var tbci tbciVerificationResult
-				if tbciSession != nil && tbciSession.available {
-					m.emitTBCINote(payload.RunID, "running", "TBCI is attesting and verifying the completed workspace.", "")
-					tbci = m.evaluateTBCIVerifier(ctx, payload, tbciSession)
-				} else {
-					tbci = tbciVerificationResult{Reason: "TBCI is unavailable"}
-					if tbciSession != nil && strings.TrimSpace(tbciSession.unavailableWhy) != "" {
-						tbci.Reason = tbciSession.unavailableWhy
-					}
-				}
-				verdict = tbciVerifierVerdict(tbci)
-				verdictRecord.CLI = "tbci"
-				if tbci.Trusted {
-					m.emitTBCINote(payload.RunID, "success", "TBCI independently verified the frozen contract and final workspace.", "")
-				} else if tbciSession != nil && tbciSession.available {
-					m.emitTBCINote(payload.RunID, "continue", verdict.Reason+"; another configured round is required.", verdict.Reason)
-				}
-			} else {
-				verdict, verifierAgents = m.evaluateAgentVerifierQuorum(ctx, payload, mode, profile, workerPair, firstCLI, history)
-			}
+			verdict, verifierAgents = m.evaluateAgentVerifierQuorum(ctx, payload, mode, profile, workerPair, firstCLI, history)
 			sourceAfter := completionSourceDigest(ctx, runCWD)
 			if sourceBefore != "" && sourceAfter != "" && sourceBefore != sourceAfter {
 				verdict = protocol.VerifierVerdict{Status: verifierVerdictContinue, Reason: "source changed during independent verification; rerun verification on the final source", Checkers: []protocol.VerifierCheck{verifierCheckContinue("source-integrity", "source changed during verification")}}
@@ -1328,27 +1247,6 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 		},
 	})
 	m.runFinalNativeMaintenance(ctx, workerPair, mode, firstCLI, len(history), &sessionState)
-}
-
-func (m *OrchestrationManager) emitTBCINote(runID, status, content, injectedText string) {
-	severity := "info"
-	if status == "fallback" || status == "continue" || status == "unavailable" {
-		severity = "warning"
-	}
-	m.emit(runID, protocol.OrchestrationEventPayload{
-		Kind:     "bridge.note",
-		Source:   "bridge",
-		Severity: severity,
-		Role:     "verifier",
-		CLI:      "bridge",
-		Status:   status,
-		Content:  content,
-		BridgeNoteData: &protocol.BridgeNoteData{
-			Category:     "tbci-verification",
-			InjectedText: injectedText,
-		},
-		Data: map[string]any{"category": "tbci-verification"},
-	})
 }
 
 func shouldRunAgentVerifier(payload protocol.OrchestrationStartPayload) bool {

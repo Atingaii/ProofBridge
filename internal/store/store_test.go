@@ -343,7 +343,7 @@ func TestStoreOrchestrationRunEventFlow(t *testing.T) {
 		Mode:             "debate",
 		FirstCLI:         "codex",
 		Profile:          "formal-proof",
-		VerificationMode: "tbci",
+		VerificationMode: "retired-verifier",
 		Prompt:           "prove a theorem",
 		MaxTurns:         2,
 		Files:            []OrchestrationFile{{Name: "A.v", MimeType: "text/plain", Size: 10}},
@@ -351,7 +351,7 @@ func TestStoreOrchestrationRunEventFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != OrchestrationQueued || run.Mode != "debate" || run.FirstCLI != "codex" || run.Profile != "formal-proof" || run.VerificationMode != "tbci" || len(run.Files) != 1 {
+	if run.Status != OrchestrationQueued || run.Mode != "debate" || run.FirstCLI != "codex" || run.Profile != "formal-proof" || run.VerificationMode != "retired-verifier" || len(run.Files) != 1 {
 		t.Fatalf("unexpected run: %+v", run)
 	}
 	if _, err := st.AddOrchestrationEvent(ctx, OrchestrationEvent{
@@ -415,7 +415,7 @@ func TestStoreOrchestrationRunEventFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Status != OrchestrationCompleted || loaded.FinishedAt == 0 || loaded.VerificationMode != "tbci" {
+	if loaded.Status != OrchestrationCompleted || loaded.FinishedAt == 0 || loaded.VerificationMode != "retired-verifier" {
 		t.Fatalf("unexpected loaded run: %+v", loaded)
 	}
 	if err := st.UpdateOrchestrationRunSettings(ctx, run.ID, agent.ID, run.Mode, run.WorkerPair, "claude", run.Profile, "agent", run.CWD, "after-turn", run.MaxTurns, run.Files); err != nil {

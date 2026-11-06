@@ -11,9 +11,7 @@ identity when rerunning the installer.
 ## Non-goals
 
 Native macOS/Windows packaging, CPU emulation, permission-profile changes,
-automatic restarts of existing endpoints, and porting the embedded TBCI tool.
-ARM64 Bridges report TBCI unavailable unless a working native override exists;
-the existing agent verification mode remains usable.
+and automatic restarts of existing endpoints.
 
 ## Data and protocol impact
 

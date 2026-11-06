@@ -22,7 +22,7 @@ Hub 的实际配置、状态、验证证据才是实验记录。
 
 - 本轮不部署、推送或升级运行中的 Hub/Bridge，不发布端点安装包。
 - 首版不新增证明引擎，不在 Hub 执行用户项目，不迁移用户工作区。
-- 不重做既有单聊、原生 resume、task graph、Agent/TBCI 验证策略或权限配置。
+- 不重做既有单聊、原生 resume、task graph、Agent 验证策略或权限配置。
 - 不开放管理员工具、任意 Shell/文件读写、公共分享、模型密钥导出或模型凭据导入工具。
 - 不将端点安装、重启或权限升级变成 Skill 每次提交任务的隐藏步骤。
 - 不新增 Redis、第二个数据库、第二个调度器、外部 agent 框架或定时轮询自动化服务。
@@ -146,7 +146,7 @@ verificationMode、executionMode、轮次参数及通知选择；保存配置 ID
 | 工具 | R/W | 主要输入 | 返回与责任 |
 | --- | --- | --- | --- |
 | `proofbridge_get_context` | R | 无 | 当前账号、安全的能力/部署状态、协议版本、默认引用、邮箱和通知准备状态；不返回令牌 |
-| `proofbridge_list_endpoints` | R | 在线/CLI 过滤 | 本人端点 ID、目录、在线状态、CLI/权限/交互/TBCI 能力 |
+| `proofbridge_list_endpoints` | R | 在线/CLI 过滤 | 本人端点 ID、目录、在线状态、CLI/权限/交互能力 |
 | `proofbridge_list_model_options` | R | endpointId、可选 cli | 本人可用预设、官方登录选项、支持的 model/effort、合法 workerPair；返回约束，不返回密钥 |
 | `proofbridge_list_execution_presets` | R | 可选作用域 | 可命名方案及版本，标注默认和不可用引用 |
 | `proofbridge_save_execution_preset` | W | 完整方案、可选 id、expectedVersion | 创建/更新本人方案；校验槽位和模型能力，返回版本，不启动任务 |
@@ -234,8 +234,8 @@ interactive 由用户留在终端查看并处理交互，不承诺退出后的�
 
 get_run 在 result 字段返回该冻结结果，外层附当前 run、submission 与 resultUrl。
 notification 状态通过 get_notifications 读取；待答状态通过 get_run_interactions 获取权威快照。
-execution、verification 和 notification 是三个独立维度。Agent 审核结论与 TBCI 原始可信结论
-要保留来源；MCP 不重新投票、不把编译成功扩大成语义证明、不新增“无条件成功”判断。
+execution、verification 和 notification 是三个独立维度。Agent 审核结论保留来源；
+MCP 不重新投票、不把编译成功扩大成语义证明、不新增“无条件成功”判断。
 
 ### 人工审批、问答与内部 worker 隔离
 
@@ -351,7 +351,7 @@ Bridge 协议仅为可靠审批的缺失快照/回执增加受能力门禁的增
 | AC02 | Codex / Claude Code 各自用真实客户端发现工具、自然语言调用和显式调用成功 |
 | AC03 | 两个账户交叉猜测端点/模型/方案/run/submission/通知/交互 ID 均无法越权 |
 | AC04 | “当前项目”唯一绑定正确用户端点；多目标无默认时询问；Hub 不读取或执行该项目 |
-| AC05 | 三种 workerPair、受支持 model/effort、官方登录和 Agent/TBCI 门禁保持准确 |
+| AC05 | 三种 workerPair、受支持 model/effort、官方登录和 Agent 验证门禁保持准确 |
 | AC06 | 两客户端共用偏好；明确覆盖只影响本次；默认修改不改变旧运行或继续绑定 |
 | AC07 | 同请求重复/并发/响应丢失/重启不重复启动；同键不同内容冲突；unknown 不盲重派发 |
 | AC08 | follow_up 沿用 runId；live 指令保留 messageId/投递回执；问答不变成新 prompt |
@@ -401,7 +401,7 @@ Hub/MCP 保持实验室内网访问，外部客户端及外部 Bridge 使用 VPN
 
 本次阅读了 README、架构、代码地图、变更影响表、开发/部署流程，以及注册隔离、
 端点连接、模型库与官方登录、独立 worker、同 run 连续性、shared CWD、
-durable graph、dynamic input、原生交互 v3、Agent/TBCI、完成结论等文档。
+durable graph、dynamic input、原生交互 v3、Agent 验证、完成结论等文档。
 具体源码证据和过时表述以[调研报告](../reviews/proofbridge-mcp-current-state.md)为准。
 
 2026-11-06 设计阶段查阅的一手协议/客户端资料；实测版本见本地验收报告：

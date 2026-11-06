@@ -118,7 +118,6 @@ type BridgeCapabilities struct {
 	DurableTaskGraph           bool                                 `json:"durableTaskGraph,omitempty"`
 	UsageLedger                bool                                 `json:"usageLedger,omitempty"`
 	ConfigSwitcher             *CLIConfigSwitcherCapability         `json:"configSwitcher,omitempty"`
-	TBCI                       *TBCICapability                      `json:"tbci,omitempty"`
 	// IsolatedWorkerProfiles confirms that this Bridge materializes orchestration
 	// slot presets into private native CLI homes. Older Bridges accepted the
 	// payload but used their legacy global configuration path instead.
@@ -134,18 +133,6 @@ type NativeUserInputCapability struct {
 	NonBlocking     bool     `json:"nonBlocking,omitempty"`
 	PermissionModes []string `json:"permissionModes,omitempty"`
 	Reason          string   `json:"reason,omitempty"`
-}
-
-// TBCICapability reports whether the connected Bridge can execute the
-// selectable formal-proof TBCI verifier. Paths stay private to the Bridge.
-type TBCICapability struct {
-	Available      bool   `json:"available"`
-	Managed        bool   `json:"managed,omitempty"`
-	State          string `json:"state,omitempty"`
-	Platform       string `json:"platform,omitempty"`
-	Version        string `json:"version,omitempty"`
-	ArtifactSHA256 string `json:"artifactSha256,omitempty"`
-	Reason         string `json:"reason,omitempty"`
 }
 
 type CLIConfigSwitcherCapability struct {
@@ -740,7 +727,6 @@ const (
 	WorkerPairCodexCodex             = "codex-codex"
 	WorkerPairClaudeClaude           = "claude-claude"
 	VerificationModeAgent            = "agent"
-	VerificationModeTBCI             = "tbci"
 )
 
 func NormalizeNativeContextCompaction(value string) string {
@@ -763,13 +749,14 @@ func NormalizeOrchestrationWorkerPair(value string) string {
 	}
 }
 
+// NormalizeVerificationMode preserves unsupported historical values so callers
+// can reject them explicitly instead of silently changing verification authority.
 func NormalizeVerificationMode(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case VerificationModeTBCI:
-		return VerificationModeTBCI
-	default:
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
 		return VerificationModeAgent
 	}
+	return value
 }
 
 type RunConclusion struct {

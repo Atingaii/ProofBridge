@@ -40,6 +40,32 @@ func containsTestString(values []string, want string) bool {
 	return false
 }
 
+func TestOrchestrationRejectsUnsupportedVerificationBeforeWorkspaceChanges(t *testing.T) {
+	t.Parallel()
+	cfg := config.Default()
+	cfg.Bridge.CWD = t.TempDir()
+	manager := NewOrchestrationManager(&cfg)
+	out := make(chan protocol.Envelope, 8)
+	manager.AttachOut(out)
+	manager.run(context.Background(), protocol.OrchestrationStartPayload{
+		RunID: "unsupported-mode", Profile: "formal-proof", VerificationMode: "retired-verifier",
+		Prompt: "verify the project", CWD: cfg.Bridge.CWD,
+	})
+	events := drainOrchestrationEvents(t, out)
+	if !orchestrationEventsContain(events, "run.error", "", "unsupported verification mode") {
+		t.Fatalf("unsupported authority events = %#v", events)
+	}
+	for _, event := range events {
+		if (event.Kind != "run.error" && event.Kind != "run.conclusion") || event.Status != store.OrchestrationFailed {
+			t.Fatalf("unsupported authority started execution: %#v", events)
+		}
+	}
+	entries, err := os.ReadDir(cfg.Bridge.CWD)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("unsupported mode modified workspace: %#v, %v", entries, err)
+	}
+}
+
 func TestOrchestrationClaudeStreamInputArgsKeepSessionAndOmitPromptArg(t *testing.T) {
 	cfg := config.Default()
 	cfg.Bridge.Sandbox = "danger-full-access"

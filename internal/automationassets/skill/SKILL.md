@@ -1,15 +1,19 @@
 ---
 name: proofbridge
-description: Use ProofBridge to run or inspect project verification on a connected machine, select saved models and execution presets, manage defaults, or handle a ProofBridge task's questions and results.
+description: Use ProofBridge, Codex Bridge or CodexBridge to check account context and connected endpoints, discover model configurations, run project verification, manage defaults, or inspect task questions and results.
 metadata:
   version: "1"
 ---
 
 # ProofBridge
 
+ProofBridge, Codex Bridge and CodexBridge name the same service and workflow.
 Use the configured `proofbridge` MCP server. The Hub manages the account,
 configuration, task history and email. The user's selected Bridge owns the project
 and runs Codex/Claude and the proof tools; the Hub's location is not the project's location.
+
+For account or endpoint queries, use the discovery tools and report the findings.
+Start project work only when the user requests it.
 
 If `PROOFBRIDGE_MANAGED_WORKER=1`, do not invoke this entrypoint, create a nested
 ProofBridge run, or bypass the disabled MCP through shell/HTTP. Complete the assigned
@@ -27,9 +31,10 @@ local worker task instead. Do not change CLI permissions or disable other MCP se
 3. Ask the target Bridge to read the project's README as part of the task prompt.
    A local README can help interpret a same-machine request, but do not assume the CLI's
    current directory belongs to a different endpoint. The actual workspace is on the selected Bridge.
-4. Use `proofbridge_preview_run` to resolve an unfamiliar configuration. Preview is not an
-   extra user confirmation. Follow the server's actual schema; do not invent model names,
-   reasoning levels, endpoint IDs or fields.
+4. Use `proofbridge_preview_run` to resolve the configuration. Briefly report the selected
+   endpoint, worker pair, proof profile, verification mode, and each slot's model/effort before
+   submission. Mark `nativeDefault` choices as native CLI defaults; unavailable values remain
+   unknown. Preview is not an extra user confirmation. Follow the server's actual schema.
 5. Call `proofbridge_start_run` with one stable `clientRequestId` for this action.
    On a lost reply, repeat the same arguments and key. Do not generate another key/run
    because a timeout or disconnect left acceptance uncertain.

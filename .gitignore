@@ -4,6 +4,8 @@ dist/
 data/
 configs/*.yaml
 !configs/*.yaml.example
+configs/*.env
+!configs/*.env.example
 docs/private/
 .ccb/
 *.zip

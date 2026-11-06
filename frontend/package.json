@@ -20,7 +20,8 @@
     "test:automation-browser": "node automation-settings-browser-check.mjs",
     "test:stats-browser": "node stats-browser-check.mjs && node usage-overview-browser-check.mjs",
     "test:documentation-browser": "node help-page-check.mjs",
-    "android:check": "../scripts/check-android-host.sh"
+    "android:check": "../scripts/check-android-host.sh",
+    "test:mcp-run-detail-browser": "node mcp-run-detail-browser-check.mjs"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",

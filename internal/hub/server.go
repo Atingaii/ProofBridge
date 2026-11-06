@@ -177,6 +177,7 @@ func NewServer(cfg *config.Config, st *store.Store, build BuildInfo) *Server {
 	mux.HandleFunc("GET /api/automation/preferences", s.withAuth(s.handleGetAutomationPreferences))
 	mux.HandleFunc("PUT /api/automation/preferences", s.withAuth(s.handlePutAutomationPreferences))
 	mux.HandleFunc("GET /api/automation/notifications", s.withAuth(s.handleAutomationNotifications))
+	mux.HandleFunc("POST /api/automation/mail/test", s.withAuth(s.handleAutomationMailTest))
 	mux.Handle("GET /skills/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.cfg.Automation.Enabled {
 			http.NotFound(w, r)

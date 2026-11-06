@@ -78,6 +78,7 @@ should list names and point here for detail.
 | --- | --- | --- |
 | `APP_ENV` | Selects `configs/<env>.yaml` | `dev` |
 | `CODEX_BRIDGE_CONFIG_DIR` | Alternate config directory | `configs` |
+| `CODEX_BRIDGE_ENV_FILE` | Explicit private NAME=value environment file; process variables take precedence, including empty values; no shell/variable evaluation | unset; no automatic `.env` loading |
 | `APP_HOST` | Hub listen host | config `gateway.host` |
 | `APP_PORT` | Hub listen port | config `gateway.port` |
 | `HUB_DB_PATH` | SQLite database path | config `hub.db_path` |
@@ -122,9 +123,6 @@ should list names and point here for detail.
 | `BRIDGE_STRICT_WORKSPACE_READ_ONLY` | OS path-list of additional non-standard toolchain roots exposed read-only in strict mode | config `bridge.strict_workspace_read_only` |
 | `CODEX_BRIDGE_RUNTIME_DIR` | Local base directory for strict-mode private homes and temporary files; defaults to `$XDG_RUNTIME_DIR/codex-bridge` or `~/.codex-bridge/runtime` | Bridge process environment |
 | `BRIDGE_DURABLE_TASK_GRAPH` | Enable the bounded persistent orchestration task graph; set `false` only for legacy Bridge compatibility | config `bridge.durable_task_graph` |
-| `BRIDGE_TBCI_ENABLED` | Allow the selectable TBCI mode; supported Bridge builds prepare their managed artifact by default (`true`) | config `bridge.tbci_enabled` |
-| `BRIDGE_TBCI_PATH` | Optional administrator-supplied TBCI executable; empty uses the managed embedded artifact | config `bridge.tbci_path` |
-| `BRIDGE_TBCI_TIMEOUT` | Maximum duration for one TBCI verification; default `2m` | config `bridge.tbci_timeout` |
 | `BRIDGE_LONG_COMMAND_OBSERVER_ENABLED` | Enables Bridge long-command observer notes during orchestration | config `bridge.long_command_observer.enabled` |
 | `BRIDGE_LONG_COMMAND_OBSERVER_AFTER` | Duration before a matching long command is observed, for example `2m` | config `bridge.long_command_observer.after` |
 | `LOG_LEVEL` | `debug`, `info`, `warn`, `error` | config `observability.log_level` |
@@ -227,6 +225,51 @@ For delivery errors, ask the client to query `proofbridge_get_notifications` and
 contact the maintainer with the notification ID and error. Hub retries transient
 send failures a bounded number of times; `sent` means SMTP acceptance, not inbox
 delivery. A finished run is separate from an authoritative verification verdict.
+
+### SMTP setup and a personal delivery test
+
+Task mail is sent by Hub's existing SMTP outbox, independently of Dot, Codex or a
+browser session. A deployment does not need a platform-specific mail SDK. Copy
+`configs/mail.env.example` to a private `.env` file, set the provider credentials
+and verified sender, restrict its permissions, and explicitly select it at startup:
+
+```bash
+chmod 600 /absolute/private/mail.env
+CODEX_BRIDGE_ENV_FILE=/absolute/private/mail.env ./bin/codex-bridge hub
+```
+
+The selected file supplements configuration without changing the process environment.
+Existing environment variables win, including an explicitly empty value. It accepts
+`NAME=value`, optional `export`, comments, and single/double quoted values. Shell
+commands and variable references remain literal text; they are never executed or
+expanded. There is no implicit load from the current directory. Invalid entries
+fail startup with the line number and a safe message, without echoing their value.
+Restart Hub after changing its environment file. For systemd `EnvironmentFile` or
+Docker `env_file`, injecting the same variables directly also works.
+
+The default template uses [Resend SMTP](https://resend.com/docs/send-with-smtp):
+`smtp.resend.com`, username `resend`, an API key as password, and a verified sender
+domain. Its [Free plan](https://resend.com/pricing) currently allows 3,000 emails a
+month, limited to 100 a day. [Brevo's Free plan](https://help.brevo.com/hc/en-us/articles/208580669-FAQs-What-are-the-limits-of-the-Free-plan)
+currently allows 300 a day. For [Brevo SMTP](https://help.brevo.com/hc/en-us/articles/7924908994450-Send-transactional-emails-using-Brevo-SMTP),
+use `smtp-relay.brevo.com`, the SMTP login shown in its console, and an SMTP key
+rather than an API key. Both templates use port 465 with implicit TLS; STARTTLS
+must be false in that mode. These provider facts were checked on 2026-11-06;
+service quotas and sender-verification requirements remain provider controlled.
+
+The Hub needs outbound access to the SMTP service. The lab website can remain
+private behind VPN; users outside the lab still need VPN to open a result link.
+User accounts save only their report address and notification choices, not the
+server's SMTP password. In **Settings → Terminal & email**, save the address and
+click **Send test email**. `POST /api/automation/mail/test` sends a fixed message
+only to that logged-in account's saved address; custom recipients or bodies are
+rejected. Each user can request one test per minute. Success means the SMTP server
+accepted the message; check the inbox and spam folder separately.
+
+For a local Mailpit test inbox, use `configs/mail.local.env.example` with Mailpit
+listening on loopback SMTP port 1025. It explicitly permits plaintext on that local
+connection and keeps mail inside the preview inbox; it does not prove delivery to
+an external mailbox. Production mail should keep TLS enabled.
 
 Implementation anchors: `internal/hub/automation_access.go:handleAutomationAccess`,
 `internal/hub/automation_mcp.go:newAutomationMCPHandler`,

@@ -29,7 +29,6 @@ type Client struct {
 	instance       string
 	sessions       *SessionManager
 	orchestrations *OrchestrationManager
-	tbci           *tbciRuntime
 	cliConfig      *cliConfigManager
 	shutdown       chan struct{}
 	shutdownOnce   chan struct{}
@@ -54,12 +53,6 @@ func (c *Client) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	c.tbci = prepareTBCIRuntime(ctx, c.cfg)
-	if !c.tbci.capability.Available {
-		slog.Warn("[bridge] TBCI unavailable", "state", c.tbci.capability.State, "reason", c.tbci.capability.Reason)
-	} else {
-		slog.Info("[bridge] TBCI ready", "managed", c.tbci.capability.Managed, "platform", c.tbci.capability.Platform, "version", c.tbci.capability.Version)
-	}
 	hostname, _ := os.Hostname()
 	c.machineID = machineID
 	c.hostname = hostname
@@ -70,7 +63,6 @@ func (c *Client) Run(ctx context.Context) error {
 	}
 	c.sessions = NewSessionManager(c.cfg)
 	c.orchestrations = NewOrchestrationManager(c.cfg)
-	c.orchestrations.SetTBCIRuntime(c.tbci)
 	c.orchestrations.SetCLIConfigManager(c.cliConfig)
 
 	minDelay := c.cfg.Bridge.ReconnectMin.Duration
@@ -176,10 +168,6 @@ func (c *Client) connectOnce(ctx context.Context, token string) error {
 	defer ws.Close()
 
 	capabilities := BridgeCapabilities(c.cfg)
-	if c.tbci != nil {
-		tbci := c.tbci.capability
-		capabilities.TBCI = &tbci
-	}
 	capabilities.ConfigSwitcher = c.cliConfig.capability()
 	reg := protocol.RegisterPayload{
 		Name:         c.cfg.Bridge.Name,

@@ -311,8 +311,8 @@ Legacy `{arch}`-only URLs remain Linux-only and literal URLs Linux amd64-only;
 other platforms fall back to Hub routes. See the
 [configuration reference](dev-workflow.md#environment-variables).
 
-ARM64 builds currently do not embed TBCI. Use agent verification for formal
-proof runs, or explicitly configure a working native `bridge.tbci_path`.
+Formal-proof runs use independent Agent verification. Install the project's
+native proof-assistant toolchain on the connected machine.
 
 ### Common configuration
 

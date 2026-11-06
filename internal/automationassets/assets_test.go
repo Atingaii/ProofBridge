@@ -219,6 +219,12 @@ func TestInstallerRefusesUnmanagedOrSymlinkTarget(t *testing.T) {
 func TestSkillHasAllPublicToolsAndWorkerGuard(t *testing.T) {
 	entry := SkillFiles["SKILL.md"]
 	reference := SkillFiles["references/tools.md"]
+	frontmatter := strings.SplitN(entry, "---", 3)[1]
+	for _, alias := range []string{"ProofBridge", "Codex Bridge", "CodexBridge"} {
+		if !strings.Contains(frontmatter, alias) {
+			t.Fatalf("discovery metadata omits requested name: %s", alias)
+		}
+	}
 	for _, important := range []string{"PROOFBRIDGE_MANAGED_WORKER=1", "background-mail", "clientRequestId", "submissionId", "not_sent"} {
 		if !strings.Contains(entry, important) {
 			t.Fatalf("skill missing operational invariant: %s", important)

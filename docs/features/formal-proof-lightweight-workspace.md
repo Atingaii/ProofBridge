@@ -93,9 +93,7 @@ turning orchestration metadata maintenance into a second task.
 
 ### Who verifies the proof now?
 
-In the default `agent` verification mode, Codex or Claude runs the actual
-project-specific Coq/Rocq, Isabelle, or Lean commands and the two Agent
-Verifiers judge completion. In explicitly selected `tbci` mode, Bridge freezes
-and invokes its managed TBCI verifier as the sole completion authority. The
-proof assistant remains the native checker underneath TBCI; there is no Agent
-Verifier fallback.
+Codex or Claude runs the actual project-specific Coq/Rocq, Isabelle, or Lean
+commands and the two independent Agent Verifiers judge completion. Checker
+success and semantic task satisfaction remain separate requirements. See
+[the verification contract](../adr/030-agent-only-verification.md).

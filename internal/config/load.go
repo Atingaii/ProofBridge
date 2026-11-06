@@ -12,12 +12,17 @@ import (
 )
 
 func Load(configDir string) (*Config, error) {
-	if v := os.Getenv("CODEX_BRIDGE_CONFIG_DIR"); v != "" {
+	lookup, err := configurationEnvironment()
+	if err != nil {
+		return nil, err
+	}
+	getEnv := func(key string) string { value, _ := lookup(key); return value }
+	if v := getEnv("CODEX_BRIDGE_CONFIG_DIR"); v != "" {
 		configDir = v
 	}
 	cfg := Default()
 
-	env := os.Getenv("APP_ENV")
+	env := getEnv("APP_ENV")
 	if env == "" {
 		env = "dev"
 	}
@@ -41,148 +46,140 @@ func Load(configDir string) (*Config, error) {
 		}
 	}
 
-	applyEnv(&cfg)
+	applyEnvWithLookup(&cfg, lookup)
 	return &cfg, nil
 }
 
-func applyEnv(cfg *Config) {
-	applyAutomationEnv(cfg)
-	if v := os.Getenv("APP_ENV"); v != "" {
+func applyEnv(cfg *Config) { applyEnvWithLookup(cfg, os.LookupEnv) }
+
+func applyEnvWithLookup(cfg *Config, lookup envLookup) {
+	getEnv := func(key string) string { value, _ := lookup(key); return value }
+	applyAutomationEnvWithLookup(cfg, lookup)
+	if v := getEnv("APP_ENV"); v != "" {
 		cfg.App.Env = v
 	}
-	if v := os.Getenv("APP_DEBUG"); v != "" {
+	if v := getEnv("APP_DEBUG"); v != "" {
 		cfg.App.Debug = parseBool(v, cfg.App.Debug)
 	}
-	if v := os.Getenv("APP_HOST"); v != "" {
+	if v := getEnv("APP_HOST"); v != "" {
 		cfg.Gateway.Host = v
 	}
-	if v := os.Getenv("APP_PORT"); v != "" {
+	if v := getEnv("APP_PORT"); v != "" {
 		cfg.Gateway.Port = parseInt(v, cfg.Gateway.Port)
 	}
-	if v := os.Getenv("HUB_DB_PATH"); v != "" {
+	if v := getEnv("HUB_DB_PATH"); v != "" {
 		cfg.Hub.DBPath = v
 	}
-	if v := os.Getenv("HUB_COOKIE_SECURE"); v != "" {
+	if v := getEnv("HUB_COOKIE_SECURE"); v != "" {
 		cfg.Hub.CookieSecure = parseBool(v, cfg.Hub.CookieSecure)
 	}
-	if v := os.Getenv("HUB_BRIDGE_DOWNLOAD_URL"); v != "" {
+	if v := getEnv("HUB_BRIDGE_DOWNLOAD_URL"); v != "" {
 		cfg.Hub.BridgeDownloadURL = v
 	}
-	if v := os.Getenv("HUB_BROWSER_LEASE_TTL"); v != "" {
+	if v := getEnv("HUB_BROWSER_LEASE_TTL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.Hub.BrowserLeaseTTL = Duration{Duration: d}
 		}
 	}
-	if v := os.Getenv("JWT_SECRET"); v != "" {
+	if v := getEnv("JWT_SECRET"); v != "" {
 		cfg.Auth.JWTSecret = v
 	}
-	if v := os.Getenv("HUB_USERNAME"); v != "" {
+	if v := getEnv("HUB_USERNAME"); v != "" {
 		cfg.Auth.BootstrapUsername = v
 	}
-	if v := os.Getenv("HUB_PASSWORD"); v != "" {
+	if v := getEnv("HUB_PASSWORD"); v != "" {
 		cfg.Auth.BootstrapPassword = v
 	}
-	if v := os.Getenv("REGISTRATION_ENABLED"); v != "" {
+	if v := getEnv("REGISTRATION_ENABLED"); v != "" {
 		cfg.Auth.Registration.Enabled = parseBool(v, cfg.Auth.Registration.Enabled)
 	}
-	if v := os.Getenv("REGISTRATION_REQUIRE_TURNSTILE"); v != "" {
+	if v := getEnv("REGISTRATION_REQUIRE_TURNSTILE"); v != "" {
 		cfg.Auth.Registration.RequireTurnstile = parseBool(v, cfg.Auth.Registration.RequireTurnstile)
 	}
-	if v := os.Getenv("TURNSTILE_SITE_KEY"); v != "" {
+	if v := getEnv("TURNSTILE_SITE_KEY"); v != "" {
 		cfg.Auth.Registration.TurnstileSiteKey = v
 	}
-	if v := os.Getenv("TURNSTILE_SECRET"); v != "" {
+	if v := getEnv("TURNSTILE_SECRET"); v != "" {
 		cfg.Auth.Registration.TurnstileSecret = v
 	}
-	if v := os.Getenv("TURNSTILE_HOSTNAME"); v != "" {
+	if v := getEnv("TURNSTILE_HOSTNAME"); v != "" {
 		cfg.Auth.Registration.TurnstileHostname = v
 	}
-	if v := os.Getenv("BRIDGE_HUB_URL"); v != "" {
+	if v := getEnv("BRIDGE_HUB_URL"); v != "" {
 		cfg.Bridge.HubURL = v
 	}
-	if v := os.Getenv("BRIDGE_TOKEN"); v != "" {
+	if v := getEnv("BRIDGE_TOKEN"); v != "" {
 		cfg.Bridge.Token = v
 	}
-	if v := os.Getenv("BRIDGE_TOKEN_FILE"); v != "" {
+	if v := getEnv("BRIDGE_TOKEN_FILE"); v != "" {
 		cfg.Bridge.TokenFile = v
 	}
-	if v := os.Getenv("BRIDGE_NAME"); v != "" {
+	if v := getEnv("BRIDGE_NAME"); v != "" {
 		cfg.Bridge.Name = v
 	}
-	if v := os.Getenv("BRIDGE_MACHINE_ID_FILE"); v != "" {
+	if v := getEnv("BRIDGE_MACHINE_ID_FILE"); v != "" {
 		cfg.Bridge.MachineIDFile = v
 	}
-	if v := os.Getenv("BRIDGE_CWD"); v != "" {
+	if v := getEnv("BRIDGE_CWD"); v != "" {
 		cfg.Bridge.CWD = v
 	}
-	if v := os.Getenv("BRIDGE_RUNNER"); v != "" {
+	if v := getEnv("BRIDGE_RUNNER"); v != "" {
 		cfg.Bridge.Runner = v
 	}
-	if v := os.Getenv("BRIDGE_CODEX_PATH"); v != "" {
+	if v := getEnv("BRIDGE_CODEX_PATH"); v != "" {
 		cfg.Bridge.CodexPath = v
 	}
-	if v := os.Getenv("BRIDGE_CLAUDE_PATH"); v != "" {
+	if v := getEnv("BRIDGE_CLAUDE_PATH"); v != "" {
 		cfg.Bridge.ClaudePath = v
 	}
-	if v := os.Getenv("BRIDGE_CLAUDE_MODEL"); v != "" {
+	if v := getEnv("BRIDGE_CLAUDE_MODEL"); v != "" {
 		cfg.Bridge.ClaudeModel = v
 	}
-	if v := os.Getenv("BRIDGE_CLAUDE_EFFORT"); v != "" {
+	if v := getEnv("BRIDGE_CLAUDE_EFFORT"); v != "" {
 		cfg.Bridge.ClaudeEffort = v
 	}
-	if v := os.Getenv("BRIDGE_MODEL"); v != "" {
+	if v := getEnv("BRIDGE_MODEL"); v != "" {
 		cfg.Bridge.Model = v
 	}
-	if v := os.Getenv("BRIDGE_SANDBOX"); v != "" {
+	if v := getEnv("BRIDGE_SANDBOX"); v != "" {
 		cfg.Bridge.Sandbox = v
 	}
-	if v := os.Getenv("BRIDGE_APPROVAL_POLICY"); v != "" {
+	if v := getEnv("BRIDGE_APPROVAL_POLICY"); v != "" {
 		cfg.Bridge.ApprovalPolicy = v
 	}
-	if v := os.Getenv("BRIDGE_STRICT_WORKSPACE"); v != "" {
+	if v := getEnv("BRIDGE_STRICT_WORKSPACE"); v != "" {
 		cfg.Bridge.StrictWorkspace = parseBool(v, cfg.Bridge.StrictWorkspace)
 	}
-	if v := os.Getenv("BRIDGE_STRICT_WORKSPACE_READ_ONLY"); v != "" {
+	if v := getEnv("BRIDGE_STRICT_WORKSPACE_READ_ONLY"); v != "" {
 		cfg.Bridge.StrictWorkspaceReadOnly = filepath.SplitList(v)
 	}
-	if v := os.Getenv("BRIDGE_DURABLE_TASK_GRAPH"); v != "" {
+	if v := getEnv("BRIDGE_DURABLE_TASK_GRAPH"); v != "" {
 		cfg.Bridge.DurableTaskGraph = parseBool(v, cfg.Bridge.DurableTaskGraph)
 	}
-	if v := os.Getenv("BRIDGE_TBCI_ENABLED"); v != "" {
-		cfg.Bridge.TBCIEnabled = parseBool(v, cfg.Bridge.TBCIEnabled)
-	}
-	if v := os.Getenv("BRIDGE_TBCI_PATH"); v != "" {
-		cfg.Bridge.TBCIPath = v
-	}
-	if v := os.Getenv("BRIDGE_TBCI_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			cfg.Bridge.TBCITimeout = Duration{Duration: d}
-		}
-	}
-	if v := os.Getenv("BRIDGE_ACP_CLI"); v != "" {
+	if v := getEnv("BRIDGE_ACP_CLI"); v != "" {
 		cfg.Bridge.ACP.CLI = v
 	}
-	if v := os.Getenv("BRIDGE_ACP_CLAUDE_COMMAND"); v != "" {
+	if v := getEnv("BRIDGE_ACP_CLAUDE_COMMAND"); v != "" {
 		cfg.Bridge.ACP.ClaudeCommand = v
 	}
-	if v := os.Getenv("BRIDGE_ACP_CODEX_COMMAND"); v != "" {
+	if v := getEnv("BRIDGE_ACP_CODEX_COMMAND"); v != "" {
 		cfg.Bridge.ACP.CodexCommand = v
 	}
-	if v := os.Getenv("BRIDGE_ACP_PREFER_NATIVE_RESUME"); v != "" {
+	if v := getEnv("BRIDGE_ACP_PREFER_NATIVE_RESUME"); v != "" {
 		cfg.Bridge.ACP.PreferNativeResume = parseBool(v, cfg.Bridge.ACP.PreferNativeResume)
 	}
-	if v := os.Getenv("BRIDGE_LONG_COMMAND_OBSERVER_ENABLED"); v != "" {
+	if v := getEnv("BRIDGE_LONG_COMMAND_OBSERVER_ENABLED"); v != "" {
 		cfg.Bridge.LongCommandObserver.Enabled = parseBool(v, cfg.Bridge.LongCommandObserver.Enabled)
 	}
-	if v := os.Getenv("BRIDGE_LONG_COMMAND_OBSERVER_AFTER"); v != "" {
+	if v := getEnv("BRIDGE_LONG_COMMAND_OBSERVER_AFTER"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.Bridge.LongCommandObserver.After = Duration{Duration: d}
 		}
 	}
-	if v := os.Getenv("LOG_LEVEL"); v != "" {
+	if v := getEnv("LOG_LEVEL"); v != "" {
 		cfg.Observability.LogLevel = v
 	}
-	if v := os.Getenv("LOG_FORMAT"); v != "" {
+	if v := getEnv("LOG_FORMAT"); v != "" {
 		cfg.Observability.LogFormat = v
 	}
 }

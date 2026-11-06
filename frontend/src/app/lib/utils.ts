@@ -745,7 +745,7 @@ export function visibleOrchestrationEvents(events: OrchestrationEvent[], runId: 
       return;
     }
 
-    if (event.kind === 'bridge.note' && event.bridgeNoteData?.category === 'tbci-verification') {
+    if (event.kind === 'bridge.note' && event.role === 'verifier') {
       const content = cleanOrchestrationDisplayContent(event.content || event.error);
       if (!content) return;
       visible.push({

@@ -127,7 +127,7 @@ func TestPublicOrchestrationShareSanitizesRunAndEventData(t *testing.T) {
 	s, st, userID, agentID := newOrchestrationTestServer(t)
 	ctx := context.Background()
 	run := createOrchestrationRun(t, st, userID, agentID)
-	if err := st.UpdateOrchestrationRunSettings(ctx, run.ID, agentID, run.Mode, run.WorkerPair, run.FirstCLI, "formal-proof", protocol.VerificationModeTBCI, run.CWD, run.NativeContextCompaction, run.MaxTurns, run.Files); err != nil {
+	if err := st.UpdateOrchestrationRunSettings(ctx, run.ID, agentID, run.Mode, run.WorkerPair, run.FirstCLI, "formal-proof", "retired-verifier", run.CWD, run.NativeContextCompaction, run.MaxTurns, run.Files); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.AddOrchestrationEvent(ctx, store.OrchestrationEvent{
@@ -208,7 +208,7 @@ func TestPublicOrchestrationShareSanitizesRunAndEventData(t *testing.T) {
 			t.Fatalf("public orchestration share leaked %q: %s", forbidden, raw)
 		}
 	}
-	for _, want := range []string{"go test ./...", "Model.thy", `"events"`, `"turn.end"`, "claude exited mid-turn", "claude-codex", `"durationMs":2250`, "verified-early", "independent reviewer confirmed the result", `"verificationMode":"tbci"`} {
+	for _, want := range []string{"go test ./...", "Model.thy", `"events"`, `"turn.end"`, "claude exited mid-turn", "claude-codex", `"durationMs":2250`, "verified-early", "independent reviewer confirmed the result", `"verificationMode":"retired-verifier"`} {
 		if !strings.Contains(raw, want) {
 			t.Fatalf("public orchestration share missing %q: %s", want, raw)
 		}

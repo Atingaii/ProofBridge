@@ -287,8 +287,8 @@ func (s *Server) normalizeOrchestrationStart(w http.ResponseWriter, req orchestr
 	}
 	req.Profile = normalizeOrchestrationProfile(req.Profile)
 	req.VerificationMode = protocol.NormalizeVerificationMode(req.VerificationMode)
-	if req.VerificationMode == protocol.VerificationModeTBCI && req.Profile != "formal-proof" {
-		serverutil.WriteError(w, http.StatusBadRequest, "BAD_VERIFICATION_MODE", "TBCI verification requires the formal-proof profile")
+	if req.VerificationMode != protocol.VerificationModeAgent {
+		serverutil.WriteError(w, http.StatusBadRequest, "BAD_VERIFICATION_MODE", "unsupported verification mode; choose agent verification")
 		return req, false
 	}
 	req.ExecutionMode = strings.TrimSpace(req.ExecutionMode)
@@ -1511,29 +1511,10 @@ func (s *Server) validateOrchestrationCapabilities(agentID, workerPair string) e
 }
 
 func (s *Server) validateVerificationCapability(agentID, profile, verificationMode string) error {
-	if normalizeOrchestrationProfile(profile) != "formal-proof" || protocol.NormalizeVerificationMode(verificationMode) != protocol.VerificationModeTBCI {
-		return nil
+	if protocol.NormalizeVerificationMode(verificationMode) != protocol.VerificationModeAgent {
+		return errors.New("unsupported verification mode; choose agent verification")
 	}
-	connection, ok := s.pool.AgentConnectionInfo(agentID)
-	if !ok || connection.Capabilities == nil {
-		return errors.New("selected CLI endpoint is offline and cannot report TBCI availability")
-	}
-	capability := connection.Capabilities.TBCI
-	if capability == nil {
-		return errors.New("selected CLI endpoint must update and reconnect its Bridge before TBCI verification can be selected")
-	}
-	if capability.Available && strings.EqualFold(strings.TrimSpace(capability.State), "ready") {
-		return nil
-	}
-	reason := strings.TrimSpace(capability.Reason)
-	if reason == "" {
-		state := strings.TrimSpace(capability.State)
-		if state == "" {
-			state = "unavailable"
-		}
-		reason = "the Bridge reported TBCI as " + state
-	}
-	return fmt.Errorf("selected CLI endpoint cannot run TBCI: %s", reason)
+	return nil
 }
 
 // validateIsolatedWorkerProfileCapability rejects Bridges that predate the
@@ -1659,7 +1640,12 @@ func (s *Server) handleGetOrchestration(w http.ResponseWriter, r *http.Request, 
 		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load orchestration run")
 		return
 	}
-	serverutil.WriteJSON(w, http.StatusOK, map[string]any{"run": run})
+	configuration, submissionID, err := s.orchestrationExecutionConfiguration(r.Context(), uid, run)
+	if err != nil {
+		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load execution configuration")
+		return
+	}
+	serverutil.WriteJSON(w, http.StatusOK, map[string]any{"run": run, "executionConfiguration": configuration, "submissionId": submissionID})
 }
 
 func (s *Server) handleDeleteOrchestration(w http.ResponseWriter, r *http.Request, uid string) {
@@ -1931,7 +1917,7 @@ func compactOrchestrationContext(run store.OrchestrationRun, events []store.Orch
 			commands = append(commands, trimForContext(joinNonEmpty(command, status, output), 700))
 		case event.Kind == "run.error" || event.Kind == "run.cancelled":
 			blockers = append(blockers, trimForContext(joinNonEmpty(event.Error, event.Content, event.Status), 600))
-		case event.Kind == "bridge.note" && event.BridgeNoteData != nil && event.BridgeNoteData.Category == "tbci-verification":
+		case event.Kind == "bridge.note" && event.Role == "verifier":
 			blockers = append(blockers, trimForContext(joinNonEmpty(event.Error, event.Content), 600))
 		}
 	}

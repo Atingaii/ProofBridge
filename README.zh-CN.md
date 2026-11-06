@@ -41,7 +41,7 @@ Codex 和 Claude Code 协作，并带着历史记录与原生上下文继续同�
 - **运行中交互。** 在浏览器中处理工具审批、回答 CLI 原生问题，并在端点支持时向
   正在运行的任务追加指令。
 - **选择适合的配置。** 使用 CLI 本地登录或已保存的服务商配置，选择执行权限策略，
-  并按需启用由 Agent 或 TBCI 验证的形式化证明流程。
+  并按需启用由独立 Agent 验证的形式化证明流程。
 - **在终端用自然语言调用。** 复制个人 MCP 配置、安装 ProofBridge Skill 后，即可从
   Codex 或 Claude Code 提交任务，选择终端等待或由 Hub 在事件发生时发送邮件。
 
@@ -103,7 +103,7 @@ Codex 的工具执行通过浏览器审批：
    模型或 MCP 配置。客户端未发现 Skill 时，重启客户端。
 3. 保存收件邮箱和通知偏好。需要离开终端时，同时启用任务结束报告和待处理提醒，
    选择**提交后邮件通知**。管理员需先配置 SMTP；未配置时可以使用终端交互等待。
-4. 例如输入：“请通过 ProofBridge，在我的默认端点阅读 README，使用已保存的默认
+4. 可以使用 ProofBridge、Codex Bridge 或 CodexBridge 名称。例如输入：“请通过 ProofBridge，在我的默认端点阅读 README，使用已保存的默认
    模型组合完成项目验证，后台执行，结束后发邮件给我。”Skill 会查询实际可用的端点、
    配置和默认值。需要下次沿用时，明确要求保存组合或默认设置。
 
@@ -119,6 +119,9 @@ Hub 部署在实验室内网时，位于外部的客户端或 Bridge 需要 VPN�
 新的完整模板。安装范围及排错见[MCP 与 Skill 接入](docs/dev-workflow.md#mcp-and-skill-access)。
 管理员通过 `AUTOMATION_ENABLED`、`AUTOMATION_PUBLIC_URL` 和 SMTP 配置开启服务，
 详细变量统一见[开发工作流](docs/dev-workflow.md#environment-variables)。
+
+邮件部署可通过 `CODEX_BRIDGE_ENV_FILE` 显式加载 `configs/mail*.env.example` 对应的私有配置；
+个人中心支持向已保存邮箱发送测试邮件。见[邮件配置与投递测试](docs/dev-workflow.md#smtp-setup-and-a-personal-delivery-test)。
 
 ## 本地快速启动
 
@@ -228,10 +231,10 @@ Hub、前端、Bridge、CLI 和功能开放策略。具体门禁见
 [动态输入](docs/features/dynamic-orchestration-input.md)；满足 CLI 最低版本不代表
 所有后续版本都已实测。
 
-严格工作区隔离要求 Linux 支持 Landlock ABI 3 或以上。内嵌 TBCI 仅提供给 Linux
-amd64；项目所需的 Rocq/Coq、Lean 或 Isabelle 工具链仍需单独准备。详见
+严格工作区隔离要求 Linux 支持 Landlock ABI 3 或以上。连接的机器需要准备
+项目所需的 Rocq/Coq、Lean 或 Isabelle 工具链。详见
 [严格工作区](docs/features/strict-workspace-auto-execute.md)和
-[TBCI 验证](docs/features/tbci-formal-proof-verification.md)。
+[Agent 验证](docs/adr/030-agent-only-verification.md)。
 
 ## 文档导航
 

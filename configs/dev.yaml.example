@@ -56,12 +56,6 @@ bridge:
   strict_workspace_read_only: []
   # Disable only while rolling out alongside a legacy Bridge binary.
   durable_task_graph: true
-  # Managed TBCI is carried by supported Bridge builds and prepared once at
-  # startup. Set enabled=false to opt out, or path to override the managed
-  # artifact with an administrator-supplied executable.
-  tbci_enabled: true
-  tbci_path: ""
-  tbci_timeout: 2m
   reconnect_min: 5s
   reconnect_max: 30s
   heartbeat_interval: 15s

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AlertCircle, Check, ChevronDown, Copy, Eye, EyeOff, Loader2, RefreshCw, Terminal, Trash2 } from 'lucide-react';
+import { AlertCircle, Check, ChevronDown, Copy, Eye, EyeOff, Loader2, Mail, RefreshCw, Terminal, Trash2 } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { copyText } from '../lib/utils';
 import type { Agent, Language } from '../lib/types';
@@ -42,7 +42,9 @@ const text = {
     emailTitle: '邮件与默认设置', email: '收件邮箱', emailHint: '报告只发送到此账户绑定的邮箱。',
     completion: '任务结束时发送报告', attention: '需要审批或回答时发送提醒',
     smtpUnavailable: '管理员尚未配置可用邮件服务。可以先保存邮箱并使用交互等待；后台邮件模式准备好后再启用。',
-    smtpReady: '邮件服务已配置。实际投递结果可在任务中查询。',
+    smtpReady: '邮件服务已配置。可先发送测试邮件，再检查收件箱；SMTP 接受不代表已进入收件箱。',
+    testMail: '发送测试邮件', testingMail: '正在发送测试邮件…', saveEmailFirst: '请先保存收件邮箱，再发送测试邮件。',
+    testAccepted: '邮件服务已接受测试邮件。请检查收件箱与垃圾邮件；本地测试服务请查看其收件箱。', testFailed: '测试邮件未被接受，请联系管理员检查邮件配置。',
     defaultEndpoint: '默认执行端点', chooseEndpoint: '每次任务按要求选择',
     mode: '默认结果接收方式', interactive: '在终端交互等待', background: '提交后邮件通知',
     backgroundNeedsMail: '后台邮件模式需要可用邮件服务、收件邮箱，以及结束和待处理通知。请补齐设置，或选择交互等待。',
@@ -67,7 +69,9 @@ const text = {
     emailTitle: 'Email & defaults', email: 'Report email', emailHint: 'Reports go only to the address bound to this account.',
     completion: 'Email a report when work ends', attention: 'Email when approval or an answer is needed',
     smtpUnavailable: 'The administrator has not configured a ready mail service. Save your address and use interactive monitoring until background mail is ready.',
-    smtpReady: 'Mail service configured. Check each task for its delivery status.',
+    smtpReady: 'Mail service configured. Send a test and check the mailbox; SMTP acceptance does not guarantee inbox delivery.',
+    testMail: 'Send test email', testingMail: 'Sending test email…', saveEmailFirst: 'Save your report email before sending a test.',
+    testAccepted: 'The mail service accepted the test. Check your inbox and spam folder, or the local test inbox.', testFailed: 'The test was not accepted. Ask the administrator to check mail settings.',
     defaultEndpoint: 'Default execution endpoint', chooseEndpoint: 'Select from the task request',
     mode: 'Default monitoring', interactive: 'Stay in the terminal', background: 'Submit and email me',
     backgroundNeedsMail: 'Background mail requires a ready mail service, an email address, and completion and attention notifications. Complete setup or choose interactive monitoring.',
@@ -173,6 +177,19 @@ export function AutomationSettings({ userId, language, agents }: { userId: strin
       setBusy('');
     }
   };
+  const savedEmail = preferences?.data.email?.trim() || '';
+  const emailNeedsSave = !savedEmail || (data.email?.trim() || '') !== savedEmail;
+  const testMail = async () => {
+    if (emailNeedsSave) { setError(t.saveEmailFirst); return; }
+    setBusy('mail-test'); setError(''); setMessage('');
+    try {
+      const result = await api<{ smtpAccepted: boolean }>('/api/automation/mail/test', { method: 'POST', body: '{}' });
+      if (!result.smtpAccepted) throw new Error(t.testFailed);
+      setMessage(t.testAccepted);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.testFailed);
+    } finally { setBusy(''); }
+  };
   const config = access ? client === 'codex' ? access.codexConfig : access.claudeConfig : '';
   const preview = !revealed && access?.token ? config.split(access.token).join('••••••••') : config;
   const installCommand = access?.skillInstallCommands?.[client] || '';
@@ -271,7 +288,15 @@ export function AutomationSettings({ userId, language, agents }: { userId: strin
               <option value="interactive">{t.interactive}</option><option value="background-mail">{t.background}</option>
             </select>
           </label>
-          <Button type="submit" size="sm" disabled={disabled}>{busy === 'save' ? t.refreshing : t.save}</Button>
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" size="sm" disabled={disabled}>{busy === 'save' ? t.refreshing : t.save}</Button>
+            <Button type="button" size="sm" variant="secondary" onClick={testMail}
+              disabled={disabled || !access.mailReady || emailNeedsSave} title={emailNeedsSave ? t.saveEmailFirst : undefined}>
+              {busy === 'mail-test' ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Mail className="mr-1 h-3.5 w-3.5" />}
+              {busy === 'mail-test' ? t.testingMail : t.testMail}
+            </Button>
+          </div>
+          {emailNeedsSave && <p className="text-[11px] text-muted-foreground">{t.saveEmailFirst}</p>}
         </form>}
       </>}
       <div className="flex gap-3 text-xs">

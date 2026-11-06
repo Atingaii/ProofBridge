@@ -64,7 +64,7 @@ Bridge 任务生命周期由 `internal/bridge/orchestration.go:Start` 中的 man
 | workerPair | 三种 CLI 双工作器组合 |
 | mode | collaboration 或 debate |
 | profile | default 或 formal-proof；这是证明领域契约，不是用户的“默认配置方案” |
-| verificationMode | agent 或 tbci；tbci 仅适用于 formal-proof 且要求目标 Bridge 能力可用 |
+| verificationMode | 当前支持 agent；历史记录保留已存模式，继续运行时显式选择受支持模式 |
 | executionMode | bounded 或 dynamic；动态模式没有总轮数预算，但仍受完成/停滞和取消机制控制 |
 | 用户可命名的编排方案、账户/项目默认偏好 | 本次需要新增的产品能力，不应与上述 profile 或机器级 active preset 混用 |
 
@@ -100,7 +100,7 @@ Bridge 任务生命周期由 `internal/bridge/orchestration.go:Start` 中的 man
 
 durable reviewer 会触发检查，worker/integrator 的 resolved handoff 也可以触发独立检查候选；最终 reviewer 没有“免验证”通道。依据：`internal/bridge/orchestration.go:shouldRunAgentVerifier`、`internal/bridge/orchestration.go:run`、`internal/bridge/orchestration_completion.go:completionCandidate`。
 
-TBCI 复用单独的验证模式与能力门禁，不能在 TBCI 不可用时悄悄切到 Agent 模式。当前执行分支依据：`internal/bridge/orchestration.go:run`，能力校验依据：`internal/hub/orchestration.go:validateVerificationCapability`。
+显式请求不支持的验证模式时，Hub 和 Bridge 都拒绝执行，不隐式更换验证来源。当前契约见 [ADR-030](../adr/030-agent-only-verification.md)。执行分支依据：`internal/bridge/orchestration.go:run`，入口校验依据：`internal/hub/orchestration.go:validateVerificationCapability`。
 
 达到轮次上限或停滞可以得到运行 completed，但结论可能是 blocked/unknown/continue，不能转译成“证明成功”。依据：`internal/hub/task_graph.go:handleTaskGraphEvent`、`internal/bridge/orchestration_completion.go:completedExecutionConclusion`。
 
@@ -147,7 +147,6 @@ TBCI 复用单独的验证模式与能力门禁，不能在 TBCI 不可用时悄
 | `docs/architecture.md:477` 概括“每个 run 一条 Codex 和一条 Claude 长会话、无 verifier” | 同文件较前段已区分双 Codex/双 Claude 与 durable attempt；`orchestrationExecutionKey` 按 run:attempt 分隔；`evaluateAgentVerifierQuorum` 有独立验证器 | 用当前实际 task graph/worker pair/attempt 结构解释；该旧概括不应成为新 MCP 的约束 |
 | `docs/features/orchestration-worker-profiles-and-early-verdicts.md` 声称所有新运行必须带完整预设 | `resolveWorkerProfiles` 允许空绑定；网页要求完整槽位选择 | 将 UI 产品规则和后端兼容路径分开 |
 | 同一 feature Q&A 写“concurrent sessions” | `evaluateAgentVerifierQuorum` 顺序调用，且 `agentVerificationGate` 串行重检查 | 不声称当前并发验证 |
-| `docs/features/tbci-formal-proof-verification.md` 的步骤仍写最终 reviewer 跳过检查、预算结束成功 | 当前 `shouldRunAgentVerifier` 不排除最终 reviewer；`handleTaskGraphEvent` 保持生命周期与验证结论分离 | 新结果契约以当前源码与 `docs/features/independent-early-run-completion.md` 为准 |
 | 旧设计可能写双方一致 pass 或纯 OR 判定 | `aggregateAgentVerifierQuorum` 两结果齐备、至少一 pass，同时拒绝具体证据冲突 | MCP 展示真实 verdict 与检查证据，不发明更强验证保证 |
 
 本文仅记录冲突，不批量重写历史设计。新设计应引用具体 owning source；需要修正文档时按 `AGENTS.md` R5/R7 保留历史与状态，避免把旧验收记录改写成当前真实运行结果。

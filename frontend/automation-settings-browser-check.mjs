@@ -15,6 +15,7 @@ page.on('pageerror', (err) => errors.push(err.message));
 page.on('dialog', (dialog) => dialog.accept());
 
 let token = 'pb_mcp_ui-fixture-first', mailReady = true, loadFailure = false, conflict = false;
+let mailTestFailure = false;
 let version = 1;
 let preferences = { email: 'owner@example.test', completionEnabled: true, attentionEnabled: true, defaultEndpointId: '', monitoringMode: 'interactive' };
 const writes = [];
@@ -50,6 +51,13 @@ await page.route('**/api/**', async (route) => {
     writes.push({ path });
     token = path.endsWith('/revoke') ? null : 'pb_mcp_ui-fixture-rotated';
     return route.fulfill({ json: access() });
+  }
+  if (path === '/api/automation/mail/test') {
+    assert.equal(method, 'POST');
+    assert.deepEqual(route.request().postDataJSON(), {});
+    writes.push({ path });
+    if (mailTestFailure) return route.fulfill({ status: 502, json: { message: 'Mail test rejected; check SMTP settings.' } });
+    return route.fulfill({ json: { smtpAccepted: true, status: 'accepted' } });
   }
   if (path === '/api/automation/preferences') {
     if (method === 'PUT') {
@@ -91,10 +99,20 @@ try {
   await card.getByText('设置已保存。两个终端客户端将共用这些默认值。', { exact: true }).waitFor();
   assert.equal(preferences.email, 'updated@example.test');
   assert.equal(preferences.defaultEndpointId, 'owned-endpoint');
+  const testMail = card.getByRole('button', { name: '发送测试邮件', exact: true });
+  assert.equal(await testMail.isDisabled(), false);
+  await testMail.click();
+  await card.getByText('邮件服务已接受测试邮件。请检查收件箱与垃圾邮件；本地测试服务请查看其收件箱。', { exact: true }).waitFor();
+  mailTestFailure = true;
+  await testMail.click();
+  await card.getByRole('alert').getByText('Mail test rejected; check SMTP settings.', { exact: true }).waitFor();
+  mailTestFailure = false;
+
 
   // A version conflict preserves the user's unsaved input.
   conflict = true;
   await card.getByLabel('收件邮箱', { exact: true }).fill('unsaved@example.test');
+  assert.equal(await testMail.isDisabled(), true, 'test mail must use a saved email');
   await card.getByRole('button', { name: '保存设置', exact: true }).click();
   await card.getByRole('alert').getByText('设置已在其他客户端更新。请重新加载后再保存。', { exact: true }).waitFor();
   assert.equal(await card.getByLabel('收件邮箱', { exact: true }).inputValue(), 'unsaved@example.test');

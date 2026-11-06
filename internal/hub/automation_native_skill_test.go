@@ -36,6 +36,13 @@ func TestAutomationNativeSkillReadOnly(t *testing.T) {
 	if mode != "natural" && mode != "explicit" {
 		t.Fatal("PROOFBRIDGE_TEST_NATIVE_SKILL_MODE must be natural or explicit")
 	}
+	alias := os.Getenv("PROOFBRIDGE_TEST_SKILL_ALIAS")
+	if alias == "" {
+		alias = "ProofBridge"
+	}
+	if alias != "ProofBridge" && alias != "Codex Bridge" && alias != "CodexBridge" {
+		t.Fatal("PROOFBRIDGE_TEST_SKILL_ALIAS must name ProofBridge, Codex Bridge or CodexBridge")
+	}
 	for _, client := range []string{"codex", "claude"} {
 		t.Run(client+"_"+mode, func(t *testing.T) {
 			path := nativeClientPath(t, client)
@@ -132,7 +139,7 @@ func TestAutomationNativeSkillReadOnly(t *testing.T) {
 			if _, err := installer.CombinedOutput(); err != nil {
 				t.Fatalf("install temporary Skill: %v (output suppressed)", err)
 			}
-			prompt := "请使用 ProofBridge 查看我的账号上下文和已连接端点，不启动或改变任何任务，不保存设置，不执行项目命令。查询完成后用中文简短回显账号和端点状态。"
+			prompt := "请使用 " + alias + " 查看我的账号上下文和已连接端点，不启动或改变任何任务，不保存设置，不执行项目命令。查询完成后用中文简短回显账号和端点状态。"
 			if mode == "explicit" {
 				if client == "codex" {
 					prompt = "$proofbridge " + prompt
@@ -149,7 +156,7 @@ func TestAutomationNativeSkillReadOnly(t *testing.T) {
 			cmd.Env, cmd.Dir = env, project
 			output, runErr := cmd.CombinedOutput()
 			calls, successful, denied := trace.snapshot()
-			t.Logf("mode=%s client=%s MCP calls=%v successful=%v denied=%v", mode, client, calls, successful, denied)
+			t.Logf("mode=%s client=%s alias=%s MCP calls=%v successful=%v denied=%v", mode, client, alias, calls, successful, denied)
 			if len(denied) != 0 {
 				t.Fatal("client attempted a tool outside the read-only acceptance boundary; it was not executed")
 			}

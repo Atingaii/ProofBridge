@@ -40,25 +40,12 @@ for (const outcome of ['completed', 'satisfied']) {
   assert.doesNotMatch(html, /未完成义务|>satisfied<|>completed</);
 }
 
-// TBCI notes are opt-in UI events; ordinary bridge notes must remain ordinary.
-assert.match(orchestrationComponentsSource, /item\.kind === 'bridge\.note' && item\.category === 'tbci-verification'/);
-assert.match(utilsSource, /event\.kind === 'bridge\.note' && event\.bridgeNoteData\?\.category === 'tbci-verification'/);
-assert.match(orchestrationComponentsSource, /tbciVerificationPreparing/);
-assert.match(orchestrationComponentsSource, /tbciVerificationPrepared/);
-assert.match(orchestrationComponentsSource, /tbciVerificationRunning/);
-assert.match(orchestrationComponentsSource, /tbciVerificationPassed/);
-assert.match(orchestrationComponentsSource, /tbciVerificationContinue/);
-assert.match(orchestrationComponentsSource, /tbciVerificationFallback/);
-assert.match(orchestrationComponentsSource, /tbciVerificationUnavailable/);
-assert.match(orchestrationWorkspaceSource, /tbciVerificationMode/);
-assert.match(orchestrationComponentsSource, /item\.kind === 'verifier\.verdict' && item\.cli === 'tbci'/);
+// Verification notes use the ordinary verifier rendering, while supported
+// configuration remains explicit and historical modes require confirmation.
+assert.match(utilsSource, /event\.kind === 'bridge\.note' && event\.role === 'verifier'/);
 assert.match(orchestrationWorkspaceSource, /useState<VerificationMode>\('agent'\)/);
 assert.match(orchestrationWorkspaceSource, /verificationMode: profile === 'formal-proof' \? verificationMode : 'agent'/);
-assert.match(orchestrationWorkspaceSource, /setVerificationMode\(run\.profile === 'formal-proof' && run\.verificationMode === 'tbci' \? 'tbci' : 'agent'\)/);
-assert.match(orchestrationWorkspaceSource, /setProfile\('default'\); setVerificationMode\('agent'\);/);
-assert.match(orchestrationWorkspaceSource, /tbciCapability\?\.available && tbciCapability\.state === 'ready'/);
-assert.match(orchestrationWorkspaceSource, /disabled=\{creating \|\| isRunning \|\| !tbciAvailable\}/);
-assert.match(orchestrationComponentsSource, /const tbciReady = Boolean\(tbci\?\.available && tbci\.state === 'ready'\)/);
+assert.match(orchestrationWorkspaceSource, /setVerificationModeConfirmed\(!run\.verificationMode \|\| run\.verificationMode === 'agent'\)/);
 
 assert.match(source, /function orchestrationStatusContent\(event: OrchestrationEvent\)/);
 assert.match(source, /if \(\(event\.kind === 'run\.end' \|\| event\.kind === 'run\.error'\) && content\) return content;/);

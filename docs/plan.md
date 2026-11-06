@@ -46,7 +46,6 @@ Let a single user talk from any browser to Codex CLI running on a private machin
 | P10.2 | Administrator activity and usage dashboard with user aggregates and read-only conversation detail | implemented |
 | P10.3 | Isolated Codex/Claude worker profiles, dual-provider pairs, and deterministic quorum early-stop | implemented |
 | P10.4 | [Intermediate completion and actual-model usage fixes](features/early-completion-model-accounting.md), including verifier usage and partial cost display | implemented; local verification |
-| P10.4 | Selectable formal-proof verifier and Bridge-managed TBCI capability | implemented |
 | P10.5 | [Independent early completion and completed lifecycle results](features/independent-early-run-completion.md) | Go/frontend checks passed; experimental v0.3.66 deployed |
 | P10.6 | [Native structured orchestration questions](features/native-structured-user-input.md) | v3 remediation implemented with historical automated checks; [queued native interaction](features/native-structured-user-input-runtime-plan.md) approved and in implementation; real model/browser acceptance and target component versions remain unverified |
 | P10.7 | [Official Codex A/B model and reasoning selections](features/official-codex-worker-models.md) with a shared-data enhanced leading website | website deployed 2026-10-08; runtime selections require ConfigSwitcher v3 |
@@ -64,6 +63,12 @@ Implemented on feature branch: [MCP access, verification Skill and submission-le
 
 ## Follow-up
 
+- Implemented on the feature branch (2026-11-06): natural-language mentions of **Codex Bridge**,
+  **CodexBridge**, and **ProofBridge** share the same end-user verification Skill.
+  Discovery descriptions, examples and alias regression inputs now use the same workflow.
+  Keep the `proofbridge` MCP server label/tool names,
+  managed-worker recursion isolation, and existing run continuity unchanged.
+  Actual native-client matching is recorded separately from metadata checks.
 - Chat resumes native Codex history: short-lived `codex exec` paths resume with the
   returned thread id, and review-required chat uses the `codex app-server` runner
   (`internal/bridge/appserver_runner.go`) with `initialize` / `thread/start` /
@@ -130,14 +135,6 @@ Implemented on feature branch: [MCP access, verification Skill and submission-le
   pre-replacement execution checks in the installer, with sequential dual-arch
   builds. See [Linux ARM64 installation](features/linux-arm64-installation.md).
 
-- 2026-09-01: Made TBCI baselines submission-scoped and persistent across
-  durable graph nodes, generated contracts for unique Rocq/Lean/Isabelle
-  targets after upload preparation, and added bounded namespaced Rocq project
-  support without narrowing the Lean or Isabelle paths.
-- 2026-09-01: Embedded the pinned Linux/amd64 TBCI runtime in supported Bridge
-  builds, added private atomic installation and digest verification at startup,
-  reported readiness to the Hub, and rejected unavailable TBCI selections
-  before run creation while preserving Agent Verifier as the default.
 - 2026-08-15: Delayed durable task recovery until the existing bounded Bridge
   reconnect window after Hub startup, so a brief Hub-only reload preserves
   active attempt identity and buffered terminal evidence; only endpoints still

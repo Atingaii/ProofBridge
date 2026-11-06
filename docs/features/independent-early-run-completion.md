@@ -14,9 +14,8 @@
 
 No planner-derived acceptance contract, extra corrective round on stagnation,
 token-only success, new LSP service, framework migration, or new permissions.
-The existing opt-in TBCI frozen-contract verifier remains a separate checking
-implementation; its input must not be inferred from plan items. Compiler success
-alone does not establish semantic task satisfaction.
+Verifier input must not be inferred from plan items. Compiler success alone
+does not establish semantic task satisfaction.
 
 ## Data and protocol impact
 

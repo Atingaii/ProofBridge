@@ -169,7 +169,7 @@ func validateAutomationChoices(values map[string]any) error {
 	enums := map[string][]string{
 		"workerPair": {protocol.WorkerPairClaudeCodex, protocol.WorkerPairCodexCodex, protocol.WorkerPairClaudeClaude},
 		"firstCli":   {"codex", "claude"}, "mode": {"collaboration", "debate"}, "profile": {"default", "formal-proof"},
-		"verificationMode": {"agent", "tbci"}, "executionMode": {"bounded", "dynamic"},
+		"verificationMode": {"agent"}, "executionMode": {"bounded", "dynamic"},
 		"nativeContextCompaction": {"off", "after-turn"}, "monitoringMode": {"interactive", "background-mail"},
 	}
 	for key, allowed := range enums {
@@ -188,6 +188,9 @@ func validateAutomationChoices(values map[string]any) error {
 				}
 			}
 			if !found {
+				if key == "verificationMode" {
+					return &operationError{400, "BAD_VERIFICATION_MODE", "unsupported verification mode; choose agent verification"}
+				}
 				return &operationError{400, "INVALID_CONFIGURATION", "不支持的 " + key + "；请查询当前可用配置。"}
 			}
 		}

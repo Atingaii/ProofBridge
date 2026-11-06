@@ -526,9 +526,6 @@ func verifierQuorum(reason string, checks []protocol.VerifierCheck) protocol.Ver
 
 func verifierVerdictEvent(turnID string, record orchestrationTurn, verdict protocol.VerifierVerdict, agents []agentVerifierResult) protocol.OrchestrationEventPayload {
 	content := "Verifier: " + verdict.Reason
-	if record.CLI == "tbci" {
-		content = "TBCI: " + verdict.Reason
-	}
 	if len(agents) > 0 {
 		parts := make([]string, 0, len(agents)+1)
 		for _, agent := range agents {

@@ -112,7 +112,7 @@ func automationInputSchema(d automationToolDefinition) map[string]any {
 		case "profile":
 			p["enum"] = []string{"default", "formal-proof"}
 		case "verificationMode":
-			p["enum"] = []string{"agent", "tbci"}
+			p["enum"] = []string{"agent"}
 		case "executionMode":
 			p["enum"] = []string{"bounded", "dynamic"}
 		case "nativeContextCompaction":

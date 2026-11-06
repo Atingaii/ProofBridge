@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ExecutionConfigurationCard, type OrchestrationExecutionConfiguration } from '../components/ExecutionConfigurationCard';
 import {
   Activity,
   AlertCircle,
@@ -215,6 +216,7 @@ export function OrchestrationWorkspace({
   const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState(() => readWorkspaceSelection('codexBridge.selectedAgentId'));
   const [runs, setRuns] = useState<OrchestrationRun[]>([]);
+  const [executionConfigurations, setExecutionConfigurations] = useState<Record<string, OrchestrationExecutionConfiguration | null>>({});
   const [historySearch, setHistorySearch] = useState('');
   const [historyQuery, setHistoryQuery] = useState('');
   const [historyStatus, setHistoryStatus] = useState('');
@@ -254,6 +256,7 @@ export function OrchestrationWorkspace({
   const [firstCli, setFirstCli] = useState<'claude' | 'codex'>('claude');
   const [profile, setProfile] = useState<'default' | 'formal-proof'>('default');
   const [verificationMode, setVerificationMode] = useState<VerificationMode>('agent');
+  const [verificationModeConfirmed, setVerificationModeConfirmed] = useState(false);
   const [nativeContextCompaction, setNativeContextCompaction] = useState<NativeContextCompaction>('off');
   const [cwd, setCwd] = useState('');
   const [maxTurns, setMaxTurns] = useState(defaultOrchestrationMaxTurns);
@@ -341,6 +344,7 @@ export function OrchestrationWorkspace({
     });
   }, [historyKey, historyPage, runs, selectedAgentId]);
   const activeRun = runs.find((run) => run.id === activeRunId) || null;
+  const unsupportedHistoricalVerification = Boolean(activeRun?.verificationMode && activeRun.verificationMode !== 'agent' && !verificationModeConfirmed);
   const nativeInputEnabled = Boolean(user.features?.includes('native-user-input')) && nativeUserInputProtocolVersion === 3;
   const nativeInputReadEnabled = nativeInputEnabled || Boolean(activeRun && !activeOrchestrationStatus(activeRun.status));
   const visibleUserInputs = userInputs.items.filter((item) => item.request.runId === activeRunId);
@@ -419,10 +423,6 @@ export function OrchestrationWorkspace({
   const canCancelRun = canCancelOrchestrationStatus(activeRun?.status);
   const hasOlderEvents = Boolean(activeRunId && hasOlderEventsByRun[activeRunId]);
   const capabilityProblems = useMemo(() => orchestrationCapabilityProblems(selectedAgent, t, workerPair), [selectedAgent, t, workerPair]);
-	const tbciCapability = selectedAgent?.capabilities?.tbci;
-	const tbciAvailable = Boolean(selectedAgent?.online && tbciCapability?.available && tbciCapability.state === 'ready');
-	const tbciUnavailableReason = tbciCapability?.reason || t.tbciUpdateBridgeHint;
-	const selectedTBCIUnavailable = profile === 'formal-proof' && verificationMode === 'tbci' && !tbciAvailable;
   const workingDirs = useMemo(() => {
     return Array.from(new Set((selectedAgent?.workingDirs || []).map((dir) => dir.trim()).filter(Boolean)));
   }, [selectedAgent]);
@@ -521,9 +521,10 @@ export function OrchestrationWorkspace({
   }, [agentsLoaded, historyKey, loadRuns, selectedAgentId]);
 
   const loadRun = useCallback(async (runId: string) => {
-    const data = await runReads.read<{ run: OrchestrationRun }>(`/api/orchestrations/${encodeURIComponent(runId)}`);
+    const data = await runReads.read<{ run: OrchestrationRun; executionConfiguration?: OrchestrationExecutionConfiguration }>(`/api/orchestrations/${encodeURIComponent(runId)}`);
     if (!isOrchestrationRun(data.run)) throw new Error(t.failedLoadOrchestration);
     setRuns((current) => upsertOrchestrationRun(current, { ...data.run, archivedAt: data.run.archivedAt || 0 }));
+    setExecutionConfigurations((current) => ({ ...current, [data.run.id]: data.executionConfiguration || null }));
     return data.run;
   }, [runReads, t.failedLoadOrchestration]);
 
@@ -1009,7 +1010,8 @@ export function OrchestrationWorkspace({
     setWorkerPair(nextWorkerPair);
     setFirstCli(nextWorkerPair === 'codex-codex' || run.firstCli === 'codex' ? 'codex' : 'claude');
     setProfile(run.profile === 'formal-proof' ? 'formal-proof' : 'default');
-    setVerificationMode(run.profile === 'formal-proof' && run.verificationMode === 'tbci' ? 'tbci' : 'agent');
+    setVerificationMode('agent');
+    setVerificationModeConfirmed(!run.verificationMode || run.verificationMode === 'agent');
     setNativeContextCompaction(run.nativeContextCompaction === 'after-turn' ? 'after-turn' : 'off');
     setCwd(run.cwd || '');
     setMaxTurns(run.maxTurns || 4);
@@ -1477,10 +1479,10 @@ export function OrchestrationWorkspace({
       setError(t.officialModelsUpdateBridge);
       return;
     }
-	if (selectedTBCIUnavailable) {
-		setError(`${t.tbciCapabilityUnavailable} ${tbciUnavailableReason}`);
-		return;
-	}
+    if (unsupportedHistoricalVerification) {
+      setError(language === 'zh' ? '此历史运行使用已停用的验证方式，请先选择 Agent 验证再继续。' : 'This historical run used an unsupported verifier. Select Agent verification before continuing.');
+      return;
+    }
     setCreating(true);
     setError('');
     const submittedTarget = draftTarget;
@@ -1843,7 +1845,7 @@ export function OrchestrationWorkspace({
               key={run.id}
               data-run-id={run.id}
               className={cn(
-                "w-full rounded-md px-2 py-2 text-sm transition-colors",
+                "relative w-full cursor-pointer rounded-md px-2 py-2 text-sm transition-colors",
                 activeRunId === run.id ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-sidebar-foreground hover:bg-sidebar-accent/50",
                 activeOrchestrationStatus(run.status) && "ring-1 ring-inset ring-emerald-500/40",
               )}
@@ -1851,14 +1853,14 @@ export function OrchestrationWorkspace({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none after:absolute after:inset-0 after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring"
                   onClick={() => { setMobileHistoryOpen(false); selectRun(run.id).catch((err) => setError(err.message)); }}
                 >
                   {activeOrchestrationStatus(run.status) ? <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.12)]" /> : run.mode === 'debate' ? <Swords className="h-3.5 w-3.5 shrink-0 opacity-70" /> : <UsersRound className="h-3.5 w-3.5 shrink-0 opacity-70" />}
                   <span className="truncate font-medium">{run.title}</span>
                 </button>
               </div>
-              <div className="phone-history-actions mt-2 flex items-center gap-1.5">
+              <div className="phone-history-actions relative z-10 mt-2 flex items-center gap-1.5">
                 <button type="button" className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-sidebar-border bg-sidebar text-muted-foreground hover:bg-sidebar-border" aria-label={t.renameRun} title={t.renameRun}
                   onClick={() => { setEditingRun(run); setEditingTitle(run.title); setMetadataError(''); }}><Pencil className="h-3 w-3" /></button>
                 <button type="button" className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-sidebar-border bg-sidebar text-muted-foreground hover:bg-sidebar-border disabled:opacity-40" aria-label={run.archivedAt ? t.restoreRun : t.archiveRun} title={run.archivedAt ? t.restoreRun : t.archiveRun}
@@ -1890,11 +1892,11 @@ export function OrchestrationWorkspace({
               </div>
               <button
                 type="button"
-                className="mt-1 flex w-full items-center justify-between text-[10px] text-muted-foreground"
+                className="relative z-10 mt-1 flex w-full items-center justify-between gap-2 text-[10px] text-muted-foreground"
                 onClick={() => { setMobileHistoryOpen(false); selectRun(run.id).catch((err) => setError(err.message)); }}
               >
                 <span className="truncate">{agents.find((agent) => agent.id === run.agentId)?.name || sessionDateLabel(run.updatedAt || run.createdAt, t)}</span>
-                <span>{run.archivedAt ? `${t.archivedRun} · ` : ''}{run.status}</span>
+                <span className="shrink-0">{run.archivedAt ? `${t.archivedRun} · ` : ''}{run.status} · {language === 'zh' ? '查看详情' : 'View details'}</span>
               </button>
             </div>
           ))}
@@ -2263,7 +2265,7 @@ export function OrchestrationWorkspace({
               refreshRevision={liveInputRevision}
               supported={(runInputAgent?.capabilities?.orchestrationLiveInput || 0) >= 1} online={Boolean(runInputAgent?.online)}
               language={language} prompt={prompt} setPrompt={setPrompt} onPromptAccepted={clearSubmittedPrompt} continuing={creating} onContinue={startRun}
-              hasFiles={files.length > 0} continueDisabled={!selectedAgent || capabilityProblems.length > 0 || selectedTBCIUnavailable} />
+              hasFiles={files.length > 0} continueDisabled={!selectedAgent || capabilityProblems.length > 0 || unsupportedHistoricalVerification} />
             </MobileSurface>}
             {showScrollBottom && !(nativeInputEnabled && inputPanelOpen && visibleUserInputs.length > 0) && (
               <Button
@@ -2290,6 +2292,7 @@ export function OrchestrationWorkspace({
                 {showDraftInputCapability && <p className="mt-1 break-words">{language === 'zh' ? '新运行配置' : 'New run setup'}: {draftInputCapability.text}</p>}
               </div>
               <div className="space-y-3">
+                {activeRun && <ExecutionConfigurationCard run={activeRun} configuration={executionConfigurations[activeRun.id]} language={language} />}
                 <div className="space-y-2">
                   <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.mode}</label>
                   <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted p-1">
@@ -2327,31 +2330,13 @@ export function OrchestrationWorkspace({
                       {t.formalProofProfile}
                     </button>
                   </div>
-                  {profile === 'formal-proof' && (
+                  {(profile === 'formal-proof' || unsupportedHistoricalVerification) && (
                     <div className="space-y-1.5">
                       <span className="text-[11px] font-medium text-muted-foreground">{t.verificationMode}</span>
-                      <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted p-1">
-                        <button
-                          className={cn("h-8 rounded-md text-xs font-medium", verificationMode === 'agent' ? "bg-background shadow-sm" : "text-muted-foreground")}
-                          onClick={() => setVerificationMode('agent')}
-						  disabled={creating || isRunning}
-                          aria-pressed={verificationMode === 'agent'}
-                        >
-                          {t.agentVerifierMode}
-                        </button>
-                        <button
-                          className={cn("h-8 rounded-md text-xs font-medium", verificationMode === 'tbci' ? "bg-background shadow-sm" : "text-muted-foreground")}
-                          onClick={() => setVerificationMode('tbci')}
-						  disabled={creating || isRunning || !tbciAvailable}
-						  title={!tbciAvailable ? `${t.tbciCapabilityUnavailable} ${tbciUnavailableReason}` : undefined}
-                          aria-pressed={verificationMode === 'tbci'}
-                        >
-                          TBCI
-                        </button>
-                      </div>
-					  <p className={cn("text-[11px] leading-4", !tbciAvailable ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground")}>
-						{!tbciAvailable ? `${t.tbciCapabilityUnavailable} ${tbciUnavailableReason}` : verificationMode === 'tbci' ? t.tbciVerificationMode : t.agentVerificationMode}
-					  </p>
+                      <button className="min-h-8 w-full rounded-md border border-border bg-muted px-2 text-xs font-medium" onClick={() => { setVerificationMode('agent'); setVerificationModeConfirmed(true); }} disabled={creating || isRunning} aria-pressed={!unsupportedHistoricalVerification}>
+                        {t.agentVerifierMode}
+                      </button>
+                      <p className="text-[11px] leading-4 text-muted-foreground">{unsupportedHistoricalVerification ? (language === 'zh' ? '此历史运行使用已停用的验证方式，请先选择 Agent 验证再继续。' : 'Select Agent verification to continue this historical run.') : t.agentVerificationMode}</p>
                     </div>
                   )}
                 </div>
@@ -2361,7 +2346,7 @@ export function OrchestrationWorkspace({
                   <p className="mt-1 text-xs leading-relaxed text-muted-foreground"><span className="phone-desktop-only">{language === 'zh'
                     ? (isRunning ? '请在对话区下方的“运行对话”中追加要求或调整方向。' : '请在“运行对话”中输入后点击“继续运行”，沿用当前任务与会话上下文。')
                     : (isRunning ? 'Use Run conversation below the transcript to add requirements or redirect the work.' : 'Enter your next instruction in Run conversation and select Continue run to keep this task and its context.')}</span><span className="phone-only">{language === 'zh' ? '点击“前往输入”或底部“运行对话”，追加指令或继续当前任务。' : 'Tap “Go to input” or “Run conversation” below to add instructions or continue this task.'}</span></p>
-                  <Button type="button" variant="outline" size="sm" className="mt-2 min-h-9 w-full" aria-controls="orchestration-live-input" onClick={() => {
+                  <Button type="button" variant="secondary" size="sm" className="mt-2 min-h-9 w-full" aria-controls="orchestration-live-input" onClick={() => {
                     openMobilePanel('conversation');
                     requestAnimationFrame(() => {
                       const input = document.getElementById('orchestration-live-input');
@@ -2506,7 +2491,7 @@ export function OrchestrationWorkspace({
                     {canCancelRun ? t.stopRun : t.stopping}
                   </Button>
                 ) : (
-				  <Button className="w-full gap-2" onClick={() => startRun()} disabled={selectionBlocked || !prompt.trim() || creating || !selectedAgent || capabilityProblems.length > 0 || selectedTBCIUnavailable || (!activeRun && !workerProfilesComplete)}>
+				  <Button className="w-full gap-2" onClick={() => startRun()} disabled={selectionBlocked || !prompt.trim() || creating || !selectedAgent || capabilityProblems.length > 0 || unsupportedHistoricalVerification || (!activeRun && !workerProfilesComplete)}>
                     {creating ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                     {continuingRun ? t.continueRun : t.start}
                   </Button>

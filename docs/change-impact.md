@@ -8,10 +8,12 @@ keeps only the top frequent subset.
 | Change | Must update |
 | --- | --- |
 | Add or change config field | `internal/config/` structs/loaders, `configs/*.yaml.example`, `docs/dev-workflow.md`, README if user-facing |
-| Add or change env var | `internal/config/load.go`, `configs/dev.yaml.example`, `docs/dev-workflow.md` env table, deploy docs |
+| Add or change env var | `internal/config/load.go`, automation overrides in `internal/config/automation.go`, explicit-file lookup in `internal/config/env_file.go:configurationEnvironment`, config/env examples, `docs/dev-workflow.md` env table, deploy docs; retain process-env priority and no shell evaluation |
 | Add or change HTTP endpoint | `internal/hub/server.go` route, handler tests, frontend API caller, feature/API docs |
 | MCP tools / personal automation credentials | Shared Hub ownership and business operations, MCP transport/schema/annotations, per-request authorization and revocation, personal-center template callers, two-client integration checks, [MCP feature](features/mcp-skill-task-notifications.md) and [ADR-029](adr/029-hub-mcp-and-submission-notifications.md); do not expose another scheduler or grant endpoint permissions |
 | Submission identity / task email | All relay/graph/cancel/offline/recovery terminal writers, Store transactions and submission idempotency, startup reservation recovery, notification outbox and frozen result, email/settings/config examples and workflow docs, result/verification separation and restart/duplicate/SMTP tests; see [MCP feature](features/mcp-skill-task-notifications.md) |
+| Personal test-mail operation | `internal/hub/server.go:NewServer`, `internal/hub/automation_mail_test_send.go:handleAutomationMailTest`, personal-center caller, current-user saved-recipient/fixed-content/timeout/per-user-rate-limit and browser-auth tests, local SMTP checks, [mail setup contract](features/mcp-onboarding-and-mail-setup.md); do not expose arbitrary recipients or count SMTP acceptance as inbox delivery |
+| Historical run execution configuration | `internal/hub/orchestration.go:handleGetOrchestration`, `internal/hub/orchestration_configuration.go:orchestrationExecutionConfiguration`, ownership/field-whitelist tests, frontend types/configuration card/history navigation and browser regressions, [detail contract](features/mcp-onboarding-and-mail-setup.md); never return worker credentials or infer accepted choices from current defaults |
 | Add or change WebSocket frame | `internal/protocol/envelope.go`, Hub handler, Bridge handler, frontend parser, integration tests, `docs/architecture.md` |
 | Add or change SQLite table/column | `internal/store.Store.Migrate`, store structs/scanners/CRUD, store tests, `docs/code-map.md`, architecture storage table |
 | Event read predicates or partial indexes | Store migration and exact query predicates, query-plan/equivalence tests, full-history progress/usage semantics, [ADR 027](adr/027-sparse-orchestration-read-indexes.md) |
@@ -51,8 +53,7 @@ keeps only the top frequent subset.
 | Browser orchestration drafts or auth bootstrap recovery | Per-account/target draft namespace, async send completion, logout cleanup, HTTP error status handling, retry/timeout UI and browser failure regressions, [desktop audit fixes](features/desktop-audit-fixes.md) |
 | Native question minimum CLI version | `internal/bridge/user_input_version.go`, capability and runtime gates in Bridge, version-boundary tests, upstream evidence in `docs/features/native-structured-user-input.md`, README and workflow compatibility notes |
 | Bridge capability reporting | `internal/protocol.RegisterPayload`, `internal/bridge/client.go`, `internal/hub/pool.go`, `internal/hub/server.go:handleAgents`, frontend agent types/UI, policy tests |
-| Managed TBCI runtime or artifact | `internal/bridge/tbci_runtime*.go`, `internal/protocol.BridgeCapabilities`, Hub orchestration capability validation, frontend Agent/selector UI, portable/download packaging assumptions, TBCI feature doc and ADR |
-| TBCI task identity, target discovery, or proof-root baseline | `internal/protocol.OrchestrationStartPayload`, Hub durable dispatch, `internal/bridge/orchestration_{harness,tbci}.go`, Rocq/Lean/Isabelle discovery regressions, ADR-017, architecture/code map, and TBCI feature docs |
+| Supported orchestration verification authority | Protocol mode normalization, Hub HTTP/MCP create/continue validation, Bridge dispatch validation, historical Store reads, frontend explicit continuation choice, Agent verifier regressions, [ADR-030](adr/030-agent-only-verification.md), architecture/code map |
 | Bridge enrollment or reconnect semantics | `internal/store/store.go:ConsumeEnrollTokenInfo`, `internal/hub/ws_bridge.go:handleBridgeWS`, endpoint deletion/revocation flow, store and integration tests, `docs/dev-workflow.md` |
 | Optional machine name in enrollment commands | `internal/hub/server.go:handleCreateBridgeToken` and shared command options, Settings input/i18n, legacy label-only and shell-argument/repair regressions, [optional name contract](features/optional-machine-name.md#compatibility-contract), README and workflow connection instructions; preserve machine identity and token label semantics |
 | Orchestration event shape | `internal/protocol.OrchestrationEventPayload`, Bridge emitters in `internal/bridge/orchestration_events.go`, `internal/store.OrchestrationEvent`, Hub persistence/share sanitizers, visible event reducer in `frontend/src/app/lib/utils.ts`, integration tests, `docs/architecture.md`, `docs/code-map.md` |
@@ -100,4 +101,4 @@ completed lifecycle label.
 | Changed setup command | README, README.zh-CN if Chinese quick start changes, `docs/dev-workflow.md` |
 | Deprecated design | Mark old doc as deprecated and link the replacement |
 
-Last updated: 2026-10-08
+Last updated: 2026-11-06

@@ -35,7 +35,6 @@ export type BridgeCapabilities = {
 	usageLedger?: boolean;
   usageModelRecovery?: number;
 	configSwitcher?: CLIConfigSwitcherCapability;
-	tbci?: TBCICapability;
 };
 
 export type NativeUserInputCapability = {
@@ -45,16 +44,6 @@ export type NativeUserInputCapability = {
   nonBlocking?: boolean;
   permissionModes?: string[];
   reason?: string;
-};
-
-export type TBCICapability = {
-	available: boolean;
-	managed?: boolean;
-	state?: string;
-	platform?: string;
-	version?: string;
-	artifactSha256?: string;
-	reason?: string;
 };
 
 export type CLIConfigSwitcherCapability = {
@@ -162,7 +151,7 @@ export type OrchestrationFile = {
 
 export type NativeContextCompaction = 'off' | 'after-turn';
 export type WorkerPair = 'claude-codex' | 'codex-codex' | 'claude-claude';
-export type VerificationMode = 'agent' | 'tbci';
+export type VerificationMode = 'agent';
 
 export type OrchestrationPromptMessage = {
   id: string;
@@ -185,7 +174,7 @@ export type OrchestrationRun = {
   workerPair?: WorkerPair;
   firstCli?: 'claude' | 'codex';
   profile?: 'default' | 'formal-proof';
-  verificationMode?: VerificationMode;
+  verificationMode?: string;
   nativeContextCompaction?: NativeContextCompaction;
   prompt: string;
   cwd?: string;
@@ -576,7 +565,7 @@ export type RunStartData = {
   maxRounds?: number;
   promptSeq?: number;
   profile?: string;
-  verificationMode?: VerificationMode;
+  verificationMode?: string;
   nativeContextCompaction?: NativeContextCompaction;
 };
 
@@ -932,7 +921,7 @@ export type PublicOrchestrationRun = {
   workerPair?: WorkerPair;
   firstCli?: 'claude' | 'codex';
   profile?: 'default' | 'formal-proof';
-  verificationMode?: VerificationMode;
+  verificationMode?: string;
   nativeContextCompaction?: NativeContextCompaction;
   prompt: string;
   cwd?: string;

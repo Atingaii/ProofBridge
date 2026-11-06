@@ -3,7 +3,7 @@
 This is the single overview for runtime architecture. Detailed rationale lives
 in ADRs; implementation paths live in [docs/code-map.md](code-map.md).
 
-Implemented on the MCP feature branch, not yet deployed: [MCP + Skill access and task email](features/mcp-skill-task-notifications.md), [ADR-029](adr/029-hub-mcp-and-submission-notifications.md). User-owned Bridges retain workspace execution; Hub adds an authenticated automation entry and submission-level notification outbox. [The source audit](reviews/proofbridge-mcp-current-state.md) records historical wording that must not be mistaken for current implementation facts.
+Implemented on the MCP feature branch and running locally at `http://127.0.0.1:8088`; laboratory/VPN and public production deployment remain unverified: [MCP + Skill access and task email](features/mcp-skill-task-notifications.md), [ADR-029](adr/029-hub-mcp-and-submission-notifications.md). User-owned Bridges retain workspace execution; Hub adds an authenticated automation entry and submission-level notification outbox. [The local validation record](reviews/proofbridge-mcp-local-validation.md) separates code checks, client calls, Skill loading, proof results and mail delivery. [The source audit](reviews/proofbridge-mcp-current-state.md) records historical wording that must not be mistaken for current implementation facts.
 
 The public [orchestration design article](features/orchestration-design-article.md)
 is a lazy-loaded static page at `/blog/orchestration-design`. Like the help page,
@@ -310,28 +310,13 @@ final adjudication that cannot call placeholder, weakened, axiom-tainted, or
 unfinished output a completed proof. Existing UI modes, role identifiers,
 turn counts, and protocol payloads are unchanged. See
 [docs/features/formal-proof-orchestration-contracts.md](features/formal-proof-orchestration-contracts.md).
-Each orchestration run persists `verification_mode=agent|tbci`; omitted and
-legacy values normalize to `agent`. The browser exposes this selector only for
-the persisted `formal-proof` profile. Agent mode retains the two independent
-Agent Verifiers. When `tbci` is explicitly selected, the Hub first requires the
-connected Agent to advertise a ready TBCI capability; the durable reviewer then
-runs TBCI alone against private before/verification-time workspace snapshots.
-Bridge preserves the exact user submission separately from durable node
-instructions, applies uploads once per `(runID,promptSeq)`, and freezes before
-the first CLI node. Automatic contract discovery supports Rocq/Coq, Lean 4,
-and Isabelle and resolves one contained proof-project root; every round reuses
-that initial root, while a same-run follow-up gets a new baseline from the
-previous final state plus its new uploads.
-Supported Bridge builds carry a pinned TBCI executable, verify and atomically
-materialize it under private Bridge state on startup, and report its non-secret
-readiness metadata during registration. An administrator can disable this
-managed runtime or override it with an external executable. Only `Trusted` can
-finish early; all other results remain visibly unresolved without an Agent
-fallback. TBCI phases are serialized, bounded by timeout and snapshot limits,
-and do not hold their semaphore while Workers run. See
-[ADR-015](adr/015-selectable-orchestration-verification-mode.md),
-[ADR-016](adr/016-managed-tbci-runtime.md), and
-[selectable formal-proof verification](features/tbci-formal-proof-verification.md).
+Each orchestration run persists `verification_mode`; new requests support only
+`agent`, and an omitted mode selects that default. Two independent Agent
+Verifiers judge completion using the original task, workspace, and actual
+checker evidence. Unsupported explicit modes fail at Hub and Bridge boundaries.
+Historical mode values remain readable, but continuing such a run requires an
+explicit supported choice. No existing user data is rewritten. See
+[ADR-030](adr/030-agent-only-verification.md).
 Relay prompts reuse each worker's native session as the primary memory: a
 returning worker receives only the newest cross-worker handoff plus bounded
 command evidence instead of copies of its own earlier output. A worker entering
@@ -669,6 +654,29 @@ entry points use shared creation, continuation, live-message and cancellation
 operations; the existing reverse WebSocket and scheduler retain execution
 authority. No project commands run on Hub. See [ADR-029](adr/029-hub-mcp-and-submission-notifications.md)
 and the [MCP feature](features/mcp-skill-task-notifications.md).
+
+The existing `GET /api/orchestrations/{runID}` first authorizes the owned run in
+`internal/hub/orchestration.go:handleGetOrchestration`, then adds
+`executionConfiguration` and `submissionId` through
+`internal/hub/orchestration_configuration.go:orchestrationExecutionConfiguration`.
+This field whitelist uses the accepted submission snapshot, or persisted run
+and worker bindings for older runs; it excludes credentials, native resume
+identities and task text. The browser configuration card never substitutes
+new-run form defaults for historical choices.
+
+`internal/config/env_file.go:configurationEnvironment` loads an environment
+file only when `CODEX_BRIDGE_ENV_FILE` is explicitly set. Process environment
+values, including empty values, take precedence. Parsing does not execute shell
+commands or expand variables, and errors do not repeat secret values. The
+canonical configuration contract remains in [the development workflow](dev-workflow.md).
+
+`POST /api/automation/mail/test` is a browser-account operation in
+`internal/hub/automation_mail_test_send.go:handleAutomationMailTest`, separate
+from the 20 MCP tools. It sends fixed content only to the current user's saved
+email, rejects custom recipients or text, limits each user to one attempt per
+minute and bounds SMTP work to at most 15 seconds. A successful response means
+SMTP accepted the message; it does not prove inbox delivery. See
+[onboarding and mail setup](features/mcp-onboarding-and-mail-setup.md).
 
 Top-level `user.message.Seq` binds a durable submission before dispatch. Final
 public lifecycle events atomically freeze that submission's independent

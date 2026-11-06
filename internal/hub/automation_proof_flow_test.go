@@ -95,7 +95,6 @@ func TestAutomationProofFlowRealCoqAndLocalSMTP(t *testing.T) {
 	bridgeCfg.Bridge.ApprovalPolicy = "never"
 	bridgeCfg.Bridge.Sandbox = "danger-full-access"
 	bridgeCfg.Bridge.DurableTaskGraph = true
-	bridgeCfg.Bridge.TBCIEnabled = false
 	bridgeCfg.Bridge.HeartbeatInterval.Duration = 100 * time.Millisecond
 	if err = os.WriteFile(bridgeCfg.Bridge.MachineIDFile, []byte("machine\n"), 0600); err != nil {
 		t.Fatal(err)

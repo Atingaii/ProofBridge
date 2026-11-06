@@ -18,7 +18,7 @@ allowlist across authorization, user metadata, and rollout evaluation.
 | Area | Files |
 | --- | --- |
 | CLI entry and subcommands | `main.go` |
-| Config structs/load | `internal/config/config.go`, `internal/config/load.go`, `internal/config/duration.go` |
+| Config structs/load and explicit environment files | `internal/config/config.go`, `internal/config/load.go:Load`, `internal/config/env_file.go:configurationEnvironment`, `internal/config/duration.go` |
 | User feature rollouts | `internal/rollout/rollout.go:Evaluator`, `internal/hub/server.go:featureEnabled`, `internal/hub/server.go:decorateUser` |
 | User-scoped CLI provider library, credential vault, Hub-side provider probe, and reviewed reasoning catalog | `internal/hub/model_catalog.go`, `internal/hub/cli_config.go`, `internal/hub/cli_config_probe.go`, `internal/providerprobe/inference.go`, `internal/hub/cli_config_vault.go`, `internal/bridge/cli_config.go`, `internal/store/store.go:CLIConfigPreset`, `frontend/src/app/components/CLIConfigSwitcher.tsx` |
 | Official Codex worker models and efforts | `internal/protocol/envelope.go:OfficialCLIModelMetadata`, `internal/hub/orchestration.go:resolveWorkerProfiles`, `internal/bridge/orchestration_worker_profiles.go:workerRuntime`, `internal/bridge/appserver_runner.go:turnStartParams`, `frontend/src/app/pages/OrchestrationWorkspace.tsx:renderWorkerProfileSelectors`, [feature contract](features/official-codex-worker-models.md) |
@@ -28,6 +28,8 @@ allowlist across authorization, user metadata, and rollout evaluation.
 | MCP execution resolution, durable submission identity and safe observation | `internal/hub/automation_runs.go:resolveAutomationRun`, `internal/hub/automation_operations.go:createOrchestrationOperation`, `internal/hub/automation_observation.go:automationRunResult`, `internal/store/automation.go:ReserveAutomationSubmission` |
 | Automation approvals, native questions and managed-worker isolation | `internal/hub/automation_interactions.go:automationGetInteractions`, `internal/bridge/automation_approvals.go`, `internal/bridge/automation_worker_isolation.go`, `internal/protocol/automation_interactions.go` |
 | Submission settlement, notification outbox and SMTP | `internal/store/automation_notifications.go:automationEventTx`, `internal/hub/automation_notifications.go:runAutomationNotifications`, `internal/notify/smtp.go` |
+| Personal test mail, fixed recipient/content and per-user throttle | `internal/hub/server.go:NewServer`, `internal/hub/automation_mail_test_send.go:handleAutomationMailTest`, `internal/hub/automation_mail_test_send.go:claimAutomationMailTest`, `frontend/src/app/components/AutomationSettings.tsx`, [setup contract](features/mcp-onboarding-and-mail-setup.md) |
+| Historical run configuration safe projection | `internal/hub/orchestration.go:handleGetOrchestration`, `internal/hub/orchestration_configuration.go:orchestrationExecutionConfiguration`, `frontend/src/app/components/ExecutionConfigurationCard.tsx`, `frontend/src/app/pages/OrchestrationWorkspace.tsx`, [detail contract](features/mcp-onboarding-and-mail-setup.md) |
 | End-user Skill distribution and reproducible batch submissions | `internal/automationassets/assets.go:Handler`, `internal/automationassets/install.sh`, `internal/automationassets/skill/SKILL.md`, `scripts/mcp-batch.py` |
 | Public conversation shares | `internal/hub/share.go` |
 | Browser chat WebSocket | `internal/hub/ws_browser.go` |
@@ -56,7 +58,7 @@ allowlist across authorization, user metadata, and rollout evaluation.
 | SQLite schema and CRUD | `internal/store/store.go`, `internal/store/id.go` |
 | Long-history read performance | `internal/store/store.go:ListOrchestrationPlanEvents`, `internal/store/admin_analytics.go:AdminUsageSnapshot`, `internal/hub/task_graph.go:handleOrchestrationProgress`; [design](features/site-loading-performance.md) |
 | Wire protocol | `internal/protocol/envelope.go` |
-| Selectable Agent/TBCI formal-proof verification | `internal/store/store.go:OrchestrationRun`, `internal/hub/orchestration.go:normalizeOrchestrationStart`, `internal/protocol/envelope.go:OrchestrationStartPayload`, `internal/bridge/orchestration_tbci.go:prepareTBCIVerifier`, `internal/bridge/tbci_runtime.go:prepareTBCIRuntime`, `frontend/src/app/pages/OrchestrationWorkspace.tsx`, `docs/adr/015-selectable-orchestration-verification-mode.md`, `docs/adr/016-managed-tbci-runtime.md`, `docs/adr/017-tbci-task-input-and-workspace-baseline.md`, `docs/features/tbci-formal-proof-verification.md` |
+| Independent Agent verification and historical mode compatibility | `internal/store/store.go:OrchestrationRun`, `internal/hub/orchestration.go:normalizeOrchestrationStart`, `internal/protocol/envelope.go:NormalizeVerificationMode`, `internal/bridge/orchestration.go:run`, `internal/bridge/orchestration_verifier.go:evaluateAgentVerifierQuorum`, `frontend/src/app/pages/OrchestrationWorkspace.tsx`, `docs/adr/030-agent-only-verification.md` |
 | Frontend source | `frontend/src/app/App.tsx`, `frontend/src/app/pages/`, `frontend/src/app/components/`, `frontend/src/app/lib/`, `frontend/src/styles/` |
 | Public help guide | `frontend/src/app/pages/HelpPage.tsx`, `frontend/public/help/`, `frontend/scripts/generate-help-screenshots.cjs`, `docs/features/public-help-guide.md` |
 | Public orchestration design article | `frontend/src/app/pages/OrchestrationDesignPage.tsx:OrchestrationDesignPage`, `frontend/public/article-assets/orchestration-design/`, `docs/features/orchestration-design-article.md` |
@@ -452,8 +454,12 @@ allowlist across authorization, user metadata, and rollout evaluation.
 ### Change Config
 
 1. Edit `internal/config/config.go`.
-2. Bind env overrides in `internal/config/load.go`.
-3. Update `configs/dev.yaml.example`.
+2. Bind env overrides in `internal/config/load.go` and automation-specific
+   overrides in `internal/config/automation.go`. Preserve explicit-only loading,
+   process-environment priority and secret-safe errors in
+   `internal/config/env_file.go:configurationEnvironment`.
+3. Update `configs/dev.yaml.example`; SMTP setup also has
+   `configs/mail.env.example` and the loopback-only `configs/mail.local.env.example`.
 4. For `bridge.long_command_observer`, keep YAML fields, env overrides, and
    `internal/bridge/orchestration_claude.go:longCommandObserverConfig` defaults in
    sync.

@@ -17,6 +17,7 @@
 | [错误](error-handling.md) | Go 与 HTTP 错误处理 |
 | [日志](logging-guidelines.md) | slog 与敏感信息 |
 | [质量](quality-guidelines.md) | 验证与提交约束 |
+| [自动化接入](automation-onboarding.md) | 安全配置投影、本人测试邮件、显式环境文件、验证方式兼容与原生 Skill 验收 |
 
 ## Quality Check
 

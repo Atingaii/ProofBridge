@@ -549,7 +549,7 @@ func TestDurableTaskGraphRunsEveryConfiguredRound(t *testing.T) {
 	payload := protocol.OrchestrationStartPayload{
 		RunID: run.ID, Mode: "collaboration", WorkerPair: protocol.WorkerPairCodexCodex,
 		Prompt: "finish across two rounds", CWD: t.TempDir(), MaxTurns: 2, MaxTurnsRequested: 2,
-		Profile: "formal-proof", VerificationMode: "tbci",
+		Profile: "formal-proof", VerificationMode: "agent",
 	}
 	conn := testBridgeConn(agentID, 16)
 	s.pool.RegisterAgent(conn)
@@ -562,7 +562,7 @@ func TestDurableTaskGraphRunsEveryConfiguredRound(t *testing.T) {
 		t.Helper()
 		for position := 0; position < 4; position++ {
 			dispatched := decodeTaskDispatchPayload(t, <-conn.send)
-			if dispatched.VerificationMode != "tbci" {
+			if dispatched.VerificationMode != "agent" {
 				t.Fatalf("round %d lost verification mode: %#v", wantRound, dispatched)
 			}
 			if dispatched.MaxTurns != 1 || dispatched.MaxTurnsRequested != 2 {
