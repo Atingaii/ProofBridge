@@ -28,6 +28,8 @@
 
 用户级 Claude Skill 安装须与 CLI 的配置根一致：`internal/automationassets/install.sh` 使用 `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills`，未设置或空值时回退到原路径，并正确处理含空格的目录。项目级安装仍写入当前项目的 `.claude/skills`；Codex 路径不变。沿用校验和、受管标记与拒绝覆盖非受管目录/符号链接的机制，不改认证、模型或 MCP 配置。本轮原生探针已将 `CLAUDE_CONFIG_DIR` 设为同一个 `$HOME/.claude`，因此该兼容性修复不能作为 Skill load trace 失败已解决的证据。
 
+独立验证期间，`internal/bridge/orchestration_verifier.go:composeAgentVerifierPrompt` 将临时审计脚本、报告和日志限制到工作目录的 `.codex-bridge/verifier-audit/`，或直接使用 stdin/stdout；Coq assumptions 审计优先向 `coqtop` 的 stdin 发送查询。源文件、规格、配置、README 与该目录外的普通日志/报告均只读；正常编译产物仍按原权限允许。复用 `internal/bridge/orchestration_completion.go:completionSourceDigest` 已有运行时目录边界，不新增扩展名或验证目录豁免，不改变执行权限、checker、quorum 或源变更拒绝规则，避免验证器自己的审计文件被当作源变更。
+
 ## Implementation Steps
 
 1. 复现历史卡片点击问题并最小修复，覆盖标题/正文/状态与独立操作按钮及直接链接。

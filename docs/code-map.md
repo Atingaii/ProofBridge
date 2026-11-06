@@ -378,7 +378,10 @@ allowlist across authorization, user metadata, and rollout evaluation.
    the full original `TaskPrompt` and real workspace, executes them serially,
    and emits the visible early-stop verdict. Final rounds also require verification.
    `internal/bridge/orchestration_completion.go:completionSourceDigest` bounds
-   source sampling; `internal/bridge/orchestration_completion.go:completionPlateau`
+   source sampling; `internal/bridge/orchestration_verifier.go:composeAgentVerifierPrompt`
+   confines temporary audit files to `.codex-bridge/verifier-audit/` or stdin/stdout,
+   preserving source/report immutability and existing permissions.
+   `internal/bridge/orchestration_completion.go:completionPlateau`
    diagnoses comparable reviewer output, and
    `internal/bridge/orchestration_completion.go:completionStalled` stops repeated
    unchanged blockers without claiming success.

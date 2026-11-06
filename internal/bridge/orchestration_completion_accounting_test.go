@@ -25,6 +25,23 @@ func TestVerifierUsesWholeOriginalTaskWithoutNodeInstructions(t *testing.T) {
 	}
 }
 
+func TestVerifierPromptConfinesTemporaryAuditsToRuntimeDirectory(t *testing.T) {
+	prompt := composeAgentVerifierPrompt(protocol.OrchestrationStartPayload{TaskPrompt: "verify the proof"})
+	for _, required := range []string{
+		".codex-bridge/verifier-audit/", "relative to the current project working directory",
+		"source, specifications, and project configuration are read-only", "README files",
+		"ordinary logs and reports outside", "coqtop", "stdin/stdout", "make -j1",
+		"configured permissions", "Never expand permissions or work around a denied operation.",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("verifier audit boundary missing %q", required)
+		}
+	}
+	if strings.Contains(prompt, "Build outputs and temporary audit files are allowed") {
+		t.Fatal("verifier still grants an unrestricted temporary audit-file exception")
+	}
+}
+
 func TestIntermediateCompletionAndVerifierUsageBothModes(t *testing.T) {
 	for _, mode := range []string{"collaboration", "debate"} {
 		for _, verdict := range []string{"pass", "continue", "invalid"} {

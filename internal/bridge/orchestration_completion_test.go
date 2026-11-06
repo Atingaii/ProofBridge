@@ -2,7 +2,9 @@ package bridge
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -186,6 +188,18 @@ func TestCompletionFingerprintIgnoresBuildOutputsNotProofs(t *testing.T) {
 	if completionSourceDigest(ctx, dir) != first {
 		t.Fatal("build output counted as progress")
 	}
+	if err := os.Mkdir(filepath.Join(dir, ".proofbridge-validation"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"audit.log", "audit.json", "README.md", ".proofbridge-validation/report.json"} {
+		write(name, "audit report")
+		if completionSourceDigest(ctx, dir) == first {
+			t.Fatalf("ordinary workspace file excluded from source fingerprint: %s", name)
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	write("Main.v", "Theorem sample : True. Admitted.")
 	if completionSourceDigest(ctx, dir) == first {
 		t.Fatal("proof edit missed")
@@ -199,19 +213,34 @@ func TestCompletionFingerprintIgnoresBuildOutputsNotProofs(t *testing.T) {
 }
 
 func TestVerifierAuthorizedExecutionCompilesCoq(t *testing.T) {
-	// No model call: the subprocess fixture performs a real proof build when
-	// coqc is installed, and rejects the conflicting forced read-only policy.
+	// No model call: the fixture compiles and audits a real proof, writes audit
+	// artifacts only under the runtime boundary, and preserves configured access.
+	coqc, err := exec.LookPath("coqc")
+	if err != nil {
+		t.Skip("real verifier audit requires coqc")
+	}
+	coqtop, err := exec.LookPath("coqtop")
+	if err != nil {
+		t.Skip("real verifier assumptions audit requires coqtop")
+	}
 	dir := t.TempDir()
 	script := fakeCodexExecScript("worker")
-	script = strings.Replace(script, "if \"PROOFBRIDGE_AGENT_VERIFIER_V1\" in prompt:", `if "PROOFBRIDGE_AGENT_VERIFIER_V1" in prompt:
-    import subprocess, shutil, pathlib
+	script = strings.Replace(script, "if \"PROOFBRIDGE_AGENT_VERIFIER_V1\" in prompt:", fmt.Sprintf(`if "PROOFBRIDGE_AGENT_VERIFIER_V1" in prompt:
+    import subprocess, pathlib
     assert "--dangerously-bypass-approvals-and-sandbox" in sys.argv
     assert "--sandbox" not in sys.argv
     assert "make -j1" in prompt
-    if shutil.which("coqc"):
-        subprocess.run(["coqc", "Main.v"], check=True, stdout=subprocess.DEVNULL)
-    else:
-        pathlib.Path("Main.vo").write_text("build fixture")`, 1)
+    assert ".codex-bridge/verifier-audit/" in prompt
+    audit = pathlib.Path(".codex-bridge/verifier-audit/fixture")
+    audit.mkdir(parents=True, exist_ok=True)
+    build = subprocess.run([%q, "Main.v"], text=True, capture_output=True, check=True)
+    (audit / "compile.log").write_text(build.stdout + build.stderr)
+    queries = audit / "assumptions.coq"
+    queries.write_text("Require Import Main.\nPrint Assumptions sample.\n")
+    assumptions = subprocess.run([%q, "-quiet"], input=queries.read_text(), text=True, capture_output=True, check=True)
+    assert "Closed under the global context" in assumptions.stdout
+    (audit / "assumptions.log").write_text(assumptions.stdout + assumptions.stderr)
+    (audit / "report.json").write_text(json.dumps({"compiled": True, "closed": True}))`, coqc, coqtop), 1)
 	cli := filepath.Join(t.TempDir(), "codex")
 	if err := os.WriteFile(cli, []byte(script), 0700); err != nil {
 		t.Fatal(err)
@@ -228,12 +257,20 @@ func TestVerifierAuthorizedExecutionCompilesCoq(t *testing.T) {
 	defer m.CloseAll()
 	p := protocol.OrchestrationStartPayload{RunID: "test", CWD: dir, Prompt: "prove sample"}
 	before := completionSourceDigest(context.Background(), dir)
+	if before == "" {
+		t.Fatal("missing initial source fingerprint")
+	}
 	result := m.runAgentVerifier(context.Background(), p, orchestrationTurnAssignment{CLI: "codex", WorkerSlot: "codex-a"}, 1, composeAgentVerifierPrompt(p))
 	if result.Status != "pass" {
 		t.Fatalf("verifier=%#v", result)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "Main.vo")); err != nil {
 		t.Fatal(err)
+	}
+	for _, name := range []string{"compile.log", "assumptions.coq", "assumptions.log", "report.json"} {
+		if _, err := os.Stat(filepath.Join(dir, ".codex-bridge", "verifier-audit", "fixture", name)); err != nil {
+			t.Fatalf("runtime audit artifact %s missing: %v", name, err)
+		}
 	}
 	if after := completionSourceDigest(context.Background(), dir); after != before {
 		t.Fatal("compilation modified source fingerprint")

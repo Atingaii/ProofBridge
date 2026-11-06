@@ -283,6 +283,13 @@ role 2's bound presets, executed serially to bound machine load. Each receives
 the full original `TaskPrompt`, excluding durable-node instructions, and runs in
 the real project workspace under the endpoint's configured execution permissions,
 including build outputs when authorized, without changing source. Bridge
+limits temporary verifier scripts, reports, and logs to the existing runtime
+boundary `.codex-bridge/verifier-audit/`, or stdin/stdout; README and ordinary
+workspace reports remain read-only. This prompt contract lives in
+`internal/bridge/orchestration_verifier.go:composeAgentVerifierPrompt` and does
+not broaden the exclusions in
+`internal/bridge/orchestration_completion.go:completionSourceDigest` or change
+execution permissions or verifier quorum. Bridge
 waits for both results before emitting a visible `verifier.verdict`; any
 passing Agent Verifier without a concrete evidence conflict ends unused rounds
 with `verified-early`, while the Hub
