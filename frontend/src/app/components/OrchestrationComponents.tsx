@@ -91,7 +91,10 @@ export function CapabilityMatrix({ agent, t }: { agent: Agent | null; t: UIText 
   );
 }
 
-export function OrchestrationEventItem({ item, t }: { item: OrchestrationVisibleEvent, t: UIText }) {
+export function OrchestrationEventItem({ item, t }: {
+  item: OrchestrationVisibleEvent & Pick<OrchestrationEvent, 'turnStartData' | 'data'>;
+  t: UIText;
+}) {
   const isUser = item.kind === 'user.message';
   const isRun = item.kind.startsWith('run.');
   const isTbci = (item.kind === 'bridge.note' && item.category === 'tbci-verification') || (item.kind === 'verifier.verdict' && item.cli === 'tbci');

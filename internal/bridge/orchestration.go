@@ -37,6 +37,7 @@ type OrchestrationManager struct {
 	pending                 []protocol.Envelope
 	userInputOutbox         *userInputOutbox
 	approvals               map[string]orchestrationApproval
+	approvalReceipts        map[string]approvalReceiptRecord
 	userInputs              map[string]*pendingUserInput
 	userInputRevision       map[string]uint64
 	userInputOrder          []string
@@ -71,8 +72,10 @@ type orchestrationExecution struct {
 }
 
 type orchestrationApproval struct {
-	runID string
-	ch    chan protocol.ApprovalResponsePayload
+	request protocol.ApprovalRequestPayload
+	ctx     context.Context
+	runID   string
+	ch      chan protocol.ApprovalResponsePayload
 }
 
 type orchestrationRunHandle struct {
@@ -756,6 +759,8 @@ func (r orchestrationApprovalRequester) RequestApproval(ctx context.Context, req
 	} else {
 		req.RunID = r.runID
 	}
+	req.InstanceID = r.manager.userInputInstanceID
+	req.ExecutionID = r.runID
 	req.TurnID = r.turnID
 	if req.CWD == "" {
 		req.CWD = r.cwd
@@ -769,7 +774,7 @@ func (r orchestrationApprovalRequester) RequestApproval(ctx context.Context, req
 	if m.approvals == nil {
 		m.approvals = make(map[string]orchestrationApproval)
 	}
-	m.approvals[req.RequestID] = orchestrationApproval{runID: r.runID, ch: ch}
+	m.approvals[req.RequestID] = orchestrationApproval{request: req, ctx: ctx, runID: r.runID, ch: ch}
 	m.mu.Unlock()
 
 	m.send(protocol.MustEnvelope(protocol.TypeApprovalRequest, "", req))
@@ -778,6 +783,7 @@ func (r orchestrationApprovalRequester) RequestApproval(ctx context.Context, req
 	for {
 		select {
 		case res := <-ch:
+			m.approvalCallbackConsumed(req, res)
 			return res, nil
 		case <-ticker.C:
 			m.send(protocol.MustEnvelope(protocol.TypeApprovalRequest, "", req))
@@ -796,26 +802,51 @@ func (m *OrchestrationManager) ApprovalResponse(res protocol.ApprovalResponsePay
 		return false
 	}
 	delete(m.approvals, res.RequestID)
+	m.rememberApprovalLocked(protocol.ApprovalStatusPayload{RunID: pending.request.RunID, RequestID: res.RequestID, ExecutionID: pending.request.ExecutionID, InstanceID: m.userInputInstanceID, Decision: res.Decision, Status: "queued", Outcome: "queued", Reason: "decision queued for the waiting approval callback"})
 	pending.ch <- res
 	return true
 }
 
 func (m *OrchestrationManager) removeApproval(requestID string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	var statuses []protocol.ApprovalStatusPayload
+	if pending, ok := m.approvals[requestID]; ok {
+		status := protocol.ApprovalStatusPayload{RunID: pending.request.RunID, RequestID: requestID, ExecutionID: pending.request.ExecutionID, InstanceID: m.userInputInstanceID, Status: "closed", Outcome: "not_sent", Reason: "native approval is no longer available"}
+		m.rememberApprovalLocked(status)
+		statuses = append(statuses, status)
+	}
 	delete(m.approvals, requestID)
+	for _, record := range m.approvalReceipts {
+		if record.status.RequestID == requestID && record.status.Status == "queued" {
+			status := record.status
+			status.Status, status.Outcome, status.Reason = "closed", "unknown", "approval callback ended before consumption was confirmed"
+			m.rememberApprovalLocked(status)
+			statuses = append(statuses, status)
+		}
+	}
+	m.mu.Unlock()
+	for _, status := range statuses {
+		m.send(protocol.MustEnvelope(protocol.TypeApprovalStatus, "", status))
+	}
 }
 
 func (m *OrchestrationManager) cancelApprovals(runID string) {
 	m.mu.Lock()
 	var pending []orchestrationApproval
+	var statuses []protocol.ApprovalStatusPayload
 	for requestID, approval := range m.approvals {
 		if approval.runID == runID {
 			pending = append(pending, approval)
+			status := protocol.ApprovalStatusPayload{RunID: approval.request.RunID, RequestID: requestID, ExecutionID: approval.request.ExecutionID, InstanceID: m.userInputInstanceID, Status: "closed", Outcome: "not_sent", Reason: "run canceled"}
+			m.rememberApprovalLocked(status)
+			statuses = append(statuses, status)
 			delete(m.approvals, requestID)
 		}
 	}
 	m.mu.Unlock()
+	for _, status := range statuses {
+		m.send(protocol.MustEnvelope(protocol.TypeApprovalStatus, "", status))
+	}
 	for _, approval := range pending {
 		approval.ch <- protocol.ApprovalResponsePayload{Decision: "cancel"}
 	}

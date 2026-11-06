@@ -273,6 +273,9 @@ func (s *Server) scheduleAgentRunFailure(agentID, instance string, delay time.Du
 }
 
 func (s *Server) handleBridgeEnvelope(ctx context.Context, agentID string, env protocol.Envelope) {
+	if s.handleAutomationInteractionFrame(ctx, agentID, env) {
+		return
+	}
 	if bridgeChatFrame(env) && !s.bridgeOwnsSession(ctx, agentID, env.Sid) {
 		return
 	}
@@ -303,6 +306,9 @@ func (s *Server) handleBridgeEnvelope(ctx context.Context, agentID string, env p
 		// Chat approvals also carry a run id. The envelope sid is the unambiguous
 		// routing boundary: only sid-less requests belong to orchestration.
 		if err == nil && env.Sid == "" && payload.RunID != "" {
+			if run, lookupErr := s.store.OrchestrationRunByIDAnyUser(ctx, payload.RunID); lookupErr == nil && run.AgentID == agentID && orchestrationActiveStatus(run.Status) {
+				s.queueAutomationAttention(ctx, payload.RunID, "approval:"+payload.InstanceID+":"+payload.ExecutionID+":"+payload.RequestID)
+			}
 			s.pool.BroadcastToOrchestrationBrowsers(payload.RunID, protocol.MustEnvelope(protocol.TypeApprovalRequest, "", payload))
 			return
 		}

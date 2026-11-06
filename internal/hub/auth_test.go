@@ -468,6 +468,7 @@ cp `+shellQuote(installerTrueExecutable(t))+` "$out"
 		t.Fatal(err)
 	}
 	cmd := exec.Command("/bin/sh", scriptPath)
+	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+binDir+":/usr/bin:/bin")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -623,6 +624,7 @@ cp `+shellQuote(installerTrueExecutable(t))+` "$out"
 		t.Fatal(err)
 	}
 	cmd := exec.Command("sh", scriptPath)
+	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+binDir+":/usr/bin:/bin")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("execute install script: %v\n%s", err, output)

@@ -3,7 +3,7 @@
 This is the single overview for runtime architecture. Detailed rationale lives
 in ADRs; implementation paths live in [docs/code-map.md](code-map.md).
 
-Proposed next work, not current runtime behavior: [MCP + Skill access and task email](features/mcp-skill-task-notifications.md), [ADR-029](adr/029-hub-mcp-and-submission-notifications.md). User-owned Bridges retain workspace execution; Hub would add an authenticated automation entry and submission-level notification outbox. [The source audit](reviews/proofbridge-mcp-current-state.md) records historical wording that must not be mistaken for current implementation facts.
+Implemented on the MCP feature branch, not yet deployed: [MCP + Skill access and task email](features/mcp-skill-task-notifications.md), [ADR-029](adr/029-hub-mcp-and-submission-notifications.md). User-owned Bridges retain workspace execution; Hub adds an authenticated automation entry and submission-level notification outbox. [The source audit](reviews/proofbridge-mcp-current-state.md) records historical wording that must not be mistaken for current implementation facts.
 
 The public [orchestration design article](features/orchestration-design-article.md)
 is a lazy-loaded static page at `/blog/orchestration-design`. Like the help page,
@@ -662,6 +662,22 @@ to user-scoped mutation APIs. See
 
 ## Storage
 
+The Hub also exposes personal automation through the official MCP Go SDK's
+stateless Streamable HTTP adapter at `/mcp`. Per-request bearer verification
+is separate from browser cookies and Bridge enrollment. Both browser and MCP
+entry points use shared creation, continuation, live-message and cancellation
+operations; the existing reverse WebSocket and scheduler retain execution
+authority. No project commands run on Hub. See [ADR-029](adr/029-hub-mcp-and-submission-notifications.md)
+and the [MCP feature](features/mcp-skill-task-notifications.md).
+
+Top-level `user.message.Seq` binds a durable submission before dispatch. Final
+public lifecycle events atomically freeze that submission's independent
+verification result and enqueue its notification. Node-level events do not
+complete submissions. The Hub SMTP worker leases outbox rows, sends outside a
+transaction, and persists a bounded retry receipt. Attention notices identify
+requests without persisting native question or answer text. Native approvals
+are authoritative on Bridge; the Hub only brokers bounded in-flight replies.
+
 Long-history interactive reads keep the existing single-connection model and use
 sparse event indexes rather than reading unrelated output bodies. Migration,
 rollback and query-plan requirements are recorded in
@@ -697,6 +713,14 @@ SQLite tables:
 - `cli_config_preset_credentials` (per-Bridge API-key envelopes materialized
   from the vault or retained from legacy machine-scoped presets)
 - `cli_config_active_presets` (machine-scoped native CLI activation pointers)
+- `automation_tokens` (one recoverable AES-GCM personal PAT and authentication
+  hash per user, with explicit revocation)
+- `automation_settings` and `automation_presets` (versioned account/workspace
+  defaults and non-secret execution choices)
+- `automation_submissions` (owned request-key/digest, run and PromptSeq binding,
+  resolved configuration, accepted recipient and immutable result snapshot)
+- `automation_notifications` (unique submission/request notification identity,
+  frozen payload, lease, retry attempts and safe delivery receipt)
 
 History archive is separate from deletion and execution state. Owned terminal
 runs may be archived/restored; continuing a run restores visibility without

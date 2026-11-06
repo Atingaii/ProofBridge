@@ -584,6 +584,9 @@ export type TurnStartData = {
   startedAt?: number;
   cli?: string;
   workerSlot?: string;
+  presetName?: string;
+  model?: string;
+  reasoningEffort?: string;
   turn?: number;
   maxTurns?: number;
   round?: number;

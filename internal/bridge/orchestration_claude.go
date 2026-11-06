@@ -278,6 +278,10 @@ func (m *OrchestrationManager) ensureClaudeInteractiveSessionLocked(ctx context.
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	if err := isolateAutomationEntrypoint(cmd, "claude", cwd); err != nil {
+		releaseApprovalServer()
+		return nil, err
+	}
 	if err := configureStrictWorkspaceCommand(cmd, m.cfg, cwd); err != nil {
 		releaseApprovalServer()
 		return nil, err
@@ -375,6 +379,9 @@ func (m *OrchestrationManager) runClaudeWithSessionAttempt(ctx context.Context, 
 	applyWorkerRuntime(cmd, runtime)
 	if cwd := m.cwd(payload); cwd != "" {
 		cmd.Dir = cwd
+	}
+	if err := isolateAutomationEntrypoint(cmd, "claude", m.cwd(payload)); err != nil {
+		return "", nil, err
 	}
 	if err := configureStrictWorkspaceCommand(cmd, m.cfg, m.cwd(payload)); err != nil {
 		return "", nil, err

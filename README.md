@@ -25,6 +25,7 @@ with its history and native context intact. A public **Hub** serves the interfac
 a **Bridge** on each private machine connects outward and runs the tools locally.
 
 [Features](#features) · [Connect a machine](#connect-to-a-hub) ·
+[Use from a terminal](#use-from-codex-or-claude-code) ·
 [Local quick start](#local-quick-start) · [Architecture](#architecture-and-data-boundaries) ·
 [Compatibility](#versions-and-platforms) · [Documentation](#documentation)
 
@@ -43,6 +44,9 @@ a **Bridge** on each private machine connects outward and runs the tools locally
 - **Choose your setup.** Use local CLI login or saved provider presets, select an
   execution permission profile, and opt into formal-proof workflows with agent
   verification or TBCI.
+- **Use natural language from a terminal.** Copy your personal MCP configuration,
+  install the ProofBridge Skill, and submit work from Codex or Claude Code. Choose
+  interactive results or event-triggered email from Hub.
 
 Availability depends on the frontend edition, Hub rollout, and Bridge/CLI
 capabilities. See [versions and platforms](#versions-and-platforms) before enabling
@@ -97,6 +101,45 @@ do not rely on the CLI's default host. Keep the terminal open while using this
 foreground mode. See [installation and service behavior](docs/dev-workflow.md#cli-install-flow).
 
 </details>
+
+## Use from Codex or Claude Code
+
+First [connect your execution machine](#connect-to-a-hub). Register if your Hub
+allows registration, or sign in with an account provided by its administrator.
+Then open **Settings → Terminal & email**:
+
+1. Select Codex or Claude Code. Copy the complete MCP configuration into that
+   client's personal MCP settings. The template already contains your Hub address
+   and personal MCP Token.
+2. Copy and run the displayed Skill install command. It installs the same
+   credential-free ProofBridge Skill for the selected client; it preserves CLI
+   login, model and MCP configuration. Restart the client if needed.
+3. Save an email address and notification preferences. To leave a task running,
+   enable both completion and attention email and select **Submit and email me**.
+   The Hub administrator must configure SMTP first. Interactive monitoring works
+   without SMTP.
+4. Ask, for example: “Use ProofBridge on my default endpoint. Read the README and
+   complete the project verification with my saved model combination. Email me
+   when it finishes.” The Skill discovers available endpoints, configurations and
+   defaults. Ask it explicitly to save a combination or default for future tasks.
+
+Accepted work continues when the submitting terminal closes. Keep the execution
+machine and its Bridge connected. For a lab-only Hub, clients and Bridges outside
+the lab need VPN access; machines already on that network connect directly. Hub
+does not need an inbound connection to your execution machine.
+
+Follow-ups retain the same run. Native questions and approvals still need your
+answer; attention email links back to the task. A finished run is not itself proof
+that verification passed, and SMTP acceptance does not guarantee inbox delivery.
+Explicit model and reasoning choices depend on the selected endpoint's reported
+capabilities; an MCP connection does not add credentials or model access.
+
+Regenerating or revoking the personal Token invalidates old MCP configurations;
+it does not cancel running tasks. Use the complete newly generated template after
+rotation. For setup details, installation scopes and troubleshooting, see
+[MCP and Skill access](docs/dev-workflow.md#mcp-and-skill-access). Administrators
+configure `AUTOMATION_ENABLED`, `AUTOMATION_PUBLIC_URL` and SMTP using the
+[environment-variable reference](docs/dev-workflow.md#environment-variables).
 
 ## Local quick start
 

@@ -77,6 +77,7 @@ printf '%s' "$url" >"$DOWNLOAD_LOG"
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, "/bin/sh")
+			cmd.Dir = dir
 			cmd.Stdin = strings.NewReader(w.Body.String())
 			cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+fake+":/usr/bin:/bin", "DOWNLOAD_LOG="+log)
 			output, err := cmd.CombinedOutput()

@@ -82,6 +82,7 @@ type SessionHandle struct {
 }
 
 type RunnerRequest struct {
+	ManagedWorker  bool
 	LiveInput      *liveInputMailbox
 	LiveInputReady <-chan struct{}
 	SID            string

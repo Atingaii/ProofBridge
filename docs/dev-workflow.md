@@ -92,6 +92,17 @@ should list names and point here for detail.
 | `TURNSTILE_SITE_KEY` | Public Cloudflare Turnstile Managed widget site key | config `auth.registration.turnstile_site_key` |
 | `TURNSTILE_SECRET` | Server-only Cloudflare Turnstile Siteverify secret | config `auth.registration.turnstile_secret` |
 | `TURNSTILE_HOSTNAME` | Expected production hostname returned by Siteverify | config `auth.registration.turnstile_hostname` |
+| `AUTOMATION_ENABLED` | Enable authenticated `/mcp`, personal connection settings and task email processing | config `automation.enabled`; default `true` |
+| `AUTOMATION_PUBLIC_URL` | Canonical Hub base URL used in MCP templates, Skill commands and task email links; use the address reachable through your lab/VPN and HTTPS outside loopback | config `automation.public_url`; empty only falls back for a loopback Hub listener |
+| `SMTP_HOST` | Hub-side SMTP server hostname | config `automation.smtp.host`; empty disables ready mail status |
+| `SMTP_PORT` | SMTP port | config `automation.smtp.port`; default `587` |
+| `SMTP_USERNAME` | Optional SMTP authentication username | config `automation.smtp.username` |
+| `SMTP_PASSWORD` | SMTP password; provide through the service environment instead of committing it | config `automation.smtp.password` |
+| `SMTP_FROM` | Sender mailbox, optionally including a display name | config `automation.smtp.from`; required for mail |
+| `SMTP_STARTTLS` | Require STARTTLS; the server must advertise it | config `automation.smtp.starttls`; default `true` |
+| `SMTP_TLS` | Use implicit TLS, usually with port 465; set `SMTP_STARTTLS=false` with this mode | config `automation.smtp.tls`; default `false` |
+| `SMTP_ALLOW_INSECURE` | Explicitly allow plain SMTP when both TLS modes are off, for isolated test servers; does not bypass TLS certificate validation | config `automation.smtp.allow_insecure`; default `false` |
+| `SMTP_TIMEOUT` | Timeout for an SMTP send, in Go duration syntax such as `15s` | config `automation.smtp.timeout`; default `15s` |
 | `BRIDGE_HUB_URL` | Hub URL used by Bridge | config `bridge.hub_url` |
 | `BRIDGE_TOKEN` | Bridge enroll token | config `bridge.token` |
 | `BRIDGE_TOKEN_FILE` | File containing Bridge token | config `bridge.token_file` |
@@ -143,6 +154,87 @@ and the three Turnstile values, and use a
 hostname allowed by that widget. The Hub validates each browser token with
 Siteverify and rejects unavailable, expired, replayed, wrong-action, and
 wrong-hostname results before creating a user. Never commit the secret.
+
+## MCP and Skill access
+
+The MCP entrypoint is part of Hub at `/mcp`; it does not require a separate MCP
+service. Hub remains inside the chosen LAN/VPN boundary. A submitting Codex or
+Claude Code client needs a route to Hub. An execution Bridge independently needs
+an outbound WebSocket route to Hub; it need not run on the Hub machine. Machines
+outside a lab-only network need VPN access, while machines inside connect directly.
+Only the selected Bridge accesses the project and runs the installed proof tools.
+
+Configure the Hub's `automation` block in `configs/dev.yaml.example` or its
+[environment overrides](#environment-variables). Set the canonical URL to your
+actual HTTPS Hub address. Non-loopback HTTP is rejected; loopback HTTP is allowed
+for local testing. Generated URLs do not use an incoming request's Host header.
+Set only one SMTP TLS mode: STARTTLS is the default; implicit TLS normally uses
+port 465 with `tls: true` and `starttls: false`. SMTP configuration is held by Hub,
+not the execution Bridge. The settings panel's configured status is not a remote
+SMTP connectivity test or delivery guarantee.
+
+After registration or account creation, the user follows this path:
+
+1. Connect the user's machine using **Settings → Add CLI endpoint**. The existing
+   Bridge enrollment token is separate from the personal MCP Token.
+2. Expand **Settings → Terminal & email**, choose Codex or Claude Code, and copy the
+   complete generated MCP configuration into that client's personal MCP settings.
+   It includes the canonical `/mcp` URL and `Authorization: Bearer ...` header.
+   Keep the server label `proofbridge`. Do not put the Token in a shared project
+   file, task prompt or URL.
+3. Copy the matching Skill install command from the same panel and run it.
+   The installer downloads the credential-free Skill from `/skills/` and requires an
+   explicit `--hub`. It verifies downloaded file hashes and updates its managed
+   files; an existing unmanaged `proofbridge` skill is preserved with an error.
+   It leaves CLI authentication, model and MCP configuration untouched.
+4. Save email, completion/attention notifications, a default endpoint and monitoring
+   mode. `interactive` is the default. `background-mail` requires an email address,
+   configured mail service, and both completion and attention notifications.
+5. Ask the client to use ProofBridge, read the target project's README, and perform
+   the verification. It discovers owned endpoints, current model options, saved
+   execution presets and preferences. Explicit task choices override workspace
+   defaults, which override account defaults. Ask explicitly to save a persistent
+   default; a one-off model choice does not change global CLI settings.
+
+The POSIX-shell installer needs `curl` and `sha256sum` or `shasum`. Default
+`--scope user` installs Codex to `~/.agents/skills/proofbridge` and Claude Code to
+`~/.claude/skills/proofbridge`. For project-local discovery, replace that argument
+with `--scope project` and run from the intended project directory: it uses
+`.agents/skills/proofbridge` or `.claude/skills/proofbridge`. The Skill contains no
+account Token. Restart the client if it does not discover the installation.
+
+The MCP Token is account-scoped and does not grant administrator access or bypass
+Bridge execution permissions. The same active Token can be copied again in the
+panel. Regenerating or revoking it invalidates old configurations; running tasks
+continue. After rotation, replace old templates in each client. Discovery reports
+actual endpoint capabilities; official-login Codex model selection requires its
+compatible endpoint and rollout. Other CLI/model combinations use the choices
+actually reported by that endpoint, rather than an assumed global model list.
+
+`background-mail` returns after acceptance, without keeping the submitting client
+open. Hub persists completion and attention notifications and sends them from its
+outbox. Keep the execution machine, Bridge, Hub and necessary network/VPN links
+available. Questions and approvals retain the existing native request identity;
+attention email asks the user to log in and answer. It grants no automatic approval.
+Follow-up tasks use the same run and native context. Interactive observation uses
+bounded waits; ending observation does not cancel execution.
+
+If configuration cannot be loaded, check login, VPN and `AUTOMATION_ENABLED` /
+`AUTOMATION_PUBLIC_URL`, then use **Reload**. If a settings save reports a version
+conflict, the unsaved draft remains; reload before saving again. If mail is not
+configured, use interactive monitoring or ask the administrator to configure SMTP.
+For delivery errors, ask the client to query `proofbridge_get_notifications` and
+contact the maintainer with the notification ID and error. Hub retries transient
+send failures a bounded number of times; `sent` means SMTP acceptance, not inbox
+delivery. A finished run is separate from an authoritative verification verdict.
+
+Implementation anchors: `internal/hub/automation_access.go:handleAutomationAccess`,
+`internal/hub/automation_mcp.go:newAutomationMCPHandler`,
+`internal/automationassets/assets.go:Handler`, and
+`internal/config/automation.go:applyAutomationEnv`. Tool semantics and acceptance
+criteria live in [the feature contract](features/mcp-skill-task-notifications.md).
+Bridge sets `PROOFBRIDGE_MANAGED_WORKER=1` only on its managed child processes to
+prevent recursive ProofBridge invocation; do not set it as a user connection option.
 
 ## CLI Install Flow
 
@@ -380,6 +472,7 @@ npm run test:stats
 DESKTOP_FIXES_TEST_URL=http://127.0.0.1:4173 npm run test:desktop-workspace-browser
 DESKTOP_FIXES_TEST_URL=http://127.0.0.1:4173 npm run test:stats-browser
 DOCUMENTATION_TEST_URL=http://127.0.0.1:4173 npm run test:documentation-browser
+AUTOMATION_UI_TEST_URL=http://127.0.0.1:4173 npm run test:automation-browser
 ```
 
 Use a leading build to exercise the running-task composer as well. Set optional
@@ -393,6 +486,13 @@ see their `USER_INPUT_TEST_URL` and `LIVE_INPUT_TEST_URL` inputs in
 help/update pages label that separately from the same-origin `/health` response
 and historical release notes; a Hub version does not identify the frontend or
 private Bridge build.
+
+The automation settings browser check covers full Codex/Claude configuration copy,
+Token visibility and rotation/revocation, notification/default saves and conflicts,
+clipboard failures, missing SMTP, and phone layout. It intercepts business HTTP
+with fixtures; it does not verify a real MCP client, model run or email inbox.
+Optionally set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to an existing compatible
+Chrome/Chromium executable if the Playwright browser is unavailable.
 
 ## Portable Package Build
 
@@ -540,3 +640,11 @@ Record Android/system-WebView versions, installed/cache footprint, and host plus
 renderer PSS/RSS using `adb shell dumpsys meminfo`. Test idle, long conversation,
 graph/detail view and background return. Missing device measurements remain
 unverified; APK bytes and Java heap do not prove runtime-memory compliance.
+
+
+### Batch experiment client
+
+`scripts/mcp-batch.py` uses Python standard-library HTTP and the same personal
+MCP entrypoint. Set `PROOFBRIDGE_MCP_TOKEN` in the client environment; it is a
+client-side credential, not a Hub configuration field. Pass a stable request-key
+manifest and the copied URL. See the [batch example](features/mcp-skill-task-notifications.md#batch-example).

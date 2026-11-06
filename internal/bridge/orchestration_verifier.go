@@ -279,6 +279,9 @@ func (m *OrchestrationManager) runSilentVerifierCLI(ctx context.Context, payload
 	configureManagedCommand(cmd)
 	applyWorkerRuntime(cmd, runtime)
 	cmd.Dir = cwd
+	if err := isolateAutomationEntrypoint(cmd, assignment.CLI, cwd); err != nil {
+		return silentVerifierOutput{}, err
+	}
 	if err := configureStrictWorkspaceCommand(cmd, m.cfg, cwd); err != nil {
 		return silentVerifierOutput{}, err
 	}

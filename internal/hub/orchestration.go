@@ -73,93 +73,11 @@ func (s *Server) handleCreateOrchestration(w http.ResponseWriter, r *http.Reques
 		serverutil.WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid orchestration payload")
 		return
 	}
-	startReq := orchestrationStartRequest{
-		ExecutionMode:                req.ExecutionMode,
-		NativeUserInputClientVersion: req.NativeUserInputClientVersion,
-		AgentID:                      req.AgentID,
-		Title:                        req.Title,
-		Mode:                         req.Mode,
-		WorkerPair:                   req.WorkerPair,
-		FirstCLI:                     req.FirstCLI,
-		Profile:                      req.Profile,
-		VerificationMode:             req.VerificationMode,
-		NativeContextCompaction:      req.NativeContextCompaction,
-		Prompt:                       req.Prompt,
-		CWD:                          req.CWD,
-		MaxTurns:                     req.MaxTurns,
-		Files:                        req.Files,
-		WorkerProfiles:               nil,
-	}
-	if user, err := s.store.UserByID(r.Context(), uid); err == nil {
-		startReq.PlanWorkspace = s.featureEnabled(rollout.FeatureOrchestrationPlanWorkspace, user)
-	}
-	normalized, ok := s.normalizeOrchestrationStart(w, startReq)
-	if !ok {
-		return
-	}
-	agentID, err := s.resolveAgentID(r.Context(), uid, normalized.AgentID)
+	run, err := s.createOrchestrationOperation(r.Context(), uid, req, "")
 	if err != nil {
-		status := http.StatusConflict
-		if errors.Is(err, store.ErrNotFound) {
-			status = http.StatusBadRequest
-		}
-		serverutil.WriteError(w, status, "BAD_AGENT", err.Error())
+		writeOperationError(w, err)
 		return
 	}
-	if normalized.ExecutionMode == "dynamic" && !s.durableTaskGraphEnabled(agentID) {
-		serverutil.WriteError(w, http.StatusConflict, "ORCHESTRATION_CAPABILITY_UNAVAILABLE", "dynamic orchestration requires a durable-task-graph Bridge")
-		return
-	}
-	if err := s.validateOrchestrationCapabilities(agentID, normalized.WorkerPair); err != nil {
-		serverutil.WriteError(w, http.StatusConflict, "ORCHESTRATION_CAPABILITY_UNAVAILABLE", err.Error())
-		return
-	}
-	if err := s.validateVerificationCapability(agentID, normalized.Profile, normalized.VerificationMode); err != nil {
-		serverutil.WriteError(w, http.StatusConflict, "VERIFICATION_CAPABILITY_UNAVAILABLE", err.Error())
-		return
-	}
-	if len(req.WorkerProfilePresetIDs) > 0 {
-		if err := s.validateIsolatedWorkerProfileCapability(agentID); err != nil {
-			serverutil.WriteError(w, http.StatusConflict, "ORCHESTRATION_CAPABILITY_UNAVAILABLE", err.Error())
-			return
-		}
-	}
-
-	if !s.authorizeOfficialWorkerRequest(w, r, uid, req) {
-		return
-	}
-	profiles, err := s.resolveWorkerProfiles(r.Context(), uid, agentID, normalized.WorkerPair, req.WorkerProfilePresetIDs, req.WorkerProfileEfforts, req.WorkerProfileModels)
-	if err != nil {
-		s.writeWorkerProfileError(w, err)
-		return
-	}
-	normalized.WorkerProfiles = profiles
-	files := orchestrationFileMeta(normalized.Files)
-	run, err := s.store.CreateOrchestrationRun(r.Context(), store.CreateOrchestrationRunParams{
-		ExecutionMode: normalized.ExecutionMode, UserID: uid,
-		AgentID:                 agentID,
-		Title:                   normalized.Title,
-		Mode:                    normalized.Mode,
-		WorkerPair:              normalized.WorkerPair,
-		FirstCLI:                normalized.FirstCLI,
-		Profile:                 normalized.Profile,
-		VerificationMode:        normalized.VerificationMode,
-		NativeContextCompaction: normalized.NativeContextCompaction,
-		Prompt:                  normalized.Prompt,
-		CWD:                     normalized.CWD,
-		MaxTurns:                normalized.MaxTurns,
-		Files:                   files,
-		WorkerProfiles:          normalized.WorkerProfiles,
-	})
-	if err != nil {
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to create orchestration run")
-		return
-	}
-	if err := s.startOrchestration(r.Context(), run, normalized, nil, false); err != nil {
-		serverutil.WriteError(w, http.StatusConflict, "AGENT_OFFLINE", err.Error())
-		return
-	}
-	run.Status = store.OrchestrationRunning
 	serverutil.WriteJSON(w, http.StatusCreated, map[string]any{"run": run})
 }
 
@@ -189,172 +107,11 @@ func (s *Server) handleContinueOrchestration(w http.ResponseWriter, r *http.Requ
 		serverutil.WriteError(w, http.StatusBadRequest, "BAD_REQUEST", "invalid orchestration payload")
 		return
 	}
-	startReq := orchestrationStartRequest{
-		ExecutionMode:                req.ExecutionMode,
-		NativeUserInputClientVersion: req.NativeUserInputClientVersion,
-		AgentID:                      req.AgentID,
-		Title:                        req.Title,
-		Mode:                         req.Mode,
-		WorkerPair:                   req.WorkerPair,
-		FirstCLI:                     req.FirstCLI,
-		Profile:                      req.Profile,
-		VerificationMode:             req.VerificationMode,
-		NativeContextCompaction:      req.NativeContextCompaction,
-		Prompt:                       req.Prompt,
-		CWD:                          req.CWD,
-		MaxTurns:                     req.MaxTurns,
-		Files:                        req.Files,
-		WorkerProfiles:               nil,
-	}
-	// Execution policy belongs to the original run and cannot change on follow-up.
-	if req.ExecutionMode != "" && req.ExecutionMode != run.ExecutionMode {
-		serverutil.WriteError(w, http.StatusBadRequest, "BAD_EXECUTION_MODE", "follow-up must retain the original execution mode")
-		return
-	}
-	startReq.ExecutionMode = run.ExecutionMode
-	previousProfiles, profilesErr := s.store.OrchestrationWorkerProfiles(r.Context(), run.ID)
-	if profilesErr != nil {
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load orchestration worker profiles")
-		return
-	}
-	if graph, graphErr := s.store.TaskGraphByRun(r.Context(), run.ID); graphErr == nil {
-		var previous protocol.OrchestrationStartPayload
-		if json.Unmarshal([]byte(graph.PayloadJSON), &previous) == nil {
-			startReq.PlanWorkspace = previous.PlanWorkspace
-			if previousProfiles == nil {
-				// Compatibility with runs created before bindings had their own
-				// private persistence table.
-				previousProfiles = previous.WorkerProfiles
-			}
-		}
-	}
-	if startReq.AgentID == "" {
-		startReq.AgentID = run.AgentID
-	}
-	if startReq.AgentID != run.AgentID {
-		serverutil.WriteError(w, http.StatusBadRequest, "BAD_AGENT", "orchestration follow-up must use the same CLI endpoint as the original run")
-		return
-	}
-	if startReq.Mode == "" {
-		startReq.Mode = run.Mode
-	}
-	if startReq.WorkerPair == "" {
-		startReq.WorkerPair = run.WorkerPair
-	}
-	if startReq.FirstCLI == "" {
-		startReq.FirstCLI = run.FirstCLI
-	}
-	if startReq.Profile == "" {
-		startReq.Profile = run.Profile
-	}
-	if startReq.VerificationMode == "" {
-		startReq.VerificationMode = run.VerificationMode
-	}
-	if startReq.NativeContextCompaction == "" {
-		startReq.NativeContextCompaction = run.NativeContextCompaction
-	}
-	if startReq.CWD == "" {
-		startReq.CWD = run.CWD
-	}
-	if startReq.MaxTurns <= 0 {
-		startReq.MaxTurns = run.MaxTurns
-	}
-	normalized, ok := s.normalizeOrchestrationStart(w, startReq)
-	if !ok {
-		return
-	}
-	agentID, err := s.resolveAgentID(r.Context(), uid, normalized.AgentID)
+	run, err = s.continueOrchestrationOperation(r.Context(), uid, run, req, "")
 	if err != nil {
-		status := http.StatusConflict
-		if errors.Is(err, store.ErrNotFound) {
-			status = http.StatusBadRequest
-		}
-		serverutil.WriteError(w, status, "BAD_AGENT", err.Error())
+		writeOperationError(w, err)
 		return
 	}
-	if normalized.ExecutionMode == "dynamic" && !s.durableTaskGraphEnabled(agentID) {
-		serverutil.WriteError(w, http.StatusConflict, "ORCHESTRATION_CAPABILITY_UNAVAILABLE", "dynamic orchestration requires a durable-task-graph Bridge")
-		return
-	}
-	if err := s.validateOrchestrationCapabilities(agentID, normalized.WorkerPair); err != nil {
-		serverutil.WriteError(w, http.StatusConflict, "ORCHESTRATION_CAPABILITY_UNAVAILABLE", err.Error())
-		return
-	}
-	if err := s.validateVerificationCapability(agentID, normalized.Profile, normalized.VerificationMode); err != nil {
-		serverutil.WriteError(w, http.StatusConflict, "VERIFICATION_CAPABILITY_UNAVAILABLE", err.Error())
-		return
-	}
-	if !s.authorizeOfficialWorkerRequest(w, r, uid, req) {
-		return
-	}
-	if req.WorkerProfilePresetIDs == nil {
-		normalized.WorkerProfiles = previousProfiles
-	} else {
-		profiles, err := s.resolveWorkerProfiles(r.Context(), uid, agentID, normalized.WorkerPair, req.WorkerProfilePresetIDs, req.WorkerProfileEfforts, req.WorkerProfileModels)
-		if err != nil {
-			s.writeWorkerProfileError(w, err)
-			return
-		}
-		normalized.WorkerProfiles = profiles
-	}
-	if len(normalized.WorkerProfiles) > 0 {
-		if err := s.validateIsolatedWorkerProfileCapability(agentID); err != nil {
-			serverutil.WriteError(w, http.StatusConflict, "ORCHESTRATION_CAPABILITY_UNAVAILABLE", err.Error())
-			return
-		}
-	}
-	if hasExplicitOfficialWorkerParameters(normalized.WorkerProfiles) {
-		if err := s.validateOfficialWorkerCapability(agentID); err != nil {
-			s.writeWorkerProfileError(w, err)
-			return
-		}
-	}
-	normalized.AgentID = agentID
-	files := mergeOrchestrationFiles(run.Files, orchestrationFileMeta(normalized.Files))
-
-	events, err := s.store.ListOrchestrationEvents(r.Context(), run.ID, 10000)
-	if err != nil {
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load orchestration context")
-		return
-	}
-	contextSummary := compactOrchestrationContext(run, events)
-	claimed, err := s.store.ClaimOrchestrationRunForContinue(r.Context(), run.ID)
-	if err != nil {
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to claim orchestration run")
-		return
-	}
-	if !claimed {
-		serverutil.WriteError(w, http.StatusConflict, "RUN_ACTIVE", "orchestration run is still active")
-		return
-	}
-	if err := s.store.UpdateOrchestrationRunSettings(r.Context(), run.ID, agentID, normalized.Mode, normalized.WorkerPair, normalized.FirstCLI, normalized.Profile, normalized.VerificationMode, normalized.CWD, normalized.NativeContextCompaction, normalized.MaxTurns, files); err != nil {
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to update orchestration run")
-		return
-	}
-	if req.WorkerProfilePresetIDs != nil {
-		if err := s.store.SetOrchestrationWorkerProfiles(r.Context(), run.ID, normalized.WorkerProfiles); err != nil {
-			serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to update orchestration worker profiles")
-			return
-		}
-	}
-	run.AgentID = agentID
-	run.Mode = normalized.Mode
-	run.WorkerPair = normalized.WorkerPair
-	run.FirstCLI = normalized.FirstCLI
-	run.Profile = normalized.Profile
-	run.VerificationMode = normalized.VerificationMode
-	run.NativeContextCompaction = normalized.NativeContextCompaction
-	run.CWD = normalized.CWD
-	run.MaxTurns = normalized.MaxTurns
-	run.Files = files
-	if err := s.startOrchestration(r.Context(), run, normalized, []string{contextSummary}, true); err != nil {
-		serverutil.WriteError(w, http.StatusConflict, "AGENT_OFFLINE", err.Error())
-		return
-	}
-	run.Status = store.OrchestrationRunning
-	run.ArchivedAt = 0
-	run.Error = ""
-	run.FinishedAt = 0
 	serverutil.WriteJSON(w, http.StatusOK, map[string]any{"run": run})
 }
 
@@ -1985,38 +1742,16 @@ func (s *Server) handleOrchestrationEvents(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleCancelOrchestration(w http.ResponseWriter, r *http.Request, uid string) {
-	run, err := s.store.OrchestrationRunByID(r.Context(), r.PathValue("runID"), uid)
+	result, err := s.cancelAutomationRun(r.Context(), uid, r.PathValue("runID"))
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			serverutil.WriteError(w, http.StatusNotFound, "NOT_FOUND", "orchestration run not found")
 			return
 		}
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to load orchestration run")
+		writeOperationError(w, err)
 		return
 	}
-	if orchestrationTerminalStatus(run.Status) {
-		serverutil.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "status": run.Status})
-		return
-	}
-	if run.Status == store.OrchestrationCanceling {
-		s.scheduleOrchestrationCancelTimeout(run.ID, orchestrationCancelAckTimeout)
-		serverutil.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "status": run.Status})
-		return
-	}
-	if !orchestrationCancelableStatus(run.Status) {
-		serverutil.WriteError(w, http.StatusConflict, "NOT_CANCELABLE", "orchestration run is not cancelable")
-		return
-	}
-	if err := s.store.UpdateOrchestrationRunStatus(r.Context(), run.ID, store.OrchestrationCanceling, ""); err != nil {
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to update orchestration run")
-		return
-	}
-	if err := s.persistAndDispatchOrchestrationCancel(r.Context(), run); err != nil {
-		serverutil.WriteError(w, http.StatusInternalServerError, "STORE_ERROR", "failed to persist orchestration cancellation")
-		return
-	}
-	s.scheduleOrchestrationCancelTimeout(run.ID, orchestrationCancelAckTimeout)
-	serverutil.WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "status": store.OrchestrationCanceling})
+	serverutil.WriteJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) persistAndDispatchOrchestrationCancel(ctx context.Context, run store.OrchestrationRun) error {

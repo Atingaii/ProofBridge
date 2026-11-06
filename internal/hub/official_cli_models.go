@@ -32,7 +32,11 @@ func (s *Server) writeWorkerProfileError(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) requireOfficialWorkerFeature(w http.ResponseWriter, r *http.Request, uid string) bool {
-	user, err := s.store.UserByID(r.Context(), uid)
+	return s.requireOfficialWorkerFeatureContext(w, r.Context(), uid)
+}
+
+func (s *Server) requireOfficialWorkerFeatureContext(w http.ResponseWriter, ctx context.Context, uid string) bool {
+	user, err := s.store.UserByID(ctx, uid)
 	if err != nil || !s.featureEnabled(rollout.FeatureOfficialCodexWorkerModels, user) {
 		serverutil.WriteError(w, http.StatusForbidden, "FEATURE_UNAVAILABLE", "official Codex worker model selection is not enabled for this account")
 		return false
@@ -43,6 +47,10 @@ func (s *Server) requireOfficialWorkerFeature(w http.ResponseWriter, r *http.Req
 // A model map supplements the existing complete preset map. It never changes
 // the established omission/replacement semantics of follow-up requests.
 func (s *Server) authorizeOfficialWorkerRequest(w http.ResponseWriter, r *http.Request, uid string, req orchestrationCreateRequest) bool {
+	return s.authorizeOfficialWorkerRequestContext(w, r.Context(), uid, req)
+}
+
+func (s *Server) authorizeOfficialWorkerRequestContext(w http.ResponseWriter, ctx context.Context, uid string, req orchestrationCreateRequest) bool {
 	explicit := req.WorkerProfileModels != nil
 	officialSlots := make(map[string]bool)
 	for slot, presetID := range req.WorkerProfilePresetIDs {
@@ -58,7 +66,7 @@ func (s *Server) authorizeOfficialWorkerRequest(w http.ResponseWriter, r *http.R
 	if !explicit {
 		return true
 	}
-	if !s.requireOfficialWorkerFeature(w, r, uid) {
+	if !s.requireOfficialWorkerFeatureContext(w, ctx, uid) {
 		return false
 	}
 	if req.WorkerProfilePresetIDs == nil {

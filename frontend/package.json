@@ -17,6 +17,7 @@
     "test:site-loading-browser": "node site-loading-browser-check.mjs && node history-pagination-browser-check.mjs",
     "test:stats": "node stats-request-check.mjs && node usage-overview-pages-check.mjs",
     "test:auth-recovery-browser": "node auth-recovery-browser-check.mjs",
+    "test:automation-browser": "node automation-settings-browser-check.mjs",
     "test:stats-browser": "node stats-browser-check.mjs && node usage-overview-browser-check.mjs",
     "test:documentation-browser": "node help-page-check.mjs",
     "android:check": "../scripts/check-android-host.sh"

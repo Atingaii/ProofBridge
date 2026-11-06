@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/tencent/codex-bridge/internal/auth"
+	"github.com/tencent/codex-bridge/internal/automationassets"
 	"github.com/tencent/codex-bridge/internal/config"
 	"github.com/tencent/codex-bridge/internal/protocol"
 	"github.com/tencent/codex-bridge/internal/rollout"
@@ -50,6 +51,8 @@ type BuildInfo struct {
 }
 
 type Server struct {
+	automationMu           sync.Mutex
+	automationInteractions *automationInteractionBroker
 	// Serializes live instruction acceptance with graph completion. No model I/O waits.
 	orchestrationInputMu sync.Mutex
 	usageSyncMu          sync.Mutex
@@ -84,17 +87,18 @@ type rateBucket struct {
 
 func NewServer(cfg *config.Config, st *store.Store, build BuildInfo) *Server {
 	s := &Server{
-		cfg:              cfg,
-		store:            st,
-		signer:           auth.NewSigner(cfg.Auth.JWTSecret, cfg.Auth.AccessTokenTTL.Duration),
-		rollouts:         rollout.New(cfg.Hub.FeatureRollouts),
-		pool:             NewPool(),
-		buffers:          make(map[string]string),
-		owners:           make(map[string]string),
-		leases:           make(map[string]*browserSessionLease),
-		rates:            make(map[string]rateBucket),
-		cliConfigPending: make(map[string]cliConfigPendingRequest),
-		turnstile:        cloudflareTurnstileVerifier{client: &http.Client{Timeout: 8 * time.Second}, url: turnstileVerifyURL},
+		automationInteractions: newAutomationInteractionBroker(),
+		cfg:                    cfg,
+		store:                  st,
+		signer:                 auth.NewSigner(cfg.Auth.JWTSecret, cfg.Auth.AccessTokenTTL.Duration),
+		rollouts:               rollout.New(cfg.Hub.FeatureRollouts),
+		pool:                   NewPool(),
+		buffers:                make(map[string]string),
+		owners:                 make(map[string]string),
+		leases:                 make(map[string]*browserSessionLease),
+		rates:                  make(map[string]rateBucket),
+		cliConfigPending:       make(map[string]cliConfigPendingRequest),
+		turnstile:              cloudflareTurnstileVerifier{client: &http.Client{Timeout: 8 * time.Second}, url: turnstileVerifyURL},
 	}
 
 	mux := http.NewServeMux()
@@ -163,6 +167,28 @@ func NewServer(cfg *config.Config, st *store.Store, build BuildInfo) *Server {
 	mux.HandleFunc("GET /ws/orchestrations", s.withAuth(s.handleOrchestrationWS))
 	mux.HandleFunc("GET /ws/chat", s.withAuth(s.handleBrowserWS))
 	mux.HandleFunc("GET /api/agents/connect", s.handleBridgeWS)
+	mcpHandler := s.newAutomationMCPHandler()
+	for _, method := range []string{"GET", "POST", "DELETE"} {
+		mux.Handle(method+" /mcp", mcpHandler)
+	}
+	mux.HandleFunc("GET /api/automation/access", s.withAuth(s.handleAutomationAccess))
+	mux.HandleFunc("POST /api/automation/access/rotate", s.withAuth(s.handleRotateAutomationToken))
+	mux.HandleFunc("POST /api/automation/access/revoke", s.withAuth(s.handleRevokeAutomationToken))
+	mux.HandleFunc("GET /api/automation/preferences", s.withAuth(s.handleGetAutomationPreferences))
+	mux.HandleFunc("PUT /api/automation/preferences", s.withAuth(s.handlePutAutomationPreferences))
+	mux.HandleFunc("GET /api/automation/notifications", s.withAuth(s.handleAutomationNotifications))
+	mux.Handle("GET /skills/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.cfg.Automation.Enabled {
+			http.NotFound(w, r)
+			return
+		}
+		base, err := s.automationPublicURL()
+		if err != nil {
+			writeOperationError(w, err)
+			return
+		}
+		automationassets.Handler(base).ServeHTTP(w, r)
+	}))
 	mux.Handle("GET /", s.staticHandler())
 
 	addr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
@@ -176,8 +202,14 @@ func NewServer(cfg *config.Config, st *store.Store, build BuildInfo) *Server {
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	// Recover only persisted reservations from the previous Hub lifetime. This
+	// must run before requests or dispatchers can create current reservations.
+	if err := s.store.ReconcileAutomationSubmissions(ctx); err != nil {
+		return fmt.Errorf("recover automation submissions: %w", err)
+	}
 	catalogCtx, stopCatalog := context.WithCancel(ctx)
 	defer stopCatalog()
+	go s.runAutomationNotifications(catalogCtx)
 	cachePath := filepath.Join(filepath.Dir(s.cfg.Hub.DBPath), "model-catalog.json")
 	_ = modelcatalog.Default.Load(cachePath)
 	go modelcatalog.Default.Run(catalogCtx, cachePath)

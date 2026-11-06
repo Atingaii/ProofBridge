@@ -41,60 +41,77 @@ func (s *Server) handleActiveOrchestrationMessage(w http.ResponseWriter, r *http
 		serverutil.WriteError(w, 400, "BAD_REQUEST", "invalid instruction")
 		return
 	}
-	req.Prompt = strings.TrimSpace(req.Prompt)
-	if req.DeliveryMode == "" {
-		req.DeliveryMode = "queue"
-	}
-	if req.MessageID == "" {
-		serverutil.WriteError(w, 409, "RUN_ACTIVE", "active run requires an idempotent runtime messageId")
+	message, replayed, err := s.orchestrationMessageOperation(r.Context(), run, req.MessageID, req.Prompt, req.DeliveryMode)
+	if err != nil {
+		writeOperationError(w, err)
 		return
 	}
-	if len(req.MessageID) > 128 || req.Prompt == "" || int64(len(req.Prompt)) > limit || (req.DeliveryMode != "queue" && req.DeliveryMode != "immediate") {
-		serverutil.WriteError(w, 400, "BAD_REQUEST", "messageId, prompt and valid deliveryMode are required")
-		return
+	status := http.StatusAccepted
+	if replayed {
+		status = http.StatusOK
 	}
-	// Retries return their original receipt even after the Bridge disconnects.
-	if old, err := s.store.OrchestrationMessageByID(r.Context(), run.ID, req.MessageID); err == nil {
-		if old.Prompt != req.Prompt || old.DeliveryMode != req.DeliveryMode {
-			serverutil.WriteError(w, 409, "MESSAGE_CONFLICT", "messageId already belongs to another instruction")
-			return
+	serverutil.WriteJSON(w, status, map[string]any{"message": message})
+}
+
+// The browser and MCP share native capability checks and the same idempotent
+// message identity. The caller holds orchestrationInputMu.
+func (s *Server) orchestrationMessageOperation(ctx context.Context, run store.OrchestrationRun, messageID, prompt, deliveryMode string) (store.OrchestrationMessage, bool, error) {
+	fail := func(status int, code, message string) (store.OrchestrationMessage, bool, error) {
+		return store.OrchestrationMessage{}, false, &operationError{status, code, message}
+	}
+	limit := s.cfg.Hub.MaxPromptBytes
+	if limit <= 0 {
+		limit = 64 * 1024
+	}
+	prompt = strings.TrimSpace(prompt)
+	if deliveryMode == "" {
+		deliveryMode = "queue"
+	}
+	if messageID == "" {
+		return fail(409, "RUN_ACTIVE", "active run requires an idempotent runtime messageId")
+	}
+	if len(messageID) > 128 || prompt == "" || int64(len(prompt)) > limit || (deliveryMode != "queue" && deliveryMode != "immediate") {
+		return fail(400, "BAD_REQUEST", "messageId, prompt and valid deliveryMode are required")
+	}
+	if old, err := s.store.OrchestrationMessageByID(ctx, run.ID, messageID); err == nil {
+		if old.Prompt != prompt || old.DeliveryMode != deliveryMode {
+			return fail(409, "MESSAGE_CONFLICT", "messageId already belongs to another instruction")
 		}
-		serverutil.WriteJSON(w, 200, map[string]any{"message": old})
-		return
+		return old, true, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return store.OrchestrationMessage{}, false, err
+	}
+	if orchestrationTerminalStatus(run.Status) {
+		return fail(409, "RUN_ENDED", "runtime instruction target has ended; send an explicit continuation")
 	}
 	if run.Status == store.OrchestrationCanceling {
-		serverutil.WriteError(w, 409, "RUN_STOPPING", "run is stopping")
-		return
+		return fail(409, "RUN_STOPPING", "run is stopping")
 	}
 	caps, online := s.pool.AgentCapabilities(run.AgentID)
 	if !online || caps == nil || caps.OrchestrationLiveInput < 1 {
-		serverutil.WriteError(w, 409, "LIVE_INPUT_UNAVAILABLE", "connected Bridge does not support runtime instructions")
-		return
+		return fail(409, "LIVE_INPUT_UNAVAILABLE", "connected Bridge does not support runtime instructions")
 	}
 	if caps.OrchestrationLiveInputCLIs != nil {
 		for _, cli := range orchestrationRequiredCLIs(run.WorkerPair) {
 			if !caps.OrchestrationLiveInputCLIs[cli] {
-				serverutil.WriteError(w, 409, "LIVE_INPUT_UNAVAILABLE", cli+" runtime does not support the live-input adapter protocol")
-				return
+				return fail(409, "LIVE_INPUT_UNAVAILABLE", cli+" runtime does not support the live-input adapter protocol")
 			}
 		}
 	}
-	message, created, err := s.store.CreateOrchestrationMessage(r.Context(), store.OrchestrationMessage{ID: req.MessageID, RunID: run.ID, Prompt: req.Prompt, DeliveryMode: req.DeliveryMode})
+	message, created, err := s.store.CreateOrchestrationMessage(ctx, store.OrchestrationMessage{ID: messageID, RunID: run.ID, Prompt: prompt, DeliveryMode: deliveryMode})
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
-			serverutil.WriteError(w, 409, "MESSAGE_CONFLICT", "messageId already used")
-		} else {
-			serverutil.WriteError(w, 500, "STORE_ERROR", "failed to save instruction")
+			return fail(409, "MESSAGE_CONFLICT", "messageId already used")
 		}
-		return
+		return store.OrchestrationMessage{}, false, err
 	}
 	if created {
-		s.dispatchOrchestrationMessages(r.Context(), run)
+		s.dispatchOrchestrationMessages(ctx, run)
 	}
-	if latest, err := s.store.OrchestrationMessageByID(r.Context(), run.ID, req.MessageID); err == nil {
+	if latest, err := s.store.OrchestrationMessageByID(ctx, run.ID, messageID); err == nil {
 		message = latest
 	}
-	serverutil.WriteJSON(w, http.StatusAccepted, map[string]any{"message": message})
+	return message, !created, nil
 }
 
 // Dispatch only queued rows. Sending rows must never be replayed: a disconnected

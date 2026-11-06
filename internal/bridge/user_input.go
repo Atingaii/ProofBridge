@@ -130,7 +130,7 @@ func (r orchestrationUserInputRequester) CloseUserInput(requestID, reason string
 func (m *OrchestrationManager) dispatchUserInput(res protocol.UserInputResponsePayload) {
 	m.mu.Lock()
 	p := m.userInputs[res.RequestID]
-	if p == nil || p.request.RunID != res.RunID {
+	if p == nil || p.request.RunID != res.RunID || (res.InstanceID != "" && res.InstanceID != m.userInputInstanceID) || (res.ExecutionID != "" && res.ExecutionID != p.request.ExecutionID) {
 		m.mu.Unlock()
 		m.UserInputUnavailable(res)
 		return
@@ -269,7 +269,7 @@ func (m *OrchestrationManager) UserInputResponse(res protocol.UserInputResponseP
 	}
 	m.mu.Lock()
 	p := m.userInputs[res.RequestID]
-	if p == nil || p.request.RunID != res.RunID {
+	if p == nil || p.request.RunID != res.RunID || (res.InstanceID != "" && res.InstanceID != m.userInputInstanceID) || (res.ExecutionID != "" && res.ExecutionID != p.request.ExecutionID) {
 		m.mu.Unlock()
 		return false
 	}

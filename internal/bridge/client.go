@@ -353,6 +353,7 @@ func BridgeCapabilities(cfg *config.Config) *protocol.BridgeCapabilities {
 	codexAvailable := commandAvailable(bridgeCodexPath(cfg))
 	claudeAvailable := commandAvailable(bridgeClaudePath(cfg))
 	caps := &protocol.BridgeCapabilities{
+		AutomationInteractions: 1,
 		Runner:                 runner,
 		Sandbox:                cfg.Bridge.Sandbox,
 		ApprovalPolicy:         cfg.Bridge.ApprovalPolicy,
@@ -584,6 +585,16 @@ func (c *Client) handleEnvelope(ctx context.Context, env protocol.Envelope, out 
 	case protocol.TypeCancel:
 		payload, _ := protocol.Decode[protocol.PromptPayload](env)
 		c.sessions.Cancel(env.Sid, payload.RunID, payload.PromptID)
+	case protocol.TypeApprovalSync:
+		payload, err := protocol.Decode[protocol.ApprovalSyncPayload](env)
+		if err == nil && env.Sid == "" && c.orchestrations != nil {
+			c.orchestrations.AutomationApprovalSync(payload)
+		}
+	case protocol.TypeApprovalDecision:
+		payload, err := protocol.Decode[protocol.ApprovalDecisionPayload](env)
+		if err == nil && env.Sid == "" && c.orchestrations != nil {
+			c.orchestrations.AutomationApprovalDecision(payload)
+		}
 	case protocol.TypeApprovalResponse:
 		payload, err := protocol.Decode[protocol.ApprovalResponsePayload](env)
 		if err != nil {

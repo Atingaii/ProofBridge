@@ -7,6 +7,7 @@ import { cn, copyText, initials, orchestrationApprovalMode, orchestrationCapabil
 import { CapabilityMatrix } from './OrchestrationComponents';
 import { CommandBlock } from './chat/CommandBlock';
 import { CLIConfigSwitcher } from './CLIConfigSwitcher';
+import { AutomationSettings } from './AutomationSettings';
 import { Button, Input } from './ui';
 import { useDialogFocus } from './MobileSurface';
 
@@ -181,6 +182,8 @@ export function SettingsModal({
               </Button>
             </div>
           </div>
+
+          <AutomationSettings key={user.id} userId={user.id} language={language} agents={agents} />
 
           <div className="space-y-3">
             <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.appearance}</h3>

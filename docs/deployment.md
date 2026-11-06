@@ -449,3 +449,18 @@ with an explicit free-space reserve and low I/O priority. Preserve the
 binary, configuration, Caddy file and original static roots separately.
 Validate the gzip stream before publishing. A binary/config rollback keeps
 the current live database and never restores the older snapshot over it.
+
+
+## MCP And Task Mail Deployment
+
+MCP shares the Hub process and private HTTPS origin; it does not create an inbound
+connection to user machines. Set the canonical automation URL and SMTP settings
+from [the environment reference](dev-workflow.md#mcp-and-skill-access), then
+verify personal-token revocation, both clients, VPN reachability from the caller
+and from Bridge, and the actual mail provider. Website deployment does not
+automatically upgrade Bridge; new MCP submissions require automationInteractions
+v1, which includes managed-worker entry isolation. Preserve the Hub database and
+JWT secret in backups: changing the secret makes existing recoverable personal
+tokens unreadable until users rotate them. The local SMTP sink tests do not
+verify external mailbox delivery. Follow the existing deployment scope; no new
+public ingress or endpoint package publication is implied.

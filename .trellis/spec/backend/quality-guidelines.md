@@ -28,3 +28,12 @@
 Claude 的 MCP connected、工具暴露、CLI subtype=success 都不足以声明原生问答通过：必须检查退出码、is_error、原生 tool_result 及答案回显。临时包装器通过只能验证候选方向，正式能力门禁需要实际项目 helper 及完整链路证据。精确版本门禁和当前证据见[Claude 实测记录](../../../docs/reviews/native-user-input-evidence/claude-capability-verification.md)；未验证的新版本必须继续保持关闭。
 
 v3 问答回归另见[二次修复计划](../../../docs/features/native-structured-user-input-regression-plan.md)：短时出站拥堵必须无需重连恢复；正常 resolved 不能把独立的原生写入故障预算当作取消信号；刷新后的未决 submission 必须由 Bridge 原子核对并封禁旧 ID，不能仅凭前端超时解锁。版本门禁同时覆盖 Hub、Bridge、浏览器及派发给 Bridge 的 start payload。跨层集成测试复用 Hub handler，不应启动模型目录刷新生命周期污染统计测试。
+
+
+## MCP 与受管工作器
+
+实现与验证入口见[MCP 功能](../../../docs/features/mcp-skill-task-notifications.md)和
+[本地验收](../../../docs/reviews/proofbridge-mcp-local-validation.md)。保持模型测试夹具、
+真实证明器、真实原生 MCP 客户端与实验室部署的证据边界。Codex 的隔离配置 `-c`
+必须放在 app-server / exec / exec resume 子命令后；顶层 override 可能被子命令的
+配置列表覆盖。实际参数回归位于 `internal/bridge/automation_worker_isolation_test.go`。

@@ -112,6 +112,17 @@ func (s *Server) handleUserInputFromBridge(ctx context.Context, agentID string, 
 			return
 		}
 	}
+	s.captureAutomationInteraction(agentID, env)
+	if env.Type == protocol.TypeUserInputRequest {
+		p, _ := protocol.Decode[protocol.UserInputRequestPayload](env)
+		s.queueAutomationAttention(ctx, runID, "question:"+p.InstanceID+":"+p.ExecutionID+":"+p.RequestID)
+	}
+	if env.Type == protocol.TypeUserInputStatus {
+		p, _ := protocol.Decode[protocol.UserInputStatusPayload](env)
+		if p.Status == "closed" && p.InstanceID != "" && p.ExecutionID != "" {
+			s.cancelAutomationAttention(ctx, runID, "question:"+p.InstanceID+":"+p.ExecutionID+":"+p.RequestID)
+		}
+	}
 	s.pool.BroadcastNativeUserInput(runID, env, terminalReadOnly)
 }
 
@@ -148,7 +159,19 @@ func lenSnapshotRequests(env protocol.Envelope) int {
 	return len(p.Requests)
 }
 
+type nativeInputClient interface {
+	Send(protocol.Envelope) error
+	userInputVersion() int32
+	setUserInputVersion(int32)
+}
+type browserNativeInputClient struct{ *BrowserConn }
+
+func (c browserNativeInputClient) userInputVersion() int32     { return c.nativeUserInputVersion.Load() }
+func (c browserNativeInputClient) setUserInputVersion(v int32) { c.nativeUserInputVersion.Store(v) }
 func (s *Server) handleUserInputFromBrowser(ctx context.Context, uid, runID string, conn *BrowserConn, env protocol.Envelope) {
+	s.handleUserInputFromClient(ctx, uid, runID, browserNativeInputClient{conn}, env)
+}
+func (s *Server) handleUserInputFromClient(ctx context.Context, uid, runID string, conn nativeInputClient, env protocol.Envelope) {
 	var requestID, submissionID, syncID string
 	reject := func(reason string) {
 		if env.Type == protocol.TypeUserInputSync {
@@ -219,12 +242,12 @@ func (s *Server) handleUserInputFromBrowser(ctx context.Context, uid, runID stri
 	if env.Type == protocol.TypeUserInputSync {
 		p, _ := protocol.Decode[protocol.UserInputSyncPayload](env)
 		if p.ClientVersion == 3 {
-			conn.nativeUserInputVersion.Store(int32(p.ClientVersion))
+			conn.setUserInputVersion(int32(p.ClientVersion))
 		} else if orchestrationActiveStatus(run.Status) {
 			reject("Browser needs to reload for structured input")
 			return
 		}
-	} else if conn.nativeUserInputVersion.Load() < 3 {
+	} else if conn.userInputVersion() < 3 {
 		reject("Browser needs to reload for structured input")
 		return
 	}
@@ -241,7 +264,7 @@ func (s *Server) handleUserInputFromBrowser(ctx context.Context, uid, runID stri
 	}
 }
 
-func (s *Server) sendUserInputRejected(conn *BrowserConn, runID, requestID, submissionID, reason string) {
+func (s *Server) sendUserInputRejected(conn interface{ Send(protocol.Envelope) error }, runID, requestID, submissionID, reason string) {
 	_ = conn.Send(protocol.MustEnvelope(protocol.TypeUserInputStatus, "", protocol.UserInputStatusPayload{
 		RunID: runID, RequestID: requestID, SubmissionID: submissionID,
 		Status: "rejected", Source: "hub", Phase: "route", Reason: reason,

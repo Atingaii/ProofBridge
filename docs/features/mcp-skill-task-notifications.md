@@ -1,9 +1,9 @@
 # ProofBridge MCP、验证 Skill 与任务邮件通知
 
-> 状态：Proposed / 设计稿，尚未实现或部署。日期：2026-11-06。
+> 状态：已在功能分支实现，正在完成本地验收；未部署。日期：2026-11-06。
 >
-> 基线：`feat/isolated-cli-profiles-verifier-harness` @ `21f1a0b`。本轮仅调研和规划。
-> 用户已确认产品方向；本文工具名称、表结构和默认策略是实施建议，不能当作现有能力。
+> 基线：`feat/isolated-cli-profiles-verifier-harness` @ `21f1a0b`；实现分支：`feat/mcp-skill-task-notifications`。
+> 用户已授权实现和本地测试。下面保留设计契约；实际验证与部署边界见本文末尾。
 > 架构决策见 [ADR-029](../adr/029-hub-mcp-and-submission-notifications.md)，
 > 源码证据及历史文档差异见[调研报告](../reviews/proofbridge-mcp-current-state.md)。
 
@@ -20,7 +20,7 @@ Hub 的实际配置、状态、验证证据才是实验记录。
 
 ## Non-Goals
 
-- 本轮不修改功能代码、数据库、配置、运行中的服务或发布包。
+- 本轮不部署、推送或升级运行中的 Hub/Bridge，不发布端点安装包。
 - 首版不新增证明引擎，不在 Hub 执行用户项目，不迁移用户工作区。
 - 不重做既有单聊、原生 resume、task graph、Agent/TBCI 验证策略或权限配置。
 - 不开放管理员工具、任意 Shell/文件读写、公共分享、模型密钥导出或模型凭据导入工具。
@@ -30,7 +30,7 @@ Hub 的实际配置、状态、验证证据才是实验记录。
 - 不要求云端 Agent 能访问用户电脑的 VPN，不对外开放实验室内网服务。
 - 不承诺任意自然语言必然触发 Skill，也不把运行 completed 翻译成证明通过。
 
-## Current State
+## Pre-Implementation Baseline
 
 现有机制应复用，事实依据见调研报告的源码锚点：
 
@@ -92,7 +92,7 @@ flowchart TD
    不覆盖现有 CLI 登录、模型配置、其他 MCP、全局 agent 指令或项目源码。
 6. 个人中心展示执行端在线状态、邮箱/邮件服务准备状态和清楚的故障排查入口。
 
-以下仅是未来模板形状，当前不可作为已实现配置交付；网站将替换所有占位符。
+以下为模板形状；个人中心会生成已填入实际地址和个人令牌的完整配置。
 默认生成完整模板；高级用户可以自行改为环境变量取令牌。
 
 ~~~toml
@@ -124,7 +124,7 @@ http_headers = { Authorization = "Bearer <用户MCP令牌>" }
 verificationMode、executionMode、轮次参数及通知选择；保存配置 ID 和非秘密参数，不复制模型 key。
 
 正式偏好保存在 Hub，Codex 与 Claude Code 共用；Skill 可以保存本地使用约定和缓存，
-并通过工具读取/更新正式偏好。优先级建议为：
+并通过工具读取/更新正式偏好。优先级为：
 
 `本次明确要求 > 端点/工作目录默认 > 账户默认 > 明示的系统兜底`。
 
@@ -139,7 +139,7 @@ verificationMode、executionMode、轮次参数及通知选择；保存配置 ID
 
 ### MCP 工具清单
 
-首版建议 20 个工具，统一 `proofbridge_` 前缀。这是拟议 Interface，不代表当前已注册。
+首版注册 20 个工具，统一 `proofbridge_` 前缀；清单对应 `internal/hub/automation_mcp.go:automationTools`。
 `R` 为读取；`W` 为会产生持久化或执行副作用。工具描述写用户意图、前置条件和失败影响。
 读写注解按实际行为填写，不能把会修改用户项目的任务启动标为只读。
 
@@ -156,15 +156,15 @@ verificationMode、executionMode、轮次参数及通知选择；保存配置 ID
 | `proofbridge_preview_run` | R | prompt、目标、方案引用/显式覆盖 | 不启动证明/业务 turn，返回解析后的安全快照、限制和待确认项；不要求用户手动再点确认 |
 | `proofbridge_start_run` | W | clientRequestId、prompt、明确目标/方案、monitoringMode | 快速接受任务并返回 runId、submissionId、配置快照、内网结果链接；不等整个证明 |
 | `proofbridge_continue_run` | W | runId、明确 operation、文本、请求身份 | 在同一 run 后续提交或追加动态指令，保留各自身份与投递语义，见下文 |
-| `proofbridge_list_runs` | R | 端点/状态/时间过滤、游标 | 本人历史任务摘要和分页信息，不返回全量长日志 |
-| `proofbridge_get_run` | R | runId、可选 submissionId | 当前状态或指定提交的冻结结果、验证结论、证据、待交互标记、通知摘要 |
+| `proofbridge_list_runs` | R | 端点/状态/query 过滤、游标 | 本人历史任务摘要和分页信息，不返回全量长日志 |
+| `proofbridge_get_run` | R | runId、可选 submissionId | 当前状态或指定提交的冻结结果、验证结论和证据；交互与通知通过专用工具查询 |
 | `proofbridge_get_run_events` | R | runId、afterSeq、limit | 有界事件页、下一游标和截断标记；敏感交互不从日志重建 |
 | `proofbridge_wait_run` | R | runId、afterSeq、可选 submissionId、timeoutMs | 至多 20 秒的观察，返回变化/结束/无变化；取消等待不取消任务 |
 | `proofbridge_cancel_run` | W | runId、clientRequestId | 复用取消状态机，返回取消中或已取消；不声称进程已立即退出 |
 | `proofbridge_get_run_interactions` | R | runId、只读查询身份 | 从活着的 Bridge 查询审批和原生问题、版本与已有回执；不附 PendingSubmissions，不执行封禁对账 |
 | `proofbridge_respond_run_interaction` | W | operation、kind、runId、request/instance/execution 身份、decisionId 或答案提交身份 | operation=answer/decide 回答原请求；operation=reconcile 显式对账；返回可证明的投递/封禁状态 |
 | `proofbridge_get_run_statistics` | R | runId、可选提交边界 | 用量、缓存、用时、估价来源及不完整标记；估价不是账单 |
-| `proofbridge_get_notifications` | R | 可选 runId/submissionId、游标 | 本人通知的 queued/sending/sent/retry/failed、发送尝试和安全故障原因 |
+| `proofbridge_get_notifications` | R | 可选 runId/submissionId、limit | 本人通知的 queued/sending/sent/retry/failed、发送尝试和安全故障原因 |
 
 `continue_run.operation` 必须明确：
 - `follow_up`：只对可继续的终态 run，形成新 submission，复用 runId、agentId、上下文。
@@ -212,7 +212,7 @@ interactive 由用户留在终端查看并处理交互，不承诺退出后的�
   REASONING_UNSUPPORTED、CAPABILITY_UNAVAILABLE、REQUEST_CONFLICT、
   DISPATCH_UNCONFIRMED、INTERACTION_UNAVAILABLE、DELIVERY_UNKNOWN、MAIL_NOT_CONFIGURED。
 
-拟议结果形状，字段以最终 schema 版本冻结：
+结果契约如下；实际结构对应 `internal/store/automation.go:AutomationResult`：
 
 ~~~json
 {
@@ -228,12 +228,12 @@ interactive 由用户留在终端查看并处理交互，不承诺退出后的�
     "unmetObligations": ["<target>"]
   },
   "configuration": { "endpointId": "<owned-endpoint>", "workerPair": "codex-codex" },
-  "needsAttention": false,
-  "notification": { "status": "queued" },
-  "resultUrl": "https://<内网Hub地址>/<本人任务入口>"
+  "finishedAt": 0
 }
 ~~~
 
+get_run 在 result 字段返回该冻结结果，外层附当前 run、submission 与 resultUrl。
+notification 状态通过 get_notifications 读取；待答状态通过 get_run_interactions 获取权威快照。
 execution、verification 和 notification 是三个独立维度。Agent 审核结论与 TBCI 原始可信结论
 要保留来源；MCP 不重新投票、不把编译成功扩大成语义证明、不新增“无条件成功”判断。
 
@@ -315,7 +315,7 @@ execution、verification 和 notification 是三个独立维度。Agent 审核�
 
 ## Data And Protocol Impact
 
-拟新增持久化对象（名称为设计建议，实施前按现有 Store 风格确定）：
+新增持久化对象（实际表名以架构文档为准）：
 - 用户个人 MCP 接入：用户、令牌 ID、摘要/受保护密文、状态、签发/撤销信息。
 - 用户/端点目录偏好和执行方案：版本、作用域、配置引用；与已存在的模型预设表区分。
 - 顶层自动化提交及幂等记录：uid、operation、clientRequestId、请求摘要、runId、
@@ -329,7 +329,7 @@ Bridge 协议仅为可靠审批的缺失快照/回执增加受能力门禁的增
 
 ## Implementation Steps
 
-1. 完成本设计、ADR、源码核对和规划清单；当前停在 planning，不启动产品实现。
+1. 先完成本设计、ADR 和源码核对；用户授权后在独立功能分支实施。
 2. 提取可复用 Hub 操作：现有 HTTP 和 MCP 共用归属、配置解析、提交、继续、交互和最终结算。
 3. 落地个人令牌、方案/偏好、提交身份/幂等和通知 schema；覆盖旧数据迁移与备份/回滚。
 4. 接入 MCP transport、鉴权、schema、20 工具；先跑通发现 → 预览 → 提交 → 本机执行 → 结果。
@@ -343,7 +343,7 @@ Bridge 协议仅为可靠审批的缺失快照/回执增加受能力门禁的增
 
 ## Exit Gates
 
-以下均为未来实现门禁，本轮尚未运行：
+以下为验收条件；本地测试与外部部署验收应分开记录，见末尾验证表。
 
 | 编号 | 可观察完成条件 |
 | --- | --- |
@@ -404,17 +404,74 @@ Hub/MCP 保持实验室内网访问，外部客户端及外部 Bridge 使用 VPN
 durable graph、dynamic input、原生交互 v3、Agent/TBCI、完成结论等文档。
 具体源码证据和过时表述以[调研报告](../reviews/proofbridge-mcp-current-state.md)为准。
 
-2026-11-06 查阅的一手协议/客户端资料（实施时仍须锁定实际 SDK/客户端版本）：
+2026-11-06 设计阶段查阅的一手协议/客户端资料；实测版本见本地验收报告：
 - [MCP transport overview](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports)：stdio 与 Streamable HTTP；本设计选择内网 HTTP。
 - [MCP tools](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)：工具 schema、结构化结果、显式 handle；应用任务身份独立于连接。
 - [MCP authorization](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization)：HTTP 鉴权规范；静态 PAT 首版不冒充完整 OAuth 实现。
 - [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)、[Claude Code MCP](https://code.claude.com/docs/en/mcp)：两客户端 HTTP/Bearer 配置支持。
 - [Codex skills](https://learn.chatgpt.com/docs/build-skills)、[Claude Code skills](https://code.claude.com/docs/en/skills)：自然匹配和显式调用需分别测试。
 
-本轮仅验证文档与源码定位。未启动 Hub/Bridge、调用模型、连接邮件服务、进行 VPN 联调或部署。
+以下仅保留实施前的文档检查历史；本地实现和运行证据见后续模块与验收记录。
 
-本轮文档检查记录：
+设计阶段文档检查记录（历史）：
 - `make doc-lint`：0 errors，保留 8 个既有 warnings，未新增 warning。
 - `git diff --check`、新增/修改文档的相对链接与空白检查通过；20 个唯一工具、18 个验收条目和规划引用检查通过。
 - 独立复核的“对账并非只读”和“后台待答不能静默等待”两项已修正，并再次复核通过。
 - 工作区产品树仅有文档变化；没有生成 Python 缓存、启动临时服务或创建需删除的构建产物。
+
+
+## Implemented Modules And Local Acceptance
+
+| 层 | Owning source |
+| --- | --- |
+| 官方 MCP Go SDK v1.8.0、20 工具及每请求鉴权 | `internal/hub/automation_mcp.go:newAutomationMCPHandler` |
+| 个人 Token、完整模板、偏好和版本校验 | `internal/hub/automation_access.go:handleAutomationAccess` |
+| 安全配置解析、幂等提交和同 run 继续 | `internal/hub/automation_runs.go:resolveAutomationRun`、`internal/hub/automation_operations.go:createOrchestrationOperation` |
+| 有界事件与等待、安全结果、已有统计 | `internal/hub/automation_observation.go:automationRunResult` |
+| 审批和问答共享路由 | `internal/hub/automation_interactions.go:automationGetInteractions`、`internal/bridge/automation_approvals.go` |
+| 配置/提交/结果/outbox | `internal/store/automation.go`、`internal/store/automation_notifications.go` |
+| 邮件消费与 SMTP | `internal/hub/automation_notifications.go:runAutomationNotifications`、`internal/notify/smtp.go` |
+| 个人中心及 Skill 安装 | `frontend/src/app/components/AutomationSettings.tsx`、`internal/automationassets/assets.go:Handler` |
+| 无模型批量实验入口 | `scripts/mcp-batch.py` |
+
+MCP 新提交及 follow_up 要求 Bridge capability `automationInteractions >= 1`。
+当前该能力包同时包含受管 worker 的外层入口隔离；旧 Bridge 可继续原有网站用法，
+MCP 会明确要求升级，而不会在旧自动执行端点中冒险递归。审批模式还须满足已有原生问答 v3
+和账户 rollout 门禁。native-default 模型可用，但快照标记实际使用原生默认，不能伪造固定模型。
+
+`/mcp` 采用无状态 Streamable HTTP 与 JSON 响应。GET/DELETE 由 SDK 返回不支持，
+客户端不应假定事件流推送；业务状态由 SQLite 中的 run/submission 保存。
+偏好账户作用域返回完整缺省值；未设置的 workspace 作用域返回空配置，不覆盖账户默认。
+read 工具不回传原生 resume 命令、thread/session ID 或模型凭据。
+结果分页最多 100 事件、软 128 KiB 响应预算，单事件投影截断带序号标记；
+nextSeq 仅推进实际返回的事件。统计不能可靠归属某一提交时返回 incomplete，不能把 run 总量
+冒充该次提交用量。通知查询提供有界最近记录，首版不支持游标。
+
+### Batch Example
+
+在清单中保留稳定 clientRequestId；重试同一清单会返回原提交。Token 通过环境变量
+`PROOFBRIDGE_MCP_TOKEN` 提供，不写入清单或命令参数；URL从个人中心复制。
+
+~~~json
+[
+  {"clientRequestId":"experiment-001","endpointId":"<本人端点ID>","cwd":"<该机器的项目路径>","prompt":"请阅读 README 的要求，完成项目的验证","profile":"formal-proof","workerPair":"codex-codex"},
+  {"clientRequestId":"experiment-002","endpointId":"<本人端点ID>","cwd":"<该机器的项目路径>","prompt":"按 README 独立重复验证并报告证据","profile":"formal-proof","workerPair":"codex-codex"}
+]
+~~~
+
+~~~bash
+python3 scripts/mcp-batch.py --url 'https://<实验室Hub地址>/mcp' --manifest experiments.json
+~~~
+
+脚本先输出每次接受的 ID，再汇总配置快照与冻结结果；退出码 0 表示报告完整，不代表每个证明均通过。`--submit-only` 立即返回，
+`--max-wait-seconds` 限制观察总时间。超时不取消任务。相同目录的多个运行会修改同一工作区，
+实验对比应由用户准备独立目录或顺序执行；脚本不隐式复制项目、清理结果或切换原生全局配置。
+
+### Validation Boundary
+
+实际命令、版本与证据边界见[本地验收报告](../reviews/proofbridge-mcp-local-validation.md)。
+
+本地证据区分：协议与 Store/Hub/Bridge 测试、真实 Chrome 设置页、两种真实原生客户端
+的 MCP 连接、固定 CLI transport fixture 调用实际 Coq、本地 SMTP TCP 收件。
+客户端连接成功不代表模型已自然语言路由，也不等于整个原生证明会话已经实测。
+实验室 VPN 开关/重连、部署地址和实际外部邮箱投递需使用部署环境继续验收；本次不修改在线实例。

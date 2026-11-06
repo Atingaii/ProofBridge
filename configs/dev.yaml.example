@@ -105,3 +105,19 @@ auth:
 observability:
   log_level: info
   log_format: console
+
+# MCP stays inside the Hub's existing network boundary. Use your VPN-reachable
+# HTTPS address so generated MCP templates and email links are immediately usable.
+automation:
+  enabled: true
+  public_url: ""
+  smtp:
+    host: ""
+    port: 587
+    username: ""
+    password: "" # Prefer SMTP_PASSWORD in the Hub environment.
+    from: ""
+    starttls: true
+    tls: false # Set tls=true and starttls=false for implicit TLS (usually 465).
+    allow_insecure: false # Explicit plain SMTP, for isolated local test servers.
+    timeout: 15s

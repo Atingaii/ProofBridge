@@ -900,7 +900,11 @@ function isInternalOrchestrationBootstrapEvent(event: OrchestrationEvent) {
     || (event.role === 'bootstrap' && event.cli === 'bridge');
 }
 
-function orchestrationVisibleTaskMeta(event: OrchestrationEvent) {
+function orchestrationVisibleTaskMeta(event: OrchestrationEvent): {
+  taskName?: string;
+  workerSlot?: string;
+  turnInfo?: OrchestrationTurnInfo;
+} {
   const role = event.task?.role || event.role;
   const taskName = event.task?.name;
   const stage = role === 'planner' || taskName === 'plan'

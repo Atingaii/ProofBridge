@@ -164,6 +164,11 @@ func (r *CodexAppServerRunner) startWithArgs(ctx context.Context, req RunnerRequ
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	if req.ManagedWorker {
+		if err := isolateAutomationEntrypoint(cmd, "codex", cwd); err != nil {
+			return nil, err
+		}
+	}
 	if err := configureStrictWorkspaceCommand(cmd, r.cfg, cwd); err != nil {
 		return nil, err
 	}

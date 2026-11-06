@@ -46,6 +46,7 @@ func Load(configDir string) (*Config, error) {
 }
 
 func applyEnv(cfg *Config) {
+	applyAutomationEnv(cfg)
 	if v := os.Getenv("APP_ENV"); v != "" {
 		cfg.App.Env = v
 	}

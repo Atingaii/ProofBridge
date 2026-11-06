@@ -77,6 +77,7 @@ func (m *OrchestrationManager) runCodexInteractive(ctx context.Context, payload 
 	resumeMode := codex.mode
 	liveReady := make(chan struct{})
 	req := RunnerRequest{
+		ManagedWorker:   true,
 		LiveInputReady:  liveReady,
 		LiveInput:       m.liveInputFor(payload.RunID),
 		Content:         prompt,
@@ -190,6 +191,7 @@ func (m *OrchestrationManager) ensureCodexInteractiveSessionLocked(ctx context.C
 			return codex, nil
 		}
 		res, err := codex.client.request(ctx, "thread/resume", NewCodexAppServerRunner(m.cfg).threadResumeParams(codex.threadID, RunnerRequest{
+			ManagedWorker:   true,
 			RemoteThreadID:  codex.threadID,
 			RunID:           payload.RunID,
 			CWD:             m.cwd(payload),
@@ -209,6 +211,7 @@ func (m *OrchestrationManager) ensureCodexInteractiveSessionLocked(ctx context.C
 	}
 	runner := NewCodexAppServerRunner(m.cfg)
 	req := RunnerRequest{
+		ManagedWorker:   true,
 		RemoteThreadID:  state.codexThreadID(workerSlot),
 		RunID:           payload.RunID,
 		CWD:             m.cwd(payload),
@@ -419,6 +422,9 @@ func (m *OrchestrationManager) runCodexExecAttempt(ctx context.Context, payload 
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	if err := isolateAutomationEntrypoint(cmd, "codex", cwd); err != nil {
+		return codexExecAttempt{threadID: threadID, err: err}
+	}
 	if err := configureStrictWorkspaceCommand(cmd, m.cfg, cwd); err != nil {
 		return codexExecAttempt{threadID: threadID, err: err}
 	}
@@ -570,7 +576,8 @@ func (m *OrchestrationManager) runCodexAppServerWithThread(ctx context.Context, 
 		return "", nil, threadID, "codex-profile-error", runtimeErr
 	}
 	req := RunnerRequest{
-		LiveInput: m.liveInputFor(payload.RunID),
+		ManagedWorker: true,
+		LiveInput:     m.liveInputFor(payload.RunID),
 		OnNativeIdentity: func(id, model string) {
 			m.emit(payload.RunID, nativeIdentityEvent(turnID, role, workerSlot, id, model))
 		},

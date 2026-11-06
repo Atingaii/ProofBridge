@@ -3,7 +3,7 @@
 This is the detailed "I want to change X, where do I edit?" source. Keep
 `AGENTS.md` concise and link here for detail.
 
-Planned MCP/Skill/email work has no implemented module yet. Read the [feature and tool contracts](features/mcp-skill-task-notifications.md), [ADR-029](adr/029-hub-mcp-and-submission-notifications.md), and [current-source audit](reviews/proofbridge-mcp-current-state.md) before locating changes in the existing Hub, Bridge, Store and personal-center areas below.
+MCP/Skill/email modules are implemented on the feature branch. Read the [feature and tool contracts](features/mcp-skill-task-notifications.md), [ADR-029](adr/029-hub-mcp-and-submission-notifications.md), and [current-source audit](reviews/proofbridge-mcp-current-state.md) before locating changes in the existing Hub, Bridge, Store and personal-center areas below.
 
 ## Top-Level Shape
 
@@ -24,6 +24,11 @@ allowlist across authorization, user metadata, and rollout evaluation.
 | Official Codex worker models and efforts | `internal/protocol/envelope.go:OfficialCLIModelMetadata`, `internal/hub/orchestration.go:resolveWorkerProfiles`, `internal/bridge/orchestration_worker_profiles.go:workerRuntime`, `internal/bridge/appserver_runner.go:turnStartParams`, `frontend/src/app/pages/OrchestrationWorkspace.tsx:renderWorkerProfileSelectors`, [feature contract](features/official-codex-worker-models.md) |
 | Isolated native resume visibility | `internal/bridge/orchestration_native.go:materializeCodexPickerVisibility`, `internal/bridge/orchestration_native.go:materializeClaudePickerVisibility`, `internal/protocol/envelope.go:NativeResumeInfo` |
 | Hub routes, auth, static serving | `internal/hub/server.go`, `internal/hub/registration.go` |
+| Personal MCP access, token lifecycle and preferences | `internal/hub/automation_access.go:handleAutomationAccess`, `internal/hub/automation_mcp.go:newAutomationMCPHandler`, `frontend/src/app/components/AutomationSettings.tsx` |
+| MCP execution resolution, durable submission identity and safe observation | `internal/hub/automation_runs.go:resolveAutomationRun`, `internal/hub/automation_operations.go:createOrchestrationOperation`, `internal/hub/automation_observation.go:automationRunResult`, `internal/store/automation.go:ReserveAutomationSubmission` |
+| Automation approvals, native questions and managed-worker isolation | `internal/hub/automation_interactions.go:automationGetInteractions`, `internal/bridge/automation_approvals.go`, `internal/bridge/automation_worker_isolation.go`, `internal/protocol/automation_interactions.go` |
+| Submission settlement, notification outbox and SMTP | `internal/store/automation_notifications.go:automationEventTx`, `internal/hub/automation_notifications.go:runAutomationNotifications`, `internal/notify/smtp.go` |
+| End-user Skill distribution and reproducible batch submissions | `internal/automationassets/assets.go:Handler`, `internal/automationassets/install.sh`, `internal/automationassets/skill/SKILL.md`, `scripts/mcp-batch.py` |
 | Public conversation shares | `internal/hub/share.go` |
 | Browser chat WebSocket | `internal/hub/ws_browser.go` |
 | Bridge reverse WebSocket | `internal/hub/ws_bridge.go`, `internal/bridge/client.go` |

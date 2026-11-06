@@ -180,6 +180,7 @@ Only explicit New Session / New Run actions may create a new context.
 | --- | --- |
 | Config | `internal/config/` |
 | Hub HTTP/API/WS | `internal/hub/` |
+| Personal MCP, submissions and notifications | `internal/hub/automation_*.go`, `internal/store/automation*.go`, `internal/notify/`, `internal/automationassets/` |
 | Bridge reverse client | `internal/bridge/` |
 | SQLite store | `internal/store/` |
 | Auth/JWT | `internal/auth/` |

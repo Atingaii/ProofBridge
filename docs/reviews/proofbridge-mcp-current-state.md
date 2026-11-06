@@ -1,8 +1,8 @@
-# ProofBridge MCP 接入：当前能力与源码核对
+# ProofBridge MCP 接入：实施前基线核对
 
 > 核对日期：2026-11-06。基线：`feat/isolated-cli-profiles-verifier-harness`，提交 `21f1a0b38d0842bd76e3b3cd6fe2c8dd96926907`。
 >
-> 本文是源码与文档调研，不是实现或运行验收报告。未启动 Hub、Bridge、真实 CLI、邮件服务或 VPN 联调；所有“当前行为”均指本提交的源码检查结果。本文不修改现有功能。
+> 本文保存实施前基线；后续实现与本地验证见[功能文档](../features/mcp-skill-task-notifications.md)。本文是源码与文档调研，不是实现或运行验收报告。未启动 Hub、Bridge、真实 CLI、邮件服务或 VPN 联调；所有“当前行为”均指本提交的源码检查结果。本文不修改现有功能。
 
 ## 1. 核心判断
 

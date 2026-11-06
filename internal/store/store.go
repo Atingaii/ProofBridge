@@ -383,7 +383,10 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.migrateOrchestrationMessages(ctx); err != nil {
 		return err
 	}
-	return s.migrateUserScopedCLIConfigPresets(ctx)
+	if err := s.migrateUserScopedCLIConfigPresets(ctx); err != nil {
+		return err
+	}
+	return s.migrateAutomation(ctx)
 }
 
 func (s *Store) migrateUserScopedCLIConfigPresets(ctx context.Context) error {
@@ -1161,6 +1164,9 @@ func insertOrchestrationEventTx(ctx context.Context, tx *sql.Tx, event Orchestra
 	`, event.ID, event.RunID, event.Seq, event.Kind, nullString(event.Source), nullString(event.Severity), nullString(event.Role), nullString(event.CLI),
 		nullString(event.TurnID), nullString(event.Content), nullString(event.Status), nullString(event.Error),
 		nullString(dataJSON), event.CreatedAt); err != nil {
+		return OrchestrationEvent{}, err
+	}
+	if err := automationEventTx(ctx, tx, event); err != nil {
 		return OrchestrationEvent{}, err
 	}
 	return event, nil
@@ -1981,6 +1987,7 @@ type OrchestrationEvent struct {
 }
 
 type CreateOrchestrationRunParams struct {
+	AutomationSubmissionID  string
 	ExecutionMode           string
 	UserID                  string
 	AgentID                 string
@@ -2164,7 +2171,12 @@ func (s *Store) CreateOrchestrationRun(ctx context.Context, params CreateOrchest
 		CreatedAt:               now,
 		UpdatedAt:               now,
 	}
-	_, err = s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return OrchestrationRun{}, err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO orchestration_runs
 			(id, user_id, agent_id, title, mode, worker_pair, first_cli, profile, verification_mode, prompt, cwd, codex_thread_ids_json, native_context_compaction, max_turns, status, files_json, created_at, updated_at, execution_mode)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -2172,7 +2184,19 @@ func (s *Store) CreateOrchestrationRun(ctx context.Context, params CreateOrchest
 	if err != nil {
 		return OrchestrationRun{}, err
 	}
-	if err := s.SetOrchestrationWorkerProfiles(ctx, run.ID, params.WorkerProfiles); err != nil {
+	if len(params.WorkerProfiles) > 0 {
+		raw, marshalErr := json.Marshal(params.WorkerProfiles)
+		if marshalErr != nil {
+			return OrchestrationRun{}, marshalErr
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO orchestration_worker_profiles (run_id, profiles_json, updated_at) VALUES (?, ?, ?)`, run.ID, string(raw), now); err != nil {
+			return OrchestrationRun{}, err
+		}
+	}
+	if err = bindAutomationSubmissionTx(ctx, tx, params.AutomationSubmissionID, run.UserID, run.ID); err != nil {
+		return OrchestrationRun{}, err
+	}
+	if err = tx.Commit(); err != nil {
 		return OrchestrationRun{}, err
 	}
 	return run, nil
@@ -2451,23 +2475,7 @@ func (s *Store) UpdateOrchestrationRunStatusIfAllowed(ctx context.Context, id, s
 // running. Exactly one of several concurrent follow-up prompts wins the claim,
 // so the same run cannot be double-started on the Bridge.
 func (s *Store) ClaimOrchestrationRunForContinue(ctx context.Context, id string) (bool, error) {
-	if id == "" {
-		return false, errors.New("run id is required")
-	}
-	now := time.Now().Unix()
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE orchestration_runs
-		SET status = ?, error = NULL, updated_at = ?, archived_at = 0
-		WHERE id = ? AND delete_requested = 0 AND status IN (?, ?, ?)
-	`, OrchestrationRunning, now, id, OrchestrationCompleted, OrchestrationFailed, OrchestrationCanceled)
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
+	return s.claimAutomationRunForContinue(ctx, id, "", "")
 }
 
 func (s *Store) CancelOrchestrationRunIfStillCanceling(ctx context.Context, id, reason string) (OrchestrationEvent, bool, error) {
@@ -2553,6 +2561,9 @@ func (s *Store) CancelOrchestrationRunIfStillCanceling(ctx context.Context, id, 
 	`, event.ID, event.RunID, event.Seq, event.Kind, nullString(event.Source), nullString(event.Severity), nullString(event.Role), nullString(event.CLI),
 		nullString(event.TurnID), nullString(event.Content), nullString(event.Status), nullString(event.Error),
 		nullString(dataJSON), now); err != nil {
+		return OrchestrationEvent{}, false, err
+	}
+	if err := automationEventTx(ctx, tx, event); err != nil {
 		return OrchestrationEvent{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -2695,48 +2706,20 @@ func (s *Store) AddOrchestrationEvent(ctx context.Context, event OrchestrationEv
 	if event.RunID == "" || event.Kind == "" {
 		return OrchestrationEvent{}, errors.New("run id and kind are required")
 	}
-	now := time.Now().Unix()
-	if event.ID == "" {
-		event.ID = NewID("evt")
-	}
-	event.CreatedAt = now
-	event.Source = normalizeOrchestrationEventSource(event.Source, event.Kind)
-	if event.Severity == "" {
-		event.Severity = severityFromLegacyStatus(event.Status)
-		// turn.end carries a semantic lifecycle status (success/error/warning),
-		// not a log level; keep it so error guards and timelines stay correct.
-		if event.Severity != "" && event.Kind != "turn.end" {
-			event.Status = ""
-		}
-	}
-	dataJSON, err := orchestrationEventDataJSON(event)
-	if err != nil {
-		return OrchestrationEvent{}, err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return OrchestrationEvent{}, err
 	}
 	defer tx.Rollback()
-	if event.Seq <= 0 {
-		row := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq), 0) + 1 FROM orchestration_events WHERE run_id = ?`, event.RunID)
-		if err := row.Scan(&event.Seq); err != nil {
-			return OrchestrationEvent{}, err
-		}
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO orchestration_events
-			(id, run_id, seq, kind, source, severity, role, cli, turn_id, content, status, error, data_json, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, event.ID, event.RunID, event.Seq, event.Kind, nullString(event.Source), nullString(event.Severity), nullString(event.Role), nullString(event.CLI),
-		nullString(event.TurnID), nullString(event.Content), nullString(event.Status), nullString(event.Error),
-		nullString(dataJSON), now); err != nil {
+	now := time.Now().Unix()
+	event, err = insertOrchestrationEventTx(ctx, tx, event, now)
+	if err != nil {
 		return OrchestrationEvent{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE orchestration_runs SET updated_at = ? WHERE id = ?`, now, event.RunID); err != nil {
+	if _, err = tx.ExecContext(ctx, "UPDATE orchestration_runs SET updated_at=? WHERE id=?", now, event.RunID); err != nil {
 		return OrchestrationEvent{}, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return OrchestrationEvent{}, err
 	}
 	return event, nil

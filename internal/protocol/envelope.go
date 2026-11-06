@@ -103,6 +103,7 @@ type AgentShutdownPayload struct {
 }
 
 type BridgeCapabilities struct {
+	AutomationInteractions     int                                  `json:"automationInteractions,omitempty"`
 	OrchestrationLiveInputCLIs map[string]bool                      `json:"orchestrationLiveInputCLIs,omitempty"`
 	OrchestrationLiveInput     int                                  `json:"orchestrationLiveInput,omitempty"`
 	UsageModelRecovery         int                                  `json:"usageModelRecovery,omitempty"`
@@ -309,22 +310,25 @@ type ErrorPayload struct {
 }
 
 type ApprovalRequestPayload struct {
-	RequestID string          `json:"requestId"`
-	Kind      string          `json:"kind"`
-	Command   string          `json:"command,omitempty"`
-	CWD       string          `json:"cwd,omitempty"`
-	Reason    string          `json:"reason,omitempty"`
-	ThreadID  string          `json:"threadId,omitempty"`
-	TurnID    string          `json:"turnId,omitempty"`
-	ItemID    string          `json:"itemId,omitempty"`
-	RunID     string          `json:"runId,omitempty"`
-	PromptID  string          `json:"promptId,omitempty"`
-	Params    json.RawMessage `json:"params,omitempty"`
+	InstanceID  string          `json:"instanceId,omitempty"`
+	ExecutionID string          `json:"executionId,omitempty"`
+	RequestID   string          `json:"requestId"`
+	Kind        string          `json:"kind"`
+	Command     string          `json:"command,omitempty"`
+	CWD         string          `json:"cwd,omitempty"`
+	Reason      string          `json:"reason,omitempty"`
+	ThreadID    string          `json:"threadId,omitempty"`
+	TurnID      string          `json:"turnId,omitempty"`
+	ItemID      string          `json:"itemId,omitempty"`
+	RunID       string          `json:"runId,omitempty"`
+	PromptID    string          `json:"promptId,omitempty"`
+	Params      json.RawMessage `json:"params,omitempty"`
 }
 
 type ApprovalResponsePayload struct {
-	RequestID string `json:"requestId"`
-	Decision  string `json:"decision"`
+	DecisionID string `json:"decisionId,omitempty"`
+	RequestID  string `json:"requestId"`
+	Decision   string `json:"decision"`
 }
 
 // User input is distinct from command or file-change approval. The Bridge
@@ -359,6 +363,8 @@ type UserInputRequestPayload struct {
 }
 
 type UserInputResponsePayload struct {
+	InstanceID   string                     `json:"instanceId,omitempty"`
+	ExecutionID  string                     `json:"executionId,omitempty"`
 	RequestID    string                     `json:"requestId"`
 	RunID        string                     `json:"runId"`
 	SubmissionID string                     `json:"submissionId"`
