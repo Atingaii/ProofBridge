@@ -33,7 +33,10 @@ case "$client" in codex|claude) ;; *) fail 'Choose --client codex or --client cl
 case "$scope" in
   user)
     [ -n "${HOME:-}" ] || fail 'HOME is unavailable. Select --scope project or restore your user environment.'
-    case "$client" in codex) skill_root=$HOME/.agents/skills ;; claude) skill_root=$HOME/.claude/skills ;; esac ;;
+    case "$client" in
+      codex) skill_root=$HOME/.agents/skills ;;
+      claude) skill_root="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills" ;;
+    esac ;;
   project)
     case "$client" in codex) skill_root=$PWD/.agents/skills ;; claude) skill_root=$PWD/.claude/skills ;; esac ;;
   *) fail 'Choose --scope user or --scope project.' ;;

@@ -72,18 +72,19 @@ func newInstallation(t *testing.T) installation {
 	return i
 }
 
-func (i installation) run(t *testing.T, hub, client, scope string) (string, error) {
+func (i installation) run(t *testing.T, hub, client, scope string, extraEnv ...string) (string, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, "sh", i.installer, "--hub", hub, "--client", client, "--scope", scope)
 	command.Dir = i.project
 	for _, entry := range os.Environ() {
-		if !strings.HasPrefix(entry, "HOME=") {
+		if !strings.HasPrefix(entry, "HOME=") && !strings.HasPrefix(entry, "CLAUDE_CONFIG_DIR=") {
 			command.Env = append(command.Env, entry)
 		}
 	}
 	command.Env = append(command.Env, "HOME="+i.home)
+	command.Env = append(command.Env, extraEnv...)
 	output, err := command.CombinedOutput()
 	return string(output), err
 }
@@ -152,6 +153,68 @@ func TestInstallerClientsScopesAndManagedUpdate(t *testing.T) {
 	}
 }
 
+func TestInstallerClaudeConfigDirectory(t *testing.T) {
+	server := httptest.NewServer(Handler(""))
+	defer server.Close()
+	for _, tc := range []struct {
+		name, client, scope string
+		setConfig, empty    bool
+	}{
+		{name: "custom-user", client: "claude", scope: "user", setConfig: true},
+		{name: "unset-user", client: "claude", scope: "user"},
+		{name: "empty-user", client: "claude", scope: "user", setConfig: true, empty: true},
+		{name: "custom-project", client: "claude", scope: "project", setConfig: true},
+		{name: "codex-ignores-claude-config", client: "codex", scope: "user", setConfig: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			i := newInstallation(t)
+			custom := filepath.Join(filepath.Dir(i.home), "alternate Claude profile")
+			if err := os.MkdirAll(custom, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			config := filepath.Join(custom, "settings.json")
+			original := []byte("existing native CLI settings\n")
+			if err := os.WriteFile(config, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var env []string
+			if tc.setConfig {
+				value := custom
+				if tc.empty {
+					value = ""
+				}
+				env = []string{"CLAUDE_CONFIG_DIR=" + value}
+			}
+			target := i.target(tc.client, tc.scope)
+			customTarget := filepath.Join(custom, "skills", "proofbridge")
+			if tc.client == "claude" && tc.scope == "user" && tc.setConfig && !tc.empty {
+				target = customTarget
+			}
+			for attempt := 0; attempt < 2; attempt++ {
+				if output, err := i.run(t, server.URL, tc.client, tc.scope, env...); err != nil {
+					t.Fatalf("install/update %d: %v: %s", attempt, err, output)
+				}
+			}
+			for name, expected := range SkillFiles {
+				actual, err := os.ReadFile(filepath.Join(target, filepath.FromSlash(name)))
+				if err != nil || string(actual) != expected {
+					t.Fatalf("incorrect installed %s: %v", name, err)
+				}
+			}
+			unused := customTarget
+			if target == customTarget {
+				unused = i.target("claude", "user")
+			}
+			if _, err := os.Stat(unused); !os.IsNotExist(err) {
+				t.Fatalf("installed into an unselected root: %s (%v)", unused, err)
+			}
+			if actual, err := os.ReadFile(config); err != nil || !bytes.Equal(actual, original) {
+				t.Fatal("installer changed native CLI settings")
+			}
+		})
+	}
+}
+
 func TestInstallerPreservesExistingSkillOnCorruptDownload(t *testing.T) {
 	handler := Handler("")
 	var corrupt atomic.Bool
@@ -183,36 +246,51 @@ func TestInstallerPreservesExistingSkillOnCorruptDownload(t *testing.T) {
 func TestInstallerRefusesUnmanagedOrSymlinkTarget(t *testing.T) {
 	server := httptest.NewServer(Handler(""))
 	defer server.Close()
-	for _, symlink := range []bool{false, true} {
-		t.Run(fmt.Sprint("symlink=", symlink), func(t *testing.T) {
-			i := newInstallation(t)
-			target := i.target("claude", "project")
-			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if symlink {
-				if err := os.Symlink(i.home, target); err != nil {
+	for _, location := range []string{"project", "custom-user"} {
+		for _, kind := range []string{"unmanaged", "symlink", "unknown-marker"} {
+			t.Run(location+"/"+kind, func(t *testing.T) {
+				i := newInstallation(t)
+				target := i.target("claude", "project")
+				scope := "project"
+				var env []string
+				if location == "custom-user" {
+					custom := filepath.Join(filepath.Dir(i.home), "alternate Claude profile")
+					env = []string{"CLAUDE_CONFIG_DIR=" + custom}
+					target = filepath.Join(custom, "skills", "proofbridge")
+					scope = "user"
+				}
+				if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 					t.Fatal(err)
 				}
-			} else {
-				if err := os.Mkdir(target, 0o700); err != nil {
-					t.Fatal(err)
+				if kind == "symlink" {
+					if err := os.Symlink(i.home, target); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					if err := os.Mkdir(target, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("user owned"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					if kind == "unknown-marker" {
+						if err := os.WriteFile(filepath.Join(target, ".proofbridge-managed"), []byte("another-installer"), 0o600); err != nil {
+							t.Fatal(err)
+						}
+					}
 				}
-				if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("user owned"), 0o600); err != nil {
-					t.Fatal(err)
+				output, err := i.run(t, server.URL, "claude", scope, env...)
+				if err == nil {
+					t.Fatalf("unsafe target accepted: %s", output)
 				}
-			}
-			output, err := i.run(t, server.URL, "claude", "project")
-			if err == nil {
-				t.Fatalf("unsafe target accepted: %s", output)
-			}
-			if !symlink {
-				data, _ := os.ReadFile(filepath.Join(target, "SKILL.md"))
-				if string(data) != "user owned" {
-					t.Fatal("unmanaged skill was overwritten")
+				if kind != "symlink" {
+					data, _ := os.ReadFile(filepath.Join(target, "SKILL.md"))
+					if string(data) != "user owned" {
+						t.Fatal("unmanaged skill was overwritten")
+					}
 				}
-			}
-		})
+			})
+		}
 	}
 }
 

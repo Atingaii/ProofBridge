@@ -26,6 +26,8 @@
 配置增加显式 `CODEX_BRIDGE_ENV_FILE`，入口为 `internal/config/env_file.go:configurationEnvironment`；现有进程环境包含空值时仍优先，文件只接受环境键值语法，不执行 shell 或变量求值，错误不回显秘密值。默认不自动加载工作目录下的未知文件。
 完整环境变量规范仍维护在[开发流程](../dev-workflow.md)。
 
+用户级 Claude Skill 安装须与 CLI 的配置根一致：`internal/automationassets/install.sh` 使用 `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills`，未设置或空值时回退到原路径，并正确处理含空格的目录。项目级安装仍写入当前项目的 `.claude/skills`；Codex 路径不变。沿用校验和、受管标记与拒绝覆盖非受管目录/符号链接的机制，不改认证、模型或 MCP 配置。本轮原生探针已将 `CLAUDE_CONFIG_DIR` 设为同一个 `$HOME/.claude`，因此该兼容性修复不能作为 Skill load trace 失败已解决的证据。
+
 ## Implementation Steps
 
 1. 复现历史卡片点击问题并最小修复，覆盖标题/正文/状态与独立操作按钮及直接链接。
@@ -37,6 +39,7 @@
 
 - 浏览器点击所有非操作区域打开同一run；原生上下文及历史分页回归通过。
 - 三个名称的静态资产与安装校验通过；真实模型请求须另外观察 Skill 加载及正确工具使用，未观察到加载则不计该项通过。
+- 安装器覆盖 Claude 自定义配置根（含空格）、未设/空值回退、项目级不受配置根覆盖、受管更新及非受管/未知标记/符号链接拒绝；Codex 路径与现有 CLI 配置不变。
 - env优先级/语法/错误脱敏测试通过；本人收件地址绑定和限速测试通过。
 - 实际本地SMTP收件可查看；外部邮件没有凭据时明确未验证。
 - 前端test/build、Go相关测试/构建、doc-lint通过。
