@@ -54,6 +54,8 @@ Let a single user talk from any browser to Codex CLI running on a private machin
 
 ## Engineering Workflow
 
+Planned next capability: [MCP access, verification Skill and submission-level email notifications](features/mcp-skill-task-notifications.md). The 2026-11-06 work produced a proposed 20-tool design, [ADR-029](adr/029-hub-mcp-and-submission-notifications.md), and [source/document audit](reviews/proofbridge-mcp-current-state.md). Product implementation and laboratory/VPN deployment have not started. Execution remains on user-owned Bridge endpoints.
+
 - Non-trivial changes need ADR or feature design before code.
 - Use [docs/change-impact.md](change-impact.md) before editing and before
   submitting.

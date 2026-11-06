@@ -10,6 +10,8 @@ keeps only the top frequent subset.
 | Add or change config field | `internal/config/` structs/loaders, `configs/*.yaml.example`, `docs/dev-workflow.md`, README if user-facing |
 | Add or change env var | `internal/config/load.go`, `configs/dev.yaml.example`, `docs/dev-workflow.md` env table, deploy docs |
 | Add or change HTTP endpoint | `internal/hub/server.go` route, handler tests, frontend API caller, feature/API docs |
+| Planned MCP tools / personal automation credentials | Shared Hub ownership and business operations, MCP transport/schema/annotations, per-request authorization and revocation, personal-center template callers, two-client integration checks, [MCP feature](features/mcp-skill-task-notifications.md) and [ADR-029](adr/029-hub-mcp-and-submission-notifications.md); do not expose another scheduler or grant endpoint permissions |
+| Planned submission identity / task email | All relay/graph/cancel/offline/recovery terminal writers, Store transactions and submission idempotency, notification outbox and frozen result, email/settings/config examples and workflow docs, result/verification separation and restart/duplicate/SMTP tests; see [MCP feature](features/mcp-skill-task-notifications.md) |
 | Add or change WebSocket frame | `internal/protocol/envelope.go`, Hub handler, Bridge handler, frontend parser, integration tests, `docs/architecture.md` |
 | Add or change SQLite table/column | `internal/store.Store.Migrate`, store structs/scanners/CRUD, store tests, `docs/code-map.md`, architecture storage table |
 | Event read predicates or partial indexes | Store migration and exact query predicates, query-plan/equivalence tests, full-history progress/usage semantics, [ADR 027](adr/027-sparse-orchestration-read-indexes.md) |

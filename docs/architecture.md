@@ -3,6 +3,8 @@
 This is the single overview for runtime architecture. Detailed rationale lives
 in ADRs; implementation paths live in [docs/code-map.md](code-map.md).
 
+Proposed next work, not current runtime behavior: [MCP + Skill access and task email](features/mcp-skill-task-notifications.md), [ADR-029](adr/029-hub-mcp-and-submission-notifications.md). User-owned Bridges retain workspace execution; Hub would add an authenticated automation entry and submission-level notification outbox. [The source audit](reviews/proofbridge-mcp-current-state.md) records historical wording that must not be mistaken for current implementation facts.
+
 The public [orchestration design article](features/orchestration-design-article.md)
 is a lazy-loaded static page at `/blog/orchestration-design`. Like the help page,
 it skips account bootstrap; it does not query runs or other private API data.

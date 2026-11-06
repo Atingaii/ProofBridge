@@ -3,6 +3,8 @@
 This is the detailed "I want to change X, where do I edit?" source. Keep
 `AGENTS.md` concise and link here for detail.
 
+Planned MCP/Skill/email work has no implemented module yet. Read the [feature and tool contracts](features/mcp-skill-task-notifications.md), [ADR-029](adr/029-hub-mcp-and-submission-notifications.md), and [current-source audit](reviews/proofbridge-mcp-current-state.md) before locating changes in the existing Hub, Bridge, Store and personal-center areas below.
+
 ## Top-Level Shape
 
 Linux/macOS endpoint downloads: `internal/hub/server.go:handleInstallScript`,
