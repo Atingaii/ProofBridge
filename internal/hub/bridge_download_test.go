@@ -17,6 +17,15 @@ import (
 	"time"
 )
 
+func installerTrueExecutable(t *testing.T) string {
+	t.Helper()
+	path, err := exec.LookPath("true")
+	if err != nil {
+		t.Fatalf("find native true executable: %v", err)
+	}
+	return path
+}
+
 func TestInstallerPlatformSelectionAndPreservation(t *testing.T) {
 	s, _ := newAuthTestServer(t)
 	r := httptest.NewRequest(http.MethodGet, "https://hub.test/install.sh", nil)
@@ -49,7 +58,7 @@ func TestInstallerPlatformSelectionAndPreservation(t *testing.T) {
 				t.Fatal(err)
 			}
 			writeExecutable(t, filepath.Join(fake, "uname"), "#!/bin/sh\ncase \"$1\" in -s) echo "+shellQuote(tc.os)+";; -m) echo "+shellQuote(tc.machine)+";; esac\n")
-			payload := "cp /bin/true \"$out\""
+			payload := "cp " + shellQuote(installerTrueExecutable(t)) + " \"$out\""
 			if tc.invalid {
 				payload = "printf '\\177ELFbroken' >\"$out\""
 			}

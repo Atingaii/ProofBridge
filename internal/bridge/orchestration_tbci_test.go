@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -160,6 +161,9 @@ func TestGenerateTBCITemplatePreservesLeanAndIsabelleCapabilities(t *testing.T) 
 }
 
 func TestManagedTBCIAutomaticContractFreezesBeforeFinalChange(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("managed TBCI artifact execution requires linux/amd64")
+	}
 	if _, err := exec.LookPath("coqc"); err != nil {
 		t.Skip("coqc is unavailable")
 	}

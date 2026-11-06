@@ -461,7 +461,7 @@ while [ "$#" -gt 0 ]; do
   if [ "$1" = '-O' ]; then out=$2; shift 2; continue; fi
   shift
 done
-cp /bin/true "$out"
+cp `+shellQuote(installerTrueExecutable(t))+` "$out"
 `)
 	scriptPath := filepath.Join(tmp, "install.sh")
 	if err := os.WriteFile(scriptPath, rr.Body.Bytes(), 0o700); err != nil {
@@ -586,10 +586,9 @@ func TestInstallScriptLeavesExistingNohupBridgeRunning(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	oldBinary, err := os.ReadFile("/bin/sleep")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// A copied macOS system executable can be killed before the installer runs.
+	// Keep the process alive with the installed script, without copying that binary.
+	oldBinary := []byte("#!/bin/sh\nexec sleep \"$@\"\n")
 	if err := os.WriteFile(installedBin, oldBinary, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -617,7 +616,7 @@ while [ "$#" -gt 0 ]; do
   if [ "$1" = '-o' ]; then out=$2; shift 2; continue; fi
   shift
 done
-cp /bin/true "$out"
+cp `+shellQuote(installerTrueExecutable(t))+` "$out"
 `)
 	scriptPath := filepath.Join(tmp, "install.sh")
 	if err := os.WriteFile(scriptPath, rr.Body.Bytes(), 0o700); err != nil {

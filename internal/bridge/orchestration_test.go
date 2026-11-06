@@ -2560,7 +2560,7 @@ func TestOrchestrationCancelKillsCodexProcessGroup(t *testing.T) {
 	codexPath := filepath.Join(tmp, "codex")
 	script := "#!/usr/bin/env bash\n" +
 		"if [ \"${1:-}\" = exec ]; then shift; fi\n" +
-		"(trap 'exit 0' TERM INT; echo $BASHPID > " + shellQuote(marker) + "; while true; do sleep 1; done) &\n" +
+		"/bin/sh -c " + shellQuote("trap 'exit 0' TERM INT; echo $$ > \"$1\"; while true; do sleep 1; done") + " sh " + shellQuote(marker) + " &\n" +
 		"wait\n"
 	if err := os.WriteFile(codexPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -2572,8 +2572,10 @@ func TestOrchestrationCancelKillsCodexProcessGroup(t *testing.T) {
 	cfg.Bridge.Sandbox = "danger-full-access"
 	cfg.Bridge.ApprovalPolicy = "never"
 	manager := NewOrchestrationManager(&cfg)
+	defer manager.CloseAll()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
 		_, _, err := manager.runCodex(ctx, protocol.OrchestrationStartPayload{RunID: "orc_cancel", CWD: tmp}, "turn_cancel", "reviewer", "stop")
