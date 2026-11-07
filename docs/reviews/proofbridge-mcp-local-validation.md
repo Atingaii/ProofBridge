@@ -1,14 +1,14 @@
 # ProofBridge MCP 本地验收
 
-日期：2026-11-06。实现分支：`feat/mcp-skill-task-notifications`。
+更新日期：2026-11-07。实现分支：`feat/mcp-skill-task-notifications`。
 设计契约：[MCP、Skill 与任务通知](../features/mcp-skill-task-notifications.md)、[运行详情、名称与邮件接入](../features/mcp-onboarding-and-mail-setup.md)。
-代码已实现并在本机 8088 运行。本文区分代码检查、真实 MCP 调用、Skill 加载、证明与邮件；不代表实验室部署已经完成。
+代码已实现并在本机 8088 运行。本文记录通用代码与客户端验收；真实 ArraySet 的独立审计、同 run 后续提交和通知状态以[专门验收记录](proofbridge-mcp-real-arrayset-validation.md)为准。不代表实验室部署已经完成。
 
 ## 环境与门禁
 
 | 项目 | 本地结果 |
 | --- | --- |
-| Go 全量测试 / vet / 本机构建 | 全部通过；全量测试含 Hub、Bridge、集成与 Store |
+| Go 全量测试 / vet / 本机构建 | 最终 `ab77767` 全量通过，`final-go.exit=0`；含 Hub、Bridge、集成与 Store，定向 race/vet 通过 |
 | 文档与引用 | doc-lint 为 0 errors / 8 warnings；相对链接目标检查通过，diff-check 通过 |
 | Go 1.26.6 / macOS arm64 | 使用 `TMPDIR=/private/tmp` 避免 macOS Unix socket 路径长度与路径别名影响 |
 | MCP Go SDK | 锁定官方 `github.com/modelcontextprotocol/go-sdk v1.8.0` |
@@ -22,13 +22,13 @@
 | 幂等与恢复 | 同键并发、同键变更冲突、默认改变后重试、同 run 继续、接受前重启补偿及未知派发不重放通过 |
 | 人工交互 | 权威快照、回执、重复决定、失效身份、只读查询与显式对账、问答 v3 回归通过 |
 | 受管 worker | 精确禁用外层入口，保留其他 MCP 和 Claude 审批 helper；真实 Codex metadata 探针通过 |
-| SMTP | 实际 localhost TCP 收件；首次 DATA 返回 451，重试返回 250，同 Message-ID；没有外层客户端仍发送 |
+| SMTP | 实际 localhost TCP 重试检查通过；真实 ArraySet 的取消与成功两封通知均在 Mailpit 实收，身份/状态/链接一致；没有外部投递 |
 | 环境文件与测试邮件 | 显式 env 语法/进程环境优先/错误脱敏通过；本人固定邮件、按用户限速、有限超时和浏览器/PAT 权限测试通过；SMTP accepted 不代表收件箱已收到 |
 | 定向并发检查 | Store、Hub、Bridge、SMTP、安装资产的相关 `-race` 测试通过 |
 
 ## 本轮真实客户端与运行
 
-本轮复跑覆盖移除旧可选验证器后的全量 Go、vet、前端回归和干净生产构建。新 Hub 已在 `http://127.0.0.1:8088` 健康运行，原 Bridge 在线且未重启。部署后的详情浏览器夹具覆盖标题、卡片边缘、详情按钮、实际配置、深链刷新、管理按钮隔离、键盘与手机布局。
+本轮复跑覆盖最终独立 verifier 输出修复后的全量 Go、vet，以及前端回归和干净生产构建。Hub 与同 machine Bridge 已在任务空闲期更新至 `ab77767-local`，保留 agent ID、密钥、cwd、环境和用户数据；本机 8088 健康，Bridge 在线。当前由受控后台进程运行，launchd 自动恢复仍需另验。部署后的详情浏览器夹具覆盖标题、卡片边缘、详情按钮、实际配置、深链刷新、管理按钮隔离、键盘与手机布局。
 
 原文“Claude 自然语言自动加载 Skill 已通过”的结论不再作为当前验收依据。最新严格探针如下；普通 `go test ./...` 默认不调用模型，不能覆盖这些未通过项。
 
@@ -42,9 +42,9 @@
 
 原 Test/1 运行 `orc_c01cd9efef9d360db86e369ce3d11979` 已于 22:55:06 达到 completed/pass（verified-early，12 分 22 秒）。本机 Coq 8.18 对 ListRev 与 Audit 编译成功，三处 assumptions 输出为 closed；独立 Codex verifier 通过，Claude verifier 模型调用失败，未宣称双验证器都通过。证据为同目录 `run-monitor.md`。
 
-真实 ArraySet 提交 `orc_ed3af20a59e135a9553f55620c9f4aab` / `asub_5491de3677bba64eb20b6441925c0199` 当前 running，工作目录 `/Users/florian/Desktop/Tencent/Github/Test/ArraySet-Coq`。它使用 6 轮 Claude + Codex Agent；Codex 为官方 `gpt-6.1-sol/high`，Claude 为官方原生默认。原始 zip 保留，所有证明改动仅限该目录；主定理、模型和无新增公理约束不变。尚未获得最终编译及 assumptions 审计，不能写成完成证明。
+真实 ArraySet 证明已通过主代理的独立 clean build、五模块内核、原定理类型和两项 closed assumptions 审计；四个原模型定义不变，仅增加三条 `Arguments` 兼容声明。首个 submission `asub_5491de3677bba64eb20b6441925c0199` 仍冻结为 canceled / unknown。同 run `orc_ed3af20a59e135a9553f55620c9f4aab` 的后续 submission `asub_809339596cdfd5634a0f1c3e2ec66d5e` 于 2026-11-07 08:53:36+08 completed / verified-early，Agent pass / satisfied，unmetObligations=[]。最终 Codex verifier pass，Claude verifier 模型调用失败/continue，按现有至少 1/2 规则通过，不能写成双通过。本轮 153 个冻结文件一致，无 source-integrity 失败；终态后五生产源码 SHA 与独立审计完全一致。曾发生的两个目录外临时探针已纠正并保留 scope-note，不宣称全过程未越界。
 
-本机 mailReady=true，临时邮箱 `zy1@local.test` 使用 Mailpit 本地收件箱 8025，没有外发。ArraySet 完整任务通知需等该提交终态后核对，不能由邮件单测或 SMTP 就绪状态代替。
+本地 Mailpit 8025 已实收旧取消与新成功两封，分别对应正确 submission；成功通知于 08:53:37 sent、attempts=1。临时邮箱已通过 CAS 恢复为原偏好 version=2：无邮箱、interactive、attention/completion=true；当前 emailConfigured=false、mailReady=true。临时 caffeinate 与 pidfile 已清理，未改永久电源设置。墙钟耗时含睡眠和网络等待，不作为性能 benchmark。本地证明、MCP 终态和两类通知链路已闭环；外部邮件、VPN、自启仍未验，详见[真实 ArraySet 验收](proofbridge-mcp-real-arrayset-validation.md)。
 
 ## 固定 CLI 夹具的证明与批量链路
 

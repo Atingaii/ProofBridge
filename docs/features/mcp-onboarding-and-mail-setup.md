@@ -1,6 +1,6 @@
 # MCP 运行入口、名称别名与邮件接入
 
-状态：代码已实现，本机运行中；真实证明尚未完成，Skill 加载严格验收尚未通过（2026-11-06）。扩展既有[MCP功能](mcp-skill-task-notifications.md)，不改变任务调度权威。实际证据见[本地验收](../reviews/proofbridge-mcp-local-validation.md)。
+状态：代码已提交并在本机运行；ArraySet 独立证明审计与同 run 后续提交 completed / Agent pass 已确认，取消和成功通知均在本地 Mailpit 实收，临时偏好与保活进程已恢复/清理（2026-11-07）。Skill 加载严格验收仍未通过；外部邮件、VPN 与自启未验。详细证据见[真实 ArraySet 验收](../reviews/proofbridge-mcp-real-arrayset-validation.md)。扩展既有[MCP功能](mcp-skill-task-notifications.md)，不改变任务调度权威；通用检查见[本地验收](../reviews/proofbridge-mcp-local-validation.md)。
 
 ## Goals
 
@@ -51,15 +51,15 @@
 
 | 层次 | 本轮结论 |
 | --- | --- |
-| 代码与网站 | Go 全量/vet、定向 race、前端回归与干净构建通过；本机 8088 新 Hub 健康，原 Bridge 在线且未重启 |
+| 代码与网站 | Go 全量/vet、定向 race、前端回归与干净构建通过；本机 Hub/同 machine Bridge 已空闲更新到 ab77767-local，8088 健康、端点在线，身份/配置/用户数据保留 |
 | 详情与配置 | 部署后浏览器夹具通过卡片各区域、详情按钮、配置、深链刷新、管理操作隔离、键盘与手机布局；夹具只模拟 GET，无真实数据变更 |
 | 名称与安装 | 三个名称资产检查通过；Codex/Claude Code 实际用户 Skill 已由安装器 checksum 更新，不改变 MCP 名称或 20 个工具 |
 | Claude 真实请求 | `Codex Bridge` 自然语言和显式 `/proofbridge` 均完成两项只读 MCP 查询并中文回显；Skill load trace=false，严格探针 FAIL，不能宣称已自动加载 |
 | Codex 真实请求 | MCP 协议连接成功；自然别名请求推理 60 秒超时，工具 calls=[]，SKIP，不能计为通过 |
-| 本地邮件 | 本人测试邮件/失败路径、限速、权限与 TCP SMTP 检查通过；本机 Mailpit 已接入，mailReady=true，不代表外部邮箱投递 |
-| 真实证明 | Test/1 已 completed/pass，Codex verifier 通过、Claude verifier 模型失败；新的 ArraySet run 当前 running，尚不能判为证明完成 |
+| 本地邮件 | 本人测试邮件/失败路径、限速、权限与 TCP SMTP 检查通过；真实 ArraySet 取消/成功通知均在 Mailpit 实收，临时邮箱已恢复，无外部投递 |
+| 真实证明 | Test/1 与 ArraySet 后续提交均 completed/pass；ArraySet 原类型/模型、clean build、内核及 assumptions 独立审计通过。最终 Codex verifier pass、Claude verifier 模型失败/continue，不能写双通过 |
 
-ArraySet 真实运行是 `orc_ed3af20a59e135a9553f55620c9f4aab` / `asub_5491de3677bba64eb20b6441925c0199`，目录为 `/Users/florian/Desktop/Tencent/Github/Test/ArraySet-Coq`。采用 6 轮 Claude + Codex Agent，Codex 官方 `gpt-6.1-sol/high`、Claude 官方原生默认。临时地址 `zy1@local.test` 仅投递到本地 Mailpit 8025；完整完成通知须在该提交终态后另行核对。外部邮箱与实验室 VPN 仍需真实部署验收。
+ArraySet 真实运行保持 `orc_ed3af20a59e135a9553f55620c9f4aab`，目录为 `/Users/florian/Desktop/Tencent/Github/Test/ArraySet-Coq`。旧 submission `asub_5491de3677bba64eb20b6441925c0199` 仍 canceled / unknown；同 run 后续 submission `asub_809339596cdfd5634a0f1c3e2ec66d5e`（Codex 首轮/high、2 轮、background-mail）于 2026-11-07 08:53:36+08 completed / verified-early，Agent pass / satisfied，unmetObligations=[]，成功邮件于下一秒发送并在本地 Mailpit 实收。本轮无 source-integrity 失败，153 个冻结文件一致；终态五生产源码 SHA 仍匹配独立审计。临时邮箱/通知偏好已恢复，当前无收件邮箱；后续要使用邮件须先保存邮箱。墙钟耗时包含本机睡眠和网络等待，不作性能 benchmark。外部邮箱、实验室 VPN 和自启仍需单独验收。
 
 ## Reviewer Q&A
 

@@ -2,7 +2,7 @@
 
 ## 1. Scope / Trigger
 
-修改运行详情配置、个人测试邮件、环境文件、验证方式或原生 Skill 探针时适用。
+修改运行详情配置、个人测试邮件、环境文件、验证方式、独立验证审计输出或原生 Skill 探针时适用。
 产品流程见[接入设计](../../../docs/features/mcp-onboarding-and-mail-setup.md)，
 调度、通知和受管 worker 隔离见[MCP 功能](../../../docs/features/mcp-skill-task-notifications.md)，
 验证方式兼容见[ADR-030](../../../docs/adr/030-agent-only-verification.md)。
@@ -40,6 +40,11 @@
   文件最多 1 MiB，错误只返回位置和安全原因，不回显值。
 - **历史验证方式**：保留数据库原值和历史事件可读性。继续旧运行必须显式选择受支持方式；
   不能把未知值归一化成 `agent`。Hub HTTP/MCP 和 Bridge 收到 payload 时都校验，拒绝后不创建或派发新工作。
+- **独立验证输出**：`internal/bridge/orchestration_verifier.go:composeAgentVerifierPrompt` 只允许临时审计脚本、日志和报告写入
+  cwd 下现有运行时目录 `.codex-bridge/verifier-audit/`，每次调用使用独立子目录；优先 stdin/stdout，Coq assumptions 查询可直接送入 `coqtop` stdin。
+  普通 `.log/.json/.md`、README、源/规格/配置及 `.proofbridge-validation/` 下的文件在验证期间只读，仍参与
+  `internal/bridge/orchestration_completion.go:completionSourceDigest`。正常编译产物沿用已有规则，禁止扩大摘要排除项、权限或 quorum。
+  这是提示词输出边界，不能代替源完整性检查；具体设计见[架构](../../../docs/architecture.md)和[接入设计](../../../docs/features/mcp-onboarding-and-mail-setup.md)。
 - **原生验收**：ProofBridge、Codex Bridge、CodexBridge 使用同一个外层 Skill；保留受管 worker 防递归隔离。
   安装、发现、Skill 加载、MCP 成功调用、终端回显分别留证。自然语言和显式模式分别验收，
   MCP 两项只读工具成功不能代替 Skill 加载 trace。默认测试跳过 opt-in 模型调用；
@@ -59,6 +64,7 @@
 | SMTP 拒绝、连接失败或超时 | 502 `MAIL_TEST_FAILED`；不返回 SMTP 凭据或原始错误 |
 | 显式 env 文件缺失、超限、语法非法 | 配置加载失败；错误不包含值 |
 | 新请求显式选择不支持的验证方式 | Hub HTTP/MCP 返回 `BAD_VERIFICATION_MODE`，无派发；Bridge 拒绝执行 |
+| 独立验证前后有效 source digest 不同 | 强制 `continue`，记录 `source-integrity`；即使模型声称 pass，也不得通过 |
 | MCP 读取成功但 Skill trace 缺失 | 原生 Skill 严格测试 FAIL，不能用普通 Go 测试通过覆盖 |
 
 ## 5. Good / Base / Bad Cases
@@ -73,6 +79,9 @@
 - `internal/hub/automation_mail_test_send_test.go`：真实本地 SMTP、两账户地址隔离、固定文案、uid 限速与 IP 绕过、任意字段拒绝、失败非成功、匿名/PAT/Origin 拒绝、无新 run。
 - `internal/config/env_file_test.go`：显式加载、进程空值优先、无全局污染、命令文本不求值、语法错误脱敏、无隐式 `.env`。
 - `internal/protocol/verification_test.go`、`internal/hub/automation_verification_test.go` 和既有 Hub/Bridge Agent 回归：未知值保留后拒绝，拒绝不派发，旧数据不重写。
+- `internal/bridge/orchestration_completion_accounting_test.go:TestVerifierPromptConfinesTemporaryAuditsToRuntimeDirectory`：提示词具备审计目录/只读/原权限边界。
+  `internal/bridge/orchestration_completion_test.go`：真实 `coqc` 编译与 `coqtop` stdin assumptions 审计后，运行时审计脚本/log/json 确实存在且 digest 前后一致；
+  普通日志/JSON/README/验证目录报告仍改变 digest，源变更仍拒绝，原权限回归保持。缺 Coq 时 skip 不算真实证明器验收通过。
 - `frontend/mcp-run-detail-browser-check.mjs`、`frontend/automation-settings-browser-check.mjs`：同 run 选择/深链接、独立操作按钮、安全配置、未保存邮箱禁用和发送结果语义。
 - `internal/hub/automation_native_skill_test.go:TestAutomationNativeSkillReadOnly`：opt-in 时使用真实客户端，确认必需只读 MCP 成功、无越界调用、终端回复与 Skill trace；分别记录 natural/explicit 的 pass/fail/skip。
   不保存凭据或完整工具正文，不将 provider 超时、skip 或自述加载当作成功证据。
@@ -89,3 +98,6 @@ safe, submissionID, err := s.orchestrationExecutionConfiguration(ctx, uid, owned
 
 Wrong：`tools/call` 成功就宣称自然语言自动加载 Skill；未知 authority 默认为 `agent`。
 Correct：分别报告 MCP、Skill trace 和客户端终态；未知 authority 保留后显式拒绝，历史继续要求用户选择支持值。
+
+Wrong：为避免审计自触发而排除所有日志/JSON 或整个验证目录。
+Correct：仅用现有运行时审计子目录或 stdin/stdout；保留普通工作区文件的摘要和源变更 `continue` 判定。
