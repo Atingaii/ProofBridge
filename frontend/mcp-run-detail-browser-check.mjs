@@ -9,6 +9,7 @@ try {
  page.on('pageerror',e=>errors.push(e.message));
  const endpoint={id:'agent-mcp',name:'MCP fixture endpoint',machineId:'machine',online:true,lastSeenAt:1,workingDirs:['/fixture/project'],capabilities:{orchestration:{claude:{available:true},codex:{available:true}},approvalPolicy:'never',sandbox:'danger-full-access'}};
  const run={id:'mcp-created',agentId:endpoint.id,title:'MCP verification example',prompt:'Prove the selected project',mode:'collaboration',workerPair:'claude-codex',firstCli:'claude',profile:'formal-proof',verificationMode:'agent',executionMode:'bounded',nativeContextCompaction:'off',cwd:'/fixture/project',maxTurns:2,status:'running',createdAt:1,updatedAt:1};
+ const otherRun={...run,id:'other-history',title:'Short completed verification',status:'completed'};
  await page.addInitScript(()=>localStorage.setItem('codexBridge.language','zh'));
  await page.route('**/api/**',async route=>{
   const req=route.request(),url=new URL(req.url()),p=url.pathname;
@@ -17,9 +18,10 @@ try {
   let json={};
   if(p==='/api/me')json={user:{id:'mcp-owner',username:'mcp-owner',isAdmin:false,features:[]}};
   else if(p==='/api/agents')json={agents:[endpoint]};
-  else if(p==='/api/orchestrations')json={runs:[run]};
+  else if(p==='/api/orchestrations')json={runs:[run,otherRun]};
   else if(p==='/api/orchestrations/mcp-created')json={run,...(includeSnapshot?{executionConfiguration:{workerPair:run.workerPair,profile:run.profile,firstCli:run.firstCli,cwd:run.cwd,maxTurns:run.maxTurns,workers:{claude:{cli:'claude',nativeDefault:true},codex:{cli:'codex',model:'fixture-codex-model',reasoningEffort:'high'}}}}:{})};
-  else if(p.endsWith('/events'))json={events:url.searchParams.has('afterSeq')?[]:[{id:'mcp-event',runId:run.id,seq:1,kind:'user.message',content:'Saved MCP task requirement',createdAt:1}],hasMoreBefore:false,hasMoreAfter:false};
+  else if(p==='/api/orchestrations/other-history')json={run:otherRun};
+  else if(p.endsWith('/events')){const selected=p.includes('/other-history/')?otherRun:run;json={events:url.searchParams.has('afterSeq')?[]:[{id:`${selected.id}-event`,runId:selected.id,seq:1,kind:'user.message',content:selected===run?'Saved MCP task requirement':'Other saved task requirement',createdAt:1}],hasMoreBefore:false,hasMoreAfter:false};}
   else if(p.endsWith('/cli-config/presets'))json={presets:[]};
   await route.fulfill({json});
  });
@@ -33,6 +35,39 @@ try {
  await configuration.getByText('模型：fixture-codex-model',{exact:true}).waitFor();
  await configuration.getByText('思考强度：high',{exact:true}).waitFor();
  await configuration.getByText('模型：原生 CLI 默认（未固定）',{exact:true}).waitFor();
+ // A positioned management row covers the title button's stretched hit area.
+ // Its empty right side and inter-button gaps must reach the title underneath;
+ // testing title/outer-card edges alone does not exercise these dead zones.
+ const selectManagementGap=async(id,region)=>{
+  const selectedRow=page.locator('[aria-label="运行历史"] [data-run-id="'+id+'"]');
+  const actions=selectedRow.locator('.phone-history-actions');
+  assert.equal(await actions.locator('button').evaluateAll(buttons=>buttons.every(button=>getComputedStyle(button).pointerEvents==='auto')),true,'all management buttons must retain their own hit targets');
+  const box=await actions.boundingBox(),first=await actions.locator('button').nth(0).boundingBox(),second=await actions.locator('button').nth(1).boundingBox();
+  const point={x:region==='right'?box.x+box.width-3:(first.x+first.width+second.x)/2,y:box.y+box.height/2};
+  const hit=await page.evaluate(({x,y})=>{const element=document.elementFromPoint(x,y),button=element?.closest('button');return {tag:element?.tagName,buttonText:button?.textContent?.trim()};},point);
+  assert.equal(hit.buttonText,id===run.id?run.title:otherRun.title,`${region} management gap must hit the existing title control, got ${JSON.stringify(hit)}`);
+  const reads=requests.filter(path=>path===`/api/orchestrations/${id}`).length;
+  await page.mouse.click(point.x,point.y);
+  await page.waitForURL(`**/orchestrate/runs/${id}`,{timeout:3000});
+  await page.getByText(id===run.id?'Saved MCP task requirement':'Other saved task requirement',{exact:true}).waitFor();
+  assert.equal(requests.filter(path=>path===`/api/orchestrations/${id}`).length,reads+1,'one click must make one selection, without wrapper/button double dispatch');
+ };
+ await selectManagementGap(otherRun.id,'right');
+ await selectManagementGap(run.id,'between');
+ // Rapid successive requests and browser history still end on the last choice.
+ const historyRow=id=>page.locator('[aria-label="运行历史"] [data-run-id="'+id+'"]');
+ await historyRow(otherRun.id).locator('button').first().click();
+ await historyRow(run.id).locator('button').first().click();
+ await historyRow(otherRun.id).locator('button').first().click();
+ await page.waitForURL('**/orchestrate/runs/other-history');
+ await page.getByText('Other saved task requirement',{exact:true}).waitFor();
+ await page.goBack();
+ await page.getByText('Saved MCP task requirement',{exact:true}).waitFor();
+ assert.equal(new URL(page.url()).pathname,'/orchestrate/runs/mcp-created');
+ await page.goForward();
+ await page.getByText('Other saved task requirement',{exact:true}).waitFor();
+ assert.equal(new URL(page.url()).pathname,'/orchestrate/runs/other-history');
+ await selectManagementGap(run.id,'right');
  // The existing title control must keep working alongside the larger hit target.
  assert.equal(new URL(page.url()).pathname,'/orchestrate/runs/mcp-created');
  await page.getByRole('button',{name:'新运行',exact:true}).click();
@@ -67,11 +102,17 @@ try {
  await row.click({position:{x:3,y:3}});
  await page.getByRole('dialog',{name:'运行历史',exact:true}).waitFor({state:'hidden'});
  assert.equal(new URL(page.url()).pathname,'/orchestrate/runs/mcp-created','phone history opens the same run');
+ await page.locator('button[aria-controls="orchestration-history"]').click();
+ await selectManagementGap(otherRun.id,'right');
+ await page.getByRole('dialog',{name:'运行历史',exact:true}).waitFor({state:'hidden'});
+ await page.locator('button[aria-controls="orchestration-history"]').click();
+ await selectManagementGap(run.id,'between');
+ await page.getByRole('dialog',{name:'运行历史',exact:true}).waitFor({state:'hidden'});
  await page.setViewportSize({width:1440,height:960});
  includeSnapshot=false;
  await page.reload({waitUntil:'networkidle'});
  await page.getByText('Saved MCP task requirement',{exact:true}).waitFor();
  await page.getByRole('region',{name:'本次运行配置',exact:true}).getByText('该历史运行没有可展示的提交快照，无法据此确定实际模型与思考强度。',{exact:true}).waitFor();
  assert.deepEqual(errors,[]);
- console.log('MCP history detail: title/card/explicit entry, saved configuration, deep-link reload, isolated management controls, keyboard and phone selection passed.');
+ console.log('MCP history detail: title/card/explicit entry, both management-row dead zones across two runs and desktop/phone, single dispatch, saved configuration, deep-link reload, isolated management controls and keyboard passed.');
 }finally{await browser.close();}

@@ -1860,7 +1860,8 @@ export function OrchestrationWorkspace({
                   <span className="truncate font-medium">{run.title}</span>
                 </button>
               </div>
-              <div className="phone-history-actions relative z-10 mt-2 flex items-center gap-1.5">
+              {/* Empty management-row space belongs to the stretched title hit area; only its buttons intercept clicks. */}
+              <div className="phone-history-actions pointer-events-none relative z-10 mt-2 flex items-center gap-1.5 [&>button]:pointer-events-auto">
                 <button type="button" className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-sidebar-border bg-sidebar text-muted-foreground hover:bg-sidebar-border" aria-label={t.renameRun} title={t.renameRun}
                   onClick={() => { setEditingRun(run); setEditingTitle(run.title); setMetadataError(''); }}><Pencil className="h-3 w-3" /></button>
                 <button type="button" className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-sidebar-border bg-sidebar text-muted-foreground hover:bg-sidebar-border disabled:opacity-40" aria-label={run.archivedAt ? t.restoreRun : t.archiveRun} title={run.archivedAt ? t.restoreRun : t.archiveRun}

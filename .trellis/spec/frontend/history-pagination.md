@@ -24,6 +24,11 @@
 - 最近页缺turn.start但有完整turn.end时不能只展示尾部delta；完整答案去重
   显示，补齐start后恢复正常流式归约。未完成轮次提示较早历史可按需加载。
 - 最新页全部隐藏时仍提供加载更多。手动请求失败保留已有内容，重试相同游标。
+- 运行历史卡片的整卡点击区包含管理行右侧空白和按钮间隙。叠加管理行只让
+  实际管理按钮拦截点击，空白须透传到原生标题按钮；新增按钮包装层时也要
+  显式保留按钮的 `pointer-events: auto`。管理操作不选择运行，不能因外层和
+  按钮重复处理同一点击而触发两次选择。实现见
+  `frontend/src/app/pages/OrchestrationWorkspace.tsx:OrchestrationWorkspace`。
 
 ## 4. Validation & Error Matrix
 
@@ -48,6 +53,9 @@
 `frontend/visible-events-check.mjs`：截断轮次完整答案及补start后的真实reducer。
 `internal/hub/history_pagination_test.go`：页上限、探测行、终态、错误游标。
 `internal/store/admin_content_test.go`：同秒聊天、源空页、隐私与归属。
+`frontend/mcp-run-detail-browser-check.mjs`：至少两个运行、桌面与390px下按真实坐标
+ 点击管理行空白及间隙，核对命中标题按钮、URL和内容切换及单次详情读取；保留
+ 管理操作、禁用按钮、键盘和前进后退边界。只测标题或卡片外沿不足以验收整卡点击。
 
 ## 7. Wrong vs Correct
 
