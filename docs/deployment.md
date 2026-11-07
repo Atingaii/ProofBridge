@@ -52,6 +52,14 @@ the developer's local startup helper, or files from a workstation. The external
 plugins are setup tools only. DNS verification remains at the mail provider; Hub
 uses its private SMTP credentials at runtime.
 
+The recommended Skill installer and all files it downloads come from the official
+GitHub repository at a fixed Skill release, not from the Hub's HTTPS endpoint.
+Clients need access to GitHub for installation and still need VPN/network access
+and a trusted certificate for MCP. A private-CA Hub requires client CA trust even
+after Skill installation succeeds; never turn off certificate verification as an
+installation fix. Embedded `/skills/*` routes remain for existing links. Release
+and TLS boundaries are in the [distribution contract](features/github-skill-distribution.md).
+
 Use the same release/branch on the target server and build it with `make build-all`.
 The following is a first-install environment setup for the systemd layout below:
 

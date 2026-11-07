@@ -183,11 +183,17 @@ After registration or account creation, the user follows this path:
    configuration, the matching Skill install command and read-only discovery checks.
    Configuration can also be copied separately into personal client settings.
    This prompt contains a personal credential: do not publish it in shared project
-   files, shared conversations or URLs. The installer downloads the credential-free
-   Skill from `/skills/` and requires an
-   explicit `--hub`. It verifies downloaded file hashes and updates its managed
+   files, shared conversations or URLs. Both the installer and credential-free
+   Skill download from the official GitHub repository at one fixed Skill release,
+   using normal TLS verification. The legacy `--hub` argument is accepted but does
+   not choose the download source. It verifies downloaded file hashes and updates its managed
    files; an existing unmanaged `proofbridge` skill is preserved with an error.
    It leaves CLI authentication, model and MCP configuration untouched.
+   See the [GitHub distribution contract](features/github-skill-distribution.md).
+   GitHub access is separate from the Hub's VPN and certificate requirements:
+   successful installation does not make a private-CA MCP endpoint trusted.
+   For curl error 60, trust the administrator's CA on the client or use a certificate
+   the client already trusts; do not add `-k` or disable MCP TLS verification.
 4. Save email, completion/attention notifications, a default endpoint and monitoring
    mode. `interactive` is the default. `background-mail` requires an email address,
    configured mail service, and both completion and attention notifications.

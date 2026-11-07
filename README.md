@@ -113,7 +113,8 @@ Then open **Settings → Terminal & email**:
 2. Copy the connection prompt into your trusted local AI client. It contains the
    configuration, matching Skill installer and read-only connection checks. You
    can also copy the configuration separately. The installer preserves CLI login
-   and model settings. Restart the client if it cannot discover the Skill.
+   and model settings. Both download stages use the official GitHub repository at
+   a fixed Skill release. Restart the client if it cannot discover the Skill.
 3. Save an email address and notification preferences. To leave a task running,
    enable both completion and attention email and select **Submit and email me**.
    The Hub administrator must configure SMTP first. Interactive monitoring works
@@ -127,6 +128,10 @@ Accepted work continues when the submitting terminal closes. Keep the execution
 machine and its Bridge connected. For a lab-only Hub, clients and Bridges outside
 the lab need VPN access; machines already on that network connect directly. Hub
 does not need an inbound connection to your execution machine.
+
+Skill installation requires GitHub access. MCP still connects to your Hub and
+requires its certificate to be trusted; a private CA must be trusted on each client.
+See [GitHub Skill distribution](docs/features/github-skill-distribution.md).
 
 Follow-ups retain the same run. Native questions and approvals still need your
 answer; attention email links back to the task. A finished run is not itself proof

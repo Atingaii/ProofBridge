@@ -20,11 +20,13 @@ let mailDeliveryMode, testDeliveryMode;
 let version = 1;
 let preferences = { email: 'owner@example.test', completionEnabled: true, attentionEnabled: true, defaultEndpointId: '', monitoringMode: 'interactive' };
 const writes = [];
+const quoteShell = (value) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
+const githubInstaller = (client) => 'sh -c ' + quoteShell(`set -eu; umask 077; installer=$(mktemp "\${TMPDIR:-/tmp}/proofbridge-install.XXXXXXXX"); trap 'rm -f "$installer"' EXIT HUP INT TERM; curl --fail --silent --show-error --location --connect-timeout 15 --max-time 90 --retry 2 --proto '=https' --proto-redir '=https' 'https://raw.githubusercontent.com/Atingaii/ProofBridge/proofbridge-skill-v1.1.0/internal/automationassets/install.sh' --output "$installer"; sh "$installer" --client ${client} --scope user`);
 const access = () => ({
   token, mcpUrl: 'https://lab.example.test/mcp',
   codexConfig: token ? '[mcp_servers.proofbridge]\nurl = "https://lab.example.test/mcp"\nhttp_headers = { Authorization = "Bearer ' + token + '" }\n' : '',
   claudeConfig: token ? JSON.stringify({ mcpServers: { proofbridge: { type: 'http', url: 'https://lab.example.test/mcp', headers: { Authorization: 'Bearer ' + token } } } }, null, 2) : '',
-  skillInstallCommands: { codex: 'sh install.sh --client codex --hub https://lab.example.test', claude: 'sh install.sh --client claude --hub https://lab.example.test' },
+  skillInstallCommands: { codex: githubInstaller('codex'), claude: githubInstaller('claude') },
   mailReady, mailDeliveryMode,
 });
 await page.addInitScript(() => {
@@ -90,6 +92,10 @@ try {
   const prompt = card.getByTestId('automation-setup-prompt');
   assert.ok((await prompt.textContent()).includes(access().codexConfig.trim()));
   assert.ok((await prompt.textContent()).includes(access().skillInstallCommands.codex));
+  assert.match(await prompt.textContent(), /同一固定版本，不从 Hub 下载/);
+  assert.match(await prompt.textContent(), /不要向 GitHub 发送 MCP Token/);
+  assert.match(await prompt.textContent(), /不要使用 -k\/--insecure/);
+  assert.match(await prompt.textContent(), /Skill 安装成功不等于 MCP 已连通/);
   await card.getByRole('button', { name: '复制接入提示词', exact: true }).click();
   assert.equal(await page.evaluate(() => window.__automationCopied), await prompt.textContent());
   await card.getByRole('button', { name: '复制 MCP 配置', exact: true }).click();
@@ -198,6 +204,8 @@ try {
   assert.match(await prompt.textContent(), /Connect this Codex client/);
   await card.getByLabel('CLI client', { exact: true }).selectOption('claude');
   assert.match(await prompt.textContent(), /Connect this Claude Code client/);
+  assert.match(await prompt.textContent(), /trust the lab CA/);
+  assert.match(await prompt.textContent(), /Do not use -k\/--insecure/);
   await card.getByRole('button', { name: 'Copy setup prompt', exact: true }).click();
   assert.equal(await page.evaluate(() => window.__automationCopied), await prompt.textContent());
   assert.equal(await card.evaluate((element) => element.scrollWidth > element.clientWidth + 1), false);

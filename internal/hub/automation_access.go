@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tencent/codex-bridge/internal/automationassets"
 	"github.com/tencent/codex-bridge/internal/serverutil"
 	"github.com/tencent/codex-bridge/internal/store"
 )
@@ -155,14 +156,11 @@ func (s *Server) handleAutomationAccess(w http.ResponseWriter, r *http.Request, 
 		raw, _ := json.MarshalIndent(map[string]any{"mcpServers": map[string]any{"proofbridge": map[string]any{"type": "http", "url": base + "/mcp", "headers": map[string]string{"Authorization": "Bearer " + token}}}}, "", "  ")
 		claude = string(raw)
 	}
-	install := func(client string) string {
-		return "curl -fsSL " + shellQuoteAutomation(base+"/skills/install.sh") + " | sh -s -- --client " + client + " --scope user --hub " + shellQuoteAutomation(base)
-	}
 	var value any = token
 	if token == "" {
 		value = nil
 	}
-	serverutil.WriteJSON(w, 200, map[string]any{"token": value, "createdAt": record.CreatedAt, "revoked": record.RevokedAt != 0, "mcpUrl": base + "/mcp", "codexConfig": codex, "claudeConfig": claude, "skillInstallCommands": map[string]string{"codex": install("codex"), "claude": install("claude")}, "mailReady": s.automationMailReady(), "mailDeliveryMode": s.automationMailDeliveryMode(), "email": prefs["email"], "tokenExpiresAt": nil})
+	serverutil.WriteJSON(w, 200, map[string]any{"token": value, "createdAt": record.CreatedAt, "revoked": record.RevokedAt != 0, "mcpUrl": base + "/mcp", "codexConfig": codex, "claudeConfig": claude, "skillInstallCommands": map[string]string{"codex": automationassets.InstallCommand("codex"), "claude": automationassets.InstallCommand("claude")}, "mailReady": s.automationMailReady(), "mailDeliveryMode": s.automationMailDeliveryMode(), "email": prefs["email"], "tokenExpiresAt": nil})
 }
 func shellQuoteAutomation(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 func (s *Server) handleRotateAutomationToken(w http.ResponseWriter, r *http.Request, uid string) {

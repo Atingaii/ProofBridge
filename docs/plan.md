@@ -55,6 +55,12 @@ Let a single user talk from any browser to Codex CLI running on a private machin
 
 Implemented on feature branch: [MCP access, verification Skill and submission-level email notifications](features/mcp-skill-task-notifications.md). The 2026-11-06 work implements the 20-tool contract, [ADR-029](adr/029-hub-mcp-and-submission-notifications.md), and [source/document audit](reviews/proofbridge-mcp-current-state.md). Product implementation is under local acceptance; laboratory/VPN deployment has not started. Execution remains on user-owned Bridge endpoints.
 
+The Skill installer and its files now use a fixed official GitHub release to
+avoid depending on a laboratory Hub's private CA during installation. MCP retains
+the configured Hub and still requires client certificate trust. Publication and
+installation checks are tracked in the [distribution contract](features/github-skill-distribution.md);
+native-client loading and proof acceptance remain separate gates.
+
 - Non-trivial changes need ADR or feature design before code.
 - Use [docs/change-impact.md](change-impact.md) before editing and before
   submitting.

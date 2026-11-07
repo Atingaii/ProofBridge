@@ -14,10 +14,10 @@ import (
 
 const Version = "1"
 
-//go:embed install.sh skill/SKILL.md skill/references/tools.md
+//go:embed install.sh skill/SKILL.md skill/references/tools.md skill/checksums.txt
 var embedded embed.FS
 
-// Installer requires an explicit --hub argument and never writes CLI configuration.
+// Installer downloads from the official GitHub release and never writes CLI configuration.
 var Installer = readAsset("install.sh")
 
 // SkillFiles are the files managed by the installer. They never contain a PAT.

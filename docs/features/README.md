@@ -39,3 +39,5 @@ Natural-language access and task email: [MCP + Skill feature and 20-tool scope](
 Compact completion email: [result card, Token/cost snapshot and multipart contract](completion-email-summary.md) and [outbox projection ADR](../adr/031-completion-mail-usage-snapshot.md).
 
 Mail status: [outbound SMTP and local preview](mail-delivery-status.md).
+
+Skill installation without Hub downloads: [fixed GitHub release and TLS boundaries](github-skill-distribution.md).

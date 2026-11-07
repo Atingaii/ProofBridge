@@ -135,7 +135,7 @@ func TestAutomationNativeSkillReadOnly(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			installer := exec.CommandContext(prepareCtx, "/bin/sh", "-s", "--", "--hub", server.URL, "--client", client, "--scope", "user")
+			installer := exec.CommandContext(prepareCtx, "/bin/sh", "-s", "--", "--asset-base", server.URL+"/skills/proofbridge", "--client", client, "--scope", "user")
 			installer.WaitDelay = 2 * time.Second
 			installer.Env, installer.Dir, installer.Stdin = env, project, strings.NewReader(automationassets.Installer)
 			if _, err := installer.CombinedOutput(); err != nil {

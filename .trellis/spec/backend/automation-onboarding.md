@@ -2,7 +2,7 @@
 
 ## 1. Scope / Trigger
 
-修改运行详情配置、个人测试邮件、环境文件、验证方式、独立验证审计输出或原生 Skill 探针时适用。
+修改运行详情配置、个人测试邮件、环境文件、验证方式、独立验证审计输出、Skill 分发或原生 Skill 探针时适用。
 产品流程见[接入设计](../../../docs/features/mcp-onboarding-and-mail-setup.md)，
 调度、通知和受管 worker 隔离见[MCP 功能](../../../docs/features/mcp-skill-task-notifications.md)，
 验证方式兼容见[ADR-030](../../../docs/adr/030-agent-only-verification.md)。
@@ -10,6 +10,11 @@
 
 ## 2. Signatures
 
+- `internal/automationassets/distribution.go:InstallCommand(client string) string` →
+  GitHub 安装命令；只接受 `codex|claude`，未知客户端返回空串。
+  `GET /api/automation/access` 保留 `skillInstallCommands.{codex,claude}`；
+  `internal/automationassets/install.sh` 支持 `--client`、`--scope`、兼容的 `--hub`
+  及显式测试源 `--asset-base`，不增加配置环境变量。
 - `GET /api/orchestrations/{runID}` → `{run, executionConfiguration, submissionId}`；
   入口 `internal/hub/orchestration.go:handleGetOrchestration`，投影
   `internal/hub/orchestration_configuration.go:orchestrationExecutionConfiguration`。
@@ -26,6 +31,13 @@
 
 ## 3. Contracts
 
+- **Skill 分发**：两层默认均来自 `Atingaii/ProofBridge` 官方 GitHub 的同一专用版本标签。
+  `DistributionRef` 与安装器默认源必须一致；标签发布后不移动，资源变更发布新标签。
+  manifest 为仓库静态文件，测试必须逐字节核对嵌入正文 SHA-256。旧 `--hub` 不控制下载源，
+  不向 GitHub 发送 MCP Token。生成命令先完整下载再执行，失败返回非零并清理临时脚本。
+  安装器显式测试源只接受 HTTPS 或 loopback HTTP，禁止失败回退 Hub、`-k` 或改变系统 CA。
+  保留受管/符号链接/完整下载后替换规则及双客户端路径。MCP 配置继续使用原 Hub，
+  GitHub安装成功不能代表 MCP 已信任其证书。完整发布契约见[分发设计](../../../docs/features/github-skill-distribution.md)。
 - **配置投影**：先以 uid 查询 run，再读取本人最新提交的已保存快照；无快照时从运行元数据和 worker 绑定安全重建。
   顶层只返回执行选择字段，worker 只返回 `cli/nativeDefault/presetId/name/officialLogin/model/reasoningEffort`。
   禁止返回凭据、原生 resume 身份、任务文本或整个原始快照。旧运行无绑定时标记
@@ -71,6 +83,9 @@
 
 | 条件 | 可观察结果 |
 | --- | --- |
+| GitHub 第一层下载失败 | 非零退出，不执行部分脚本，临时文件清理 |
+| Skill 下载失败或 checksum 不匹配 | 非零退出，保留原安装，不回退到 Hub |
+| 内网 Hub 使用未受信任 CA | Skill 下载可独立成功；MCP 仍需建立证书信任，不宣称接入通过 |
 | 未登录；个人 MCP token 调用浏览器管理接口 | 401，不发送 |
 | run 不属于调用者或不存在 | 404 `NOT_FOUND`，不返回配置 |
 | run/配置查询失败 | 500 `STORE_ERROR`，不返回原始错误或秘密 |
@@ -89,12 +104,20 @@
 
 ## 5. Good / Base / Bad Cases
 
+- Skill Good：GitHub固定版本提供完整脚本/manifest/正文，配置保留原MCP地址。
+  Base：旧命令携带 `--hub` 时仍用 GitHub；Bad：仅第一层换 GitHub、第二层继续向 Hub 下载或添加 `-k`。
 - Good：本人详情保留已接受的固定 model/effort；测试邮件使用已保存邮箱；进程中的空 `SMTP_HOST` 覆盖文件，不能意外启用发送。
 - Base：旧运行没有 worker 绑定，返回 `nativeDefault:true`；页面明确原生默认未固定，历史仍可阅读。
 - Bad：直接返回完整快照、从请求接收 `to`、执行 env 文件、用表单默认值填历史，或静默替换历史验证方式。
 
 ## 6. Tests Required
 
+- `internal/automationassets`：固定版本一致、静态manifest同步、默认源无Hub请求、真实两阶段
+  命令失败传播/清理、未受信任Hub隔离、既有受管更新/目录/checksum保护；默认检查不访问外网。
+- `internal/hub/automation_mcp_test.go`：生成命令只含官方 GitHub，MCP仍指向配置Hub，
+  不把个人Token带到安装命令。`frontend/automation-setup-check.mjs` 与
+  `frontend/automation-settings-browser-check.mjs` 覆盖双客户端/双语提示词及复制。
+  发布后用真实GitHub TLS在隔离HOME安装双客户端；不计为模型Skill加载验收。
 - `internal/hub/orchestration_configuration_test.go`：本人快照的 model/effort 不变，秘密字段不出现；外人 404；旧无绑定为 native default。
 - `internal/hub/automation_mail_test_send_test.go`：真实本地 SMTP、两账户地址隔离、固定文案、uid 限速与 IP 绕过、任意字段拒绝、失败非成功、匿名/PAT/Origin 拒绝、无新 run。
 - `internal/config/env_file_test.go`：显式加载、进程空值优先、无全局污染、命令文本不求值、语法错误脱敏、无隐式 `.env`。
@@ -109,6 +132,9 @@
   不保存凭据或完整工具正文，不将 provider 超时、skip 或自述加载当作成功证据。
 
 ## 7. Wrong vs Correct
+
+Wrong：`curl -k https://lab/skills/install.sh | sh`，第二层证书仍失败且第一层取消验证。
+Correct：使用 `automationassets.InstallCommand`，两层固定GitHub版本、正常TLS、完整校验，MCP信任另验。
 
 ```go
 // Wrong: raw snapshot may contain credentials or native session identities.

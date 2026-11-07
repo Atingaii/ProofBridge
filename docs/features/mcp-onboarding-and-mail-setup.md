@@ -67,7 +67,7 @@ ArraySet 真实运行保持 `orc_ed3af20a59e135a9553f55620c9f4aab`，目录为 `
 
 个人中心的接入路径收敛为选择终端客户端、复制完整 MCP 配置，或复制一段可直接交给 AI 执行的接入提示词。取消重复的地址/Token 输入框、单独安装命令区和接入说明小字；保留重新生成/撤销凭据、客户端切换和失败反馈。完整配置按用户要求直接显示，凭据仅来自当前用户的接入响应，不进入浏览器持久存储。
 
-`frontend/src/app/lib/automationSetup.ts:automationSetupPrompt` 按所选客户端与界面语言生成提示词。它嵌入该用户完整配置和 Hub 提供的 Skill 安装命令，要求合并个人客户端配置、保留已有服务器、安装并读取配套 Skill，最后只调用 `proofbridge_get_context` 和 `proofbridge_list_endpoints`。安装、Skill 加载和 MCP 连通分别回显；需要重启或遇到网络/权限/配置冲突时报告具体阻碍。接入过程不启动证明、不改变模型、不修改项目，也不无限重试。日志和最终回显隐去个人凭据；用户复制的提示词本身包含授权给其个人客户端的 MCP Token。
+`frontend/src/app/lib/automationSetup.ts:automationSetupPrompt` 按所选客户端与界面语言生成提示词。它嵌入该用户完整配置和 Hub 提供的 Skill 安装命令，要求合并个人客户端配置、保留已有服务器、安装并读取配套 Skill，最后只调用 `proofbridge_get_context` 和 `proofbridge_list_endpoints`。安装命令的两层下载均来自官方 GitHub 的固定 Skill 版本，MCP 配置仍指向实际 Hub；详见[分发契约](github-skill-distribution.md)。安装、Skill 加载和 MCP 连通分别回显；需要重启或遇到网络/权限/配置冲突时报告具体阻碍。GitHub 网络失败与 Hub 私有 CA 信任失败分别诊断，不跳过 TLS 校验。接入过程不启动证明、不改变模型、不修改项目，也不无限重试。日志和最终回显隐去个人凭据；用户复制的提示词本身包含授权给其个人客户端的 MCP Token。
 
 配置和提示词都由当前接入响应即时生成；切换客户端、重新生成或撤销 Token 后同步更新，不保留旧凭据。复制失败仍能选中文字手动复制。此功能不增加 API、数据库或 MCP 工具；现有认证、任务连续性和模型选择规则保持有效。
 

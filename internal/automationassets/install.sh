@@ -3,32 +3,37 @@
 set -eu
 umask 077
 fail() { printf '%s\n' "ProofBridge: $*" >&2; exit 1; }
-usage() { printf '%s\n' 'Usage: sh install.sh --hub https://lab.example --client codex|claude [--scope user|project]'; }
+usage() { printf '%s\n' 'Usage: sh install.sh --client codex|claude [--scope user|project] [--hub https://lab.example] [--asset-base https://mirror.example/skill]' 'Downloads the credential-free Skill from a fixed official GitHub version by default. --hub is accepted for compatibility and is never a download source.'; }
 hub=''
 client=''
 scope='user'
+asset_base='https://raw.githubusercontent.com/Atingaii/ProofBridge/proofbridge-skill-v1.1.0/internal/automationassets/skill'
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --hub|--client|--scope)
+    --hub|--client|--scope|--asset-base)
       [ "$#" -ge 2 ] || fail "Missing value for $1. Use --help."
-      case "$1" in --hub) hub=$2 ;; --client) client=$2 ;; --scope) scope=$2 ;; esac
+      case "$1" in --hub) hub=$2 ;; --client) client=$2 ;; --scope) scope=$2 ;; --asset-base) asset_base=$2 ;; esac
       shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) fail "Unknown option: $1. Use --help." ;;
   esac
 done
-[ -n "$hub" ] || fail 'Supply --hub with the address from your personal center.'
-case "$hub" in
-  *'?'*|*'#'*|*'@'*|*' '*|*'	'*|*'
-'*) fail 'The Hub address must not contain credentials, whitespace, query or fragment.' ;;
-esac
-hub=${hub%/}
+validate_address() {
+  case "$1" in
+    *'?'*|*'#'*|*'@'*|*' '*|*'	'*|*'
+'*) fail "$2 must not contain credentials, whitespace, query or fragment." ;;
+  esac
+  case "$1" in
+    https://?*) ;;
+    http://127.0.0.1|http://127.0.0.1:*|http://127.0.0.1/*|http://localhost|http://localhost:*|http://localhost/*|http://\[::1\]|http://\[::1\]:*|http://\[::1\]/*) ;;
+    *) fail "Use HTTPS for $2; HTTP is allowed only for a local test server." ;;
+  esac
+}
+[ -z "$hub" ] || validate_address "$hub" 'the Hub address'
+asset_base=${asset_base%/}
+validate_address "$asset_base" 'the Skill source'
 transfer_protocols='=https'
-case "$hub" in
-  https://?*) ;;
-  http://127.0.0.1|http://127.0.0.1:*|http://127.0.0.1/*|http://localhost|http://localhost:*|http://localhost/*|http://\[::1\]|http://\[::1\]:*|http://\[::1\]/*) transfer_protocols='=http,https' ;;
-  *) fail 'Use HTTPS for the Hub; HTTP is allowed only for a local test server.' ;;
-esac
+case "$asset_base" in http://*) transfer_protocols='=http,https' ;; esac
 case "$client" in codex|claude) ;; *) fail 'Choose --client codex or --client claude.' ;; esac
 case "$scope" in
   user)
@@ -68,8 +73,8 @@ mkdir -p "$staging/references"
 download() {
   curl --fail --silent --show-error --location --connect-timeout 15 --max-time 90 \
     --retry 2 --proto "$transfer_protocols" --proto-redir "$transfer_protocols" \
-    "$hub/skills/proofbridge/$1" --output "$staging/$1" ||
-    fail "Could not download $1. Check the Hub address and VPN, then retry. The installed skill has not changed."
+    "$asset_base/$1" --output "$staging/$1" ||
+    fail "Could not download $1 from the Skill source. Check access to GitHub (or your explicit mirror), then retry. Do not disable certificate verification. The installed skill has not changed."
 }
 download checksums.txt
 for file in SKILL.md references/tools.md; do

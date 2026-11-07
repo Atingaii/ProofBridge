@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/tencent/codex-bridge/internal/automationassets"
 	"github.com/tencent/codex-bridge/internal/protocol"
 	"github.com/tencent/codex-bridge/internal/store"
 )
@@ -63,6 +64,16 @@ func TestAutomationAccessMCPProtocolAndRevocation(t *testing.T) {
 	token := access["token"].(string)
 	if !strings.HasPrefix(token, "pb_mcp_") || !strings.Contains(access["codexConfig"].(string), "https://lab.example.test/mcp") {
 		t.Fatal("missing ready-to-copy configuration")
+	}
+	if !strings.Contains(access["claudeConfig"].(string), "https://lab.example.test/mcp") {
+		t.Fatal("Claude MCP configuration lost the actual Hub address")
+	}
+	commands := access["skillInstallCommands"].(map[string]any)
+	for _, client := range []string{"codex", "claude"} {
+		command := commands[client].(string)
+		if command != automationassets.InstallCommand(client) || strings.Contains(command, "lab.example.test") || strings.Contains(command, token) || strings.Contains(command, "/skills/install.sh") {
+			t.Fatalf("%s installation is not independent of the private Hub and token", client)
+		}
 	}
 	again := authedJSON(t, s, uid, "GET", "/api/automation/access", nil, 200)
 	if again["token"] != token {

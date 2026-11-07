@@ -5,6 +5,11 @@ in ADRs; implementation paths live in [docs/code-map.md](code-map.md).
 
 Implemented on the MCP feature branch and running locally at `http://127.0.0.1:8088`; laboratory/VPN and public production deployment remain unverified: [MCP + Skill access and task email](features/mcp-skill-task-notifications.md), [ADR-029](adr/029-hub-mcp-and-submission-notifications.md). User-owned Bridges retain workspace execution; Hub adds an authenticated automation entry and submission-level notification outbox. [The local validation record](reviews/proofbridge-mcp-local-validation.md) separates code checks, client calls, Skill loading, proof results and mail delivery. [The source audit](reviews/proofbridge-mcp-current-state.md) records historical wording that must not be mistaken for current implementation facts.
 
+Recommended Skill installation downloads the installer and assets from a fixed
+official GitHub Skill release. Embedded `/skills/*` remains compatible; MCP keeps
+the actual Hub URL and its existing network/TLS trust requirements. See the
+[distribution contract](features/github-skill-distribution.md).
+
 The public [orchestration design article](features/orchestration-design-article.md)
 is a lazy-loaded static page at `/blog/orchestration-design`. Like the help page,
 it skips account bootstrap; it does not query runs or other private API data.

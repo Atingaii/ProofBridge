@@ -76,7 +76,7 @@ func (i installation) run(t *testing.T, hub, client, scope string, extraEnv ...s
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, "sh", i.installer, "--hub", hub, "--client", client, "--scope", scope)
+	command := exec.CommandContext(ctx, "sh", i.installer, "--asset-base", hub+"/skills/proofbridge", "--client", client, "--scope", scope)
 	command.Dir = i.project
 	for _, entry := range os.Environ() {
 		if !strings.HasPrefix(entry, "HOME=") && !strings.HasPrefix(entry, "CLAUDE_CONFIG_DIR=") {
