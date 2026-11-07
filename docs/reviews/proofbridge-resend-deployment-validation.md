@@ -21,6 +21,12 @@ The real account preferences, database, live Hub, Bridge and ArraySet workers we
 
 ## Live activation and deployment
 
-At this checkpoint, the live Hub remains on explicit `preview` while three proof runs are active. A private real-SMTP environment is prepared for activation after those runs are idle. Domain verification and the successful isolated SMTP test do not establish that the live Hub has already switched.
+The initial SMTP test ran while the live Hub remained on `preview`. After all three proof runs stopped, the local Hub was backed up and updated to `371577c-local`; its private environment was switched to real Resend SMTP. The Bridge was not restarted.
+
+The updated live site's `get_context` reports `mailDeliveryMode=smtp` and ready mail. One real authenticated `POST /api/automation/mail/test` then returned SMTP acceptance; Resend list and retrieve operations confirmed that same message as `delivered`. Both client configuration panels and their AI setup prompts were checked against the actual Hub response, including a narrow viewport. Account preferences remained unchanged.
+
+A separate, clearly labeled HTML style test used real recorded statistics from a completed task. Both HTML and plain text matched the reported Token/cost values and preserved incomplete-accounting and estimate labels. Its recipient server also accepted delivery. No complete conversation or long model conclusion was included.
+
+The final source commit also passed a pure `git archive` deployment check with 28 assertions. Production multi-stage Docker image construction remained unverified because the external registry timed out; isolated Linux nonroot runtime and fresh-volume checks passed separately. These checks do not establish deployment to a laboratory server or VPN reachability.
 
 The portable setup contract and shared environment template are described in [repository deployment parity](../deployment.md#repository-deployment-parity). The Cloudflare/Resend plugins provision infrastructure; the deployed Hub uses standard TLS SMTP and requires neither plugin at runtime. Keep the private environment, persistent SQLite database and original JWT secret outside Git.
