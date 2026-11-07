@@ -24,13 +24,14 @@ type AutomationConfig struct {
 }
 
 type SMTPConfig struct {
-	Host     string `yaml:"host"`
-	Port     int    `yaml:"port"`
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
-	From     string `yaml:"from"`
-	StartTLS bool   `yaml:"starttls"`
-	TLS      bool   `yaml:"tls"`
+	DeliveryMode string `yaml:"delivery_mode"`
+	Host         string `yaml:"host"`
+	Port         int    `yaml:"port"`
+	Username     string `yaml:"username"`
+	Password     string `yaml:"password"`
+	From         string `yaml:"from"`
+	StartTLS     bool   `yaml:"starttls"`
+	TLS          bool   `yaml:"tls"`
 	// AllowInsecure permits explicitly configured plain SMTP, never invalid TLS certificates.
 	AllowInsecure bool     `yaml:"allow_insecure"`
 	Timeout       Duration `yaml:"timeout"`
@@ -138,7 +139,7 @@ type ObservabilityConfig struct {
 
 func Default() Config {
 	return Config{
-		Automation: AutomationConfig{Enabled: true, SMTP: SMTPConfig{Port: 587, StartTLS: true, Timeout: Duration{Duration: 15_000_000_000}}},
+		Automation: AutomationConfig{Enabled: true, SMTP: SMTPConfig{DeliveryMode: "smtp", Port: 587, StartTLS: true, Timeout: Duration{Duration: 15_000_000_000}}},
 		App: AppConfig{
 			Name:  "codex-bridge",
 			Env:   "dev",

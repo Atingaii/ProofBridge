@@ -22,7 +22,7 @@ type automationToolDefinition struct {
 }
 
 var automationTools = []automationToolDefinition{
-	{"get_context", "Read your account, feature gates, default references, and notification readiness before using ProofBridge.", "", "", false},
+	{"get_context", "Read your account, feature gates, defaults and mail delivery mode before using ProofBridge. Preview mail stays local and never reaches an external mailbox.", "", "", false},
 	{"list_endpoints", "Find your connected machines, workspaces and actual execution capabilities.", "online cli", "", false},
 	{"list_model_options", "List your saved model presets, native-login options and supported worker pairs for an owned endpoint.", "endpointId cli", "endpointId", false},
 	{"list_execution_presets", "List your named orchestration configurations; no credentials are returned.", "", "", false},
@@ -41,7 +41,7 @@ var automationTools = []automationToolDefinition{
 	{"get_run_interactions", "Read authoritative approval/question snapshots from the live Bridge. Does not reconcile or fence old decisions.", "runId", "runId", false},
 	{"respond_run_interaction", "Answer or decide the SAME native request, or explicitly reconcile pending delivery. Reconcile may fence old IDs. Never guess user answers.", "runId operation kind requestId instanceId executionId decisionId decision submissionId answers pendingDecisions pendingSubmissions", "runId operation kind", true},
 	{"get_run_statistics", "Read recorded task usage, duration and estimates. Estimates are not invoices; missing usage remains incomplete.", "runId submissionId", "runId", false},
-	{"get_notifications", "Read your notification delivery attempts and safe errors without exposing recipients or mail credentials.", "runId submissionId limit", "", false},
+	{"get_notifications", "Read your notification attempts and safe errors. Sent means SMTP acceptance, not inbox delivery; the reported mode describes the current transport, not historical attempts.", "runId submissionId limit", "", false},
 }
 
 func automationInputSchema(d automationToolDefinition) map[string]any {
@@ -130,7 +130,7 @@ func automationInputSchema(d automationToolDefinition) map[string]any {
 }
 func (s *Server) newAutomationMCPHandler() http.Handler {
 	server := mcp.NewServer(&mcp.Implementation{Name: "proofbridge", Version: "1.0.0"}, &mcp.ServerOptions{
-		Instructions: "Use get_context, owned endpoints, current model options and preferences before starting. User work executes on the selected Bridge, not Hub. Preserve runId and use a stable clientRequestId for retries. background-mail requires completion and attention notifications; interactive uses bounded wait. Read independent verification separately from execution status. Never recursively invoke ProofBridge from a managed worker.",
+		Instructions: "Use get_context, owned endpoints, current model options and preferences before starting. User work executes on the selected Bridge, not Hub. Preserve runId and use a stable clientRequestId for retries. background-mail requires completion and attention notifications; interactive uses bounded wait. mailDeliveryMode=preview only stores mail in a local preview inbox and never delivers to an external mailbox. Sent means SMTP acceptance, not confirmed inbox receipt. Read independent verification separately from execution status. Never recursively invoke ProofBridge from a managed worker.",
 	})
 	for _, def := range automationTools {
 		d := def
@@ -265,7 +265,7 @@ func (s *Server) callAutomationTool(ctx context.Context, uid, name string, raw j
 		var data map[string]any
 		_ = json.Unmarshal(prefs.Data, &data)
 		email, _ := data["email"].(string)
-		return map[string]any{"schemaVersion": 1, "user": user, "preferences": prefs, "mailReady": s.automationMailReady(), "emailConfigured": email != "", "nativeUserInputProtocolVersion": 3, "maximumWaitMs": 20000}, nil
+		return map[string]any{"schemaVersion": 1, "user": user, "preferences": prefs, "mailReady": s.automationMailReady(), "mailDeliveryMode": s.automationMailDeliveryMode(), "emailConfigured": email != "", "nativeUserInputProtocolVersion": 3, "maximumWaitMs": 20000}, nil
 	case "list_endpoints":
 		agents, err := s.visibleAgents(ctx, uid)
 		if err != nil {
@@ -349,7 +349,7 @@ func (s *Server) callAutomationTool(ctx context.Context, uid, name string, raw j
 			}
 		}
 		rows, err := s.store.ListAutomationNotifications(ctx, uid, a.RunID, a.SubmissionID, a.Limit)
-		return map[string]any{"notifications": rows}, err
+		return s.automationNotificationStatus(rows), err
 	default:
 		return nil, &operationError{400, "UNKNOWN_TOOL", "未知的 ProofBridge 工具。"}
 	}

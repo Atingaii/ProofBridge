@@ -18,6 +18,25 @@ func (s *Server) automationMailReady() bool {
 	_, err := s.automationPublicURL()
 	return err == nil
 }
+
+func (s *Server) automationMailDeliveryMode() string {
+	if !s.automationMailReady() {
+		return "disabled"
+	}
+	return notify.NewSMTP(s.cfg.Automation.SMTP).DeliveryMode()
+}
+
+// This describes the current transport only: old outbox rows do not record its
+// historical configuration. A sent row confirms SMTP acceptance, never receipt.
+func (s *Server) automationNotificationStatus(rows []store.AutomationNotification) map[string]any {
+	return map[string]any{
+		"notifications":     rows,
+		"mailDeliveryMode":  s.automationMailDeliveryMode(),
+		"deliveryModeScope": "current-transport",
+		"sentStatusMeaning": "smtp-accepted",
+	}
+}
+
 func (s *Server) queueAutomationAttention(ctx context.Context, runID, interactionID string) {
 	if !s.cfg.Automation.Enabled {
 		return

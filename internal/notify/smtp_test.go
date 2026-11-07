@@ -112,6 +112,34 @@ func TestSMTPActualLocalDeliveryStableIdentityAndUTF8(t *testing.T) {
 		t.Fatalf("retry changed message identity: %#v", ids)
 	}
 }
+
+func TestSMTPDeliveryModeIsExplicitAndPreservesLocalRelays(t *testing.T) {
+	base := config.SMTPConfig{Host: "127.0.0.1", Port: 1025, From: "sender@example.test", AllowInsecure: true}
+	for _, tc := range []struct {
+		name, configured, want string
+	}{
+		{"omitted-local-relay", "", "smtp"},
+		{"outbound", "smtp", "smtp"},
+		{"local-preview", "preview", "preview"},
+		{"normalized", " Preview ", "preview"},
+		{"unknown-fails-closed", "preveiw", "disabled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base
+			cfg.DeliveryMode = tc.configured
+			sender := NewSMTP(cfg)
+			if got := sender.DeliveryMode(); got != tc.want || sender.Ready() != (tc.want != "disabled") {
+				t.Fatalf("mode=%s ready=%v, want mode=%s", got, sender.Ready(), tc.want)
+			}
+		})
+	}
+	base.DeliveryMode = "preview"
+	base.Host = ""
+	if sender := NewSMTP(base); sender.Ready() || sender.DeliveryMode() != "disabled" {
+		t.Fatal("preview mode bypassed missing transport configuration")
+	}
+}
+
 func TestSMTPRejectsMissingTLSAndHeaderInjection(t *testing.T) {
 	cfg, _ := smtpFixture(t)
 	cfg.StartTLS = true

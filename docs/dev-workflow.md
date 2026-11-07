@@ -96,6 +96,7 @@ should list names and point here for detail.
 | `AUTOMATION_ENABLED` | Enable authenticated `/mcp`, personal connection settings and task email processing | config `automation.enabled`; default `true` |
 | `AUTOMATION_PUBLIC_URL` | Canonical Hub base URL used in MCP templates, Skill commands and task email links; use the address reachable through your lab/VPN and HTTPS outside loopback | config `automation.public_url`; empty only falls back for a loopback Hub listener |
 | `SMTP_HOST` | Hub-side SMTP server hostname | config `automation.smtp.host`; empty disables ready mail status |
+| `SMTP_DELIVERY_MODE` | `smtp` for outbound SMTP; `preview` for a local sink that does not forward mail; unknown values disable mail readiness | config `automation.smtp.delivery_mode`; default `smtp` |
 | `SMTP_PORT` | SMTP port | config `automation.smtp.port`; default `587` |
 | `SMTP_USERNAME` | Optional SMTP authentication username | config `automation.smtp.username` |
 | `SMTP_PASSWORD` | SMTP password; provide through the service environment instead of committing it | config `automation.smtp.password` |
@@ -175,13 +176,15 @@ After registration or account creation, the user follows this path:
 
 1. Connect the user's machine using **Settings → Add CLI endpoint**. The existing
    Bridge enrollment token is separate from the personal MCP Token.
-2. Expand **Settings → Terminal & email**, choose Codex or Claude Code, and copy the
-   complete generated MCP configuration into that client's personal MCP settings.
-   It includes the canonical `/mcp` URL and `Authorization: Bearer ...` header.
-   Keep the server label `proofbridge`. Do not put the Token in a shared project
-   file, task prompt or URL.
-3. Copy the matching Skill install command from the same panel and run it.
-   The installer downloads the credential-free Skill from `/skills/` and requires an
+2. Expand **Settings → Terminal & email** and choose Codex or Claude Code. The panel
+   directly shows the complete generated MCP configuration, including the canonical
+   `/mcp` URL and `Authorization: Bearer ...` header, under the label `proofbridge`.
+3. Copy the connection prompt to a trusted local AI client. It includes the MCP
+   configuration, the matching Skill install command and read-only discovery checks.
+   Configuration can also be copied separately into personal client settings.
+   This prompt contains a personal credential: do not publish it in shared project
+   files, shared conversations or URLs. The installer downloads the credential-free
+   Skill from `/skills/` and requires an
    explicit `--hub`. It verifies downloaded file hashes and updates its managed
    files; an existing unmanaged `proofbridge` skill is preserved with an error.
    It leaves CLI authentication, model and MCP configuration untouched.
@@ -224,7 +227,10 @@ configured, use interactive monitoring or ask the administrator to configure SMT
 For delivery errors, ask the client to query `proofbridge_get_notifications` and
 contact the maintainer with the notification ID and error. Hub retries transient
 send failures a bounded number of times; `sent` means SMTP acceptance, not inbox
-delivery. A finished run is separate from an authoritative verification verdict.
+delivery. `mailDeliveryMode=preview` means local preview only, even when
+`mailReady=true`. Notification responses identify the current transport mode;
+historical rows do not record the mode used at their send time. A finished run
+is separate from an authoritative verification verdict.
 
 ### SMTP setup and a personal delivery test
 
@@ -263,13 +269,18 @@ User accounts save only their report address and notification choices, not the
 server's SMTP password. In **Settings → Terminal & email**, save the address and
 click **Send test email**. `POST /api/automation/mail/test` sends a fixed message
 only to that logged-in account's saved address; custom recipients or bodies are
-rejected. Each user can request one test per minute. Success means the SMTP server
-accepted the message; check the inbox and spam folder separately.
+rejected. Each user can request one test per minute. Success includes `deliveryMode`:
+`smtp` means the SMTP server accepted the message; check the inbox and spam folder
+separately. `preview` means the local sink accepted it, with no external delivery.
 
 For a local Mailpit test inbox, use `configs/mail.local.env.example` with Mailpit
-listening on loopback SMTP port 1025. It explicitly permits plaintext on that local
-connection and keeps mail inside the preview inbox; it does not prove delivery to
-an external mailbox. Production mail should keep TLS enabled.
+listening on loopback SMTP port 1025. The template sets `SMTP_DELIVERY_MODE=preview`,
+explicitly permits plaintext on that local connection and keeps mail inside the
+preview inbox; it does not deliver to an external mailbox. Hostnames do not select
+the mode: a loopback service can also be a real forwarding relay. For real mail,
+configure the provider credentials and verified sender, use `SMTP_DELIVERY_MODE=smtp`,
+and keep TLS enabled. Restart Hub after changes. See the
+[delivery-mode contract](features/mail-delivery-status.md).
 
 Implementation anchors: `internal/hub/automation_access.go:handleAutomationAccess`,
 `internal/hub/automation_mcp.go:newAutomationMCPHandler`,

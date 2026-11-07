@@ -44,8 +44,10 @@ local worker task instead. Do not change CLI permissions or disable other MCP se
 ## Observe or leave running
 
 For “email me when done”, choose `background-mail` monitoring and check that completion
-and attention notifications are ready. If the address or service setup is missing, explain
-the personal-center action before submitting; do not promise an unavailable notification.
+and attention notifications are ready. Check `mailDeliveryMode`: `preview` sends only to
+a local preview inbox, so explain that external email is unavailable. If the address or
+service setup is missing, explain the personal-center action before submitting; do not
+promise an unavailable notification.
 After acceptance, return control. The Hub sends email without keeping this CLI open.
 
 For “wait here”, choose `interactive` and bounded `proofbridge_wait_run` calls.
@@ -82,6 +84,7 @@ Read current model metadata rather than keeping a permanent model catalog in thi
 
 Read `proofbridge_get_run` and the requested submission's evidence before reporting a result.
 Keep execution status, verification authority/verdict, and mail status separate.
+Mail `sent` means SMTP accepted the message, not that the recipient's inbox received it.
 A completed run, exhausted budget, stalled work or compiler exit code alone does not
 establish that the requested proof is satisfied. Preserve unmet obligations and checker evidence.
 Report unavailable/truncated usage honestly; API-price estimates are not bills.

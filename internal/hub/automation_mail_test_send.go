@@ -66,7 +66,12 @@ func (s *Server) handleAutomationMailTest(w http.ResponseWriter, r *http.Request
 		serverutil.WriteError(w, 502, "MAIL_TEST_FAILED", "SMTP 服务未接受测试邮件。请联系管理员检查网络、发件身份、服务额度和凭据后重试。")
 		return
 	}
-	serverutil.WriteJSON(w, 200, map[string]any{"status": "accepted", "smtpAccepted": true, "message": "邮件服务已接受测试邮件，请检查收件箱与垃圾邮件。本地测试服务请查看其收件箱。"})
+	mode := s.automationMailDeliveryMode()
+	result := "邮件服务已接受测试邮件，请检查收件箱与垃圾邮件。"
+	if mode == "preview" {
+		result = "测试邮件已被本地预览收件器接受，不会送达真实邮箱。请由部署管理员配置外发 SMTP 后再测试真实收件。"
+	}
+	serverutil.WriteJSON(w, 200, map[string]any{"status": "accepted", "smtpAccepted": true, "deliveryMode": mode, "message": result})
 }
 
 func (s *Server) claimAutomationMailTest(uid string) bool {

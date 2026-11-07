@@ -51,6 +51,10 @@ Mail failure is not proof failure. Attention email is not a completion report.
 
 `background-mail` requires an account address and ready mail service. Both completion
 and attention notifications are required so review-required work cannot silently wait forever.
+Check `mailDeliveryMode`: `preview` is local capture only; `smtp` identifies the configured
+outgoing transport, not a delivery guarantee. Notification `deliveryModeScope=current-transport`
+describes the current configuration, not each historical message. `sentStatusMeaning=smtp-accepted`
+means the SMTP server accepted the message; it does not establish external inbox receipt.
 Pending requests retain their original native callback. Result links remain private and
 may require VPN and sign-in.
 

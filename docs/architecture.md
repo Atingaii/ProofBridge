@@ -684,6 +684,14 @@ email, rejects custom recipients or text, limits each user to one attempt per
 minute and bounds SMTP work to at most 15 seconds. A successful response means
 SMTP accepted the message; it does not prove inbox delivery. See
 [onboarding and mail setup](features/mcp-onboarding-and-mail-setup.md).
+`internal/notify/smtp.go:DeliveryMode` distinguishes explicitly configured
+`preview` from outbound `smtp`; loopback addresses are not interpreted as preview.
+Access and MCP context expose `mailDeliveryMode`, and test-mail success exposes
+`deliveryMode`. A preview transport can be ready while sending nothing outside
+the local sink. Notification-list metadata labels the current transport separately
+from historical rows and defines `sent` as SMTP acceptance. No delivery mode is
+retroactively inferred for an old receipt. See
+[the delivery-mode contract](features/mail-delivery-status.md).
 
 Top-level `user.message.Seq` binds a durable submission before dispatch. Final
 public lifecycle events atomically freeze that submission's independent

@@ -17,6 +17,9 @@ func applyAutomationEnvWithLookup(cfg *Config, lookup envLookup) {
 	if v, ok := lookup("SMTP_HOST"); ok {
 		cfg.Automation.SMTP.Host = v
 	}
+	if v, ok := lookup("SMTP_DELIVERY_MODE"); ok {
+		cfg.Automation.SMTP.DeliveryMode = v
+	}
 	if v, ok := lookup("SMTP_PORT"); ok {
 		cfg.Automation.SMTP.Port = parseInt(v, cfg.Automation.SMTP.Port)
 	}

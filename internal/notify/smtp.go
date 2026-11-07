@@ -35,6 +35,10 @@ type SMTP struct{ cfg config.SMTPConfig }
 
 func NewSMTP(cfg config.SMTPConfig) *SMTP { return &SMTP{cfg: cfg} }
 func (s *SMTP) Ready() bool {
+	mode := strings.ToLower(strings.TrimSpace(s.cfg.DeliveryMode))
+	if mode != "" && mode != "smtp" && mode != "preview" {
+		return false
+	}
 	_, err := mail.ParseAddress(s.cfg.From)
 	if s.cfg.Host == "" || strings.ContainsAny(s.cfg.Host, "\r\n\t /") || strings.ContainsAny(s.cfg.From, "\r\n") || s.cfg.Port <= 0 || s.cfg.Port > 65535 || err != nil {
 		return false
@@ -43,6 +47,18 @@ func (s *SMTP) Ready() bool {
 		return false
 	}
 	return s.cfg.TLS || s.cfg.StartTLS || s.cfg.AllowInsecure
+}
+
+// DeliveryMode describes the configured transport, not inbox delivery. Preview
+// is explicit: loopback SMTP can also be a genuine outbound relay.
+func (s *SMTP) DeliveryMode() string {
+	if !s.Ready() {
+		return "disabled"
+	}
+	if strings.EqualFold(strings.TrimSpace(s.cfg.DeliveryMode), "preview") {
+		return "preview"
+	}
+	return "smtp"
 }
 
 func (s *SMTP) Send(ctx context.Context, m Message) (sendErr error) {

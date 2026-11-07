@@ -14,7 +14,7 @@
   入口 `internal/hub/orchestration.go:handleGetOrchestration`，投影
   `internal/hub/orchestration_configuration.go:orchestrationExecutionConfiguration`。
 - `POST /api/automation/mail/test`，调用 body 为 `{}` →
-  `{status:"accepted", smtpAccepted:true, message}`；入口
+  `{status:"accepted", smtpAccepted:true, deliveryMode:"smtp"|"preview", message}`；入口
   `internal/hub/automation_mail_test_send.go:handleAutomationMailTest`。
 - `CODEX_BRIDGE_ENV_FILE=/absolute/private/mail.env ./bin/codex-bridge hub`；
   解析 `internal/config/env_file.go:configurationEnvironment`，应用
@@ -35,6 +35,11 @@
   每 uid 每分钟最多尝试一次，不能用更换 IP 绕过；失败尝试同样计入。
   超时取已配置 SMTP timeout 与 15 秒的较小有效值，未设有效值时为 15 秒。
   `smtpAccepted` 只表示 SMTP 接受，不能写成外部收件箱已收到。
+- **邮件模式**：`SMTP_DELIVERY_MODE` 默认 `smtp`；显式 `preview` 表示本地捕获，不对外投递。
+  非法值禁用邮件；不能按 localhost 猜测模式，因为本地 Postfix 也可真实外发。
+  access/get_context 的 `mailReady` 只描述传输配置是否完整，另用 `mailDeliveryMode` 区分
+  `disabled/smtp/preview`。notifications 顶层的 `deliveryModeScope:"current-transport"`
+  仅描述当前传输，不能回填历史；`sentStatusMeaning:"smtp-accepted"` 不代表收件箱已收到。
 - **环境文件**：仅显式选择才读取，不隐式加载工作目录 `.env`。进程环境优先，包含显式空值；
   文件值不写入 `os.Environ`，不执行 shell、命令替换或变量展开。只解析合法键值/引号/注释；
   文件最多 1 MiB，错误只返回位置和安全原因，不回显值。
@@ -60,6 +65,7 @@
 | 自动化关闭；测试邮件 Origin 不允许 | 503 `AUTOMATION_DISABLED`；403 `ORIGIN_DENIED` |
 | 测试邮件 JSON 非法或带自定义字段 | 400 `BAD_REQUEST`，不发送 |
 | SMTP 未就绪；本人邮箱缺失或无效 | 503 `MAIL_NOT_CONFIGURED`；409 `EMAIL_REQUIRED` |
+| SMTP mode 为 preview；非法 mode | 页面/MCP说明仅本地预览；配置禁用并拒绝发信 |
 | uid 一分钟内重复测试 | 429 `MAIL_TEST_RATE_LIMIT`，`Retry-After: 60` |
 | SMTP 拒绝、连接失败或超时 | 502 `MAIL_TEST_FAILED`；不返回 SMTP 凭据或原始错误 |
 | 显式 env 文件缺失、超限、语法非法 | 配置加载失败；错误不包含值 |
@@ -78,6 +84,8 @@
 - `internal/hub/orchestration_configuration_test.go`：本人快照的 model/effort 不变，秘密字段不出现；外人 404；旧无绑定为 native default。
 - `internal/hub/automation_mail_test_send_test.go`：真实本地 SMTP、两账户地址隔离、固定文案、uid 限速与 IP 绕过、任意字段拒绝、失败非成功、匿名/PAT/Origin 拒绝、无新 run。
 - `internal/config/env_file_test.go`：显式加载、进程空值优先、无全局污染、命令文本不求值、语法错误脱敏、无隐式 `.env`。
+- `internal/config/automation_test.go`、`internal/notify/smtp_test.go`：smtp 默认兼容、preview 显式及非法模式拒绝。
+  mail/access/notifications 回归分别核对 deliveryMode、当前传输作用域和 SMTP 接受语义。
 - `internal/protocol/verification_test.go`、`internal/hub/automation_verification_test.go` 和既有 Hub/Bridge Agent 回归：未知值保留后拒绝，拒绝不派发，旧数据不重写。
 - `internal/bridge/orchestration_completion_accounting_test.go:TestVerifierPromptConfinesTemporaryAuditsToRuntimeDirectory`：提示词具备审计目录/只读/原权限边界。
   `internal/bridge/orchestration_completion_test.go`：真实 `coqc` 编译与 `coqtop` stdin assumptions 审计后，运行时审计脚本/log/json 确实存在且 digest 前后一致；

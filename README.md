@@ -108,12 +108,12 @@ First [connect your execution machine](#connect-to-a-hub). Register if your Hub
 allows registration, or sign in with an account provided by its administrator.
 Then open **Settings → Terminal & email**:
 
-1. Select Codex or Claude Code. Copy the complete MCP configuration into that
-   client's personal MCP settings. The template already contains your Hub address
-   and personal MCP Token.
-2. Copy and run the displayed Skill install command. It installs the same
-   credential-free ProofBridge Skill for the selected client; it preserves CLI
-   login, model and MCP configuration. Restart the client if needed.
+1. Select Codex or Claude Code. The panel shows the complete MCP configuration,
+   including your Hub address and personal Token.
+2. Copy the connection prompt into your trusted local AI client. It contains the
+   configuration, matching Skill installer and read-only connection checks. You
+   can also copy the configuration separately. The installer preserves CLI login
+   and model settings. Restart the client if it cannot discover the Skill.
 3. Save an email address and notification preferences. To leave a task running,
    enable both completion and attention email and select **Submit and email me**.
    The Hub administrator must configure SMTP first. Interactive monitoring works
@@ -143,7 +143,9 @@ configure `AUTOMATION_ENABLED`, `AUTOMATION_PUBLIC_URL` and SMTP using the
 
 SMTP setup can use the explicit `CODEX_BRIDGE_ENV_FILE` and the provider/local
 templates in `configs/mail*.env.example`; the personal center can send a fixed
-test to your saved address. See [mail setup](docs/dev-workflow.md#smtp-setup-and-a-personal-delivery-test).
+test to your saved address. The local template explicitly selects preview mode:
+mail stays in the test inbox and never reaches an external mailbox. Real delivery
+requires your own SMTP provider configuration. See [mail setup](docs/dev-workflow.md#smtp-setup-and-a-personal-delivery-test).
 
 ## Local quick start
 

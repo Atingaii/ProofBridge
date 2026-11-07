@@ -464,3 +464,12 @@ JWT secret in backups: changing the secret makes existing recoverable personal
 tokens unreadable until users rotate them. The local SMTP sink tests do not
 verify external mailbox delivery. Follow the existing deployment scope; no new
 public ingress or endpoint package publication is implied.
+
+Use the local mail template's explicit preview mode only with a sink such as
+Mailpit; the UI and MCP report that it does not deliver outside the preview inbox.
+A real SMTP relay, including one listening on localhost, uses outbound mode and
+requires administrator-provided provider credentials and a valid sender. Restart
+Hub after changing the selected environment file, then test the saved personal
+mailbox and check actual receipt separately. See
+[SMTP setup](dev-workflow.md#smtp-setup-and-a-personal-delivery-test) and
+[delivery status](features/mail-delivery-status.md).

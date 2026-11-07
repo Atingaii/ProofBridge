@@ -97,10 +97,10 @@ Codex 的工具执行通过浏览器审批：
 先[接入自己的执行机器](#连接现有-hub)。Hub 允许注册时可自行注册；否则使用管理员
 提供的账户登录。打开 **设置 → 终端与邮件**：
 
-1. 选择 Codex 或 Claude Code，将完整 MCP 配置复制到该客户端的个人 MCP 设置。
-   模板已经填写 Hub 地址和个人 MCP Token。
-2. 复制并执行页面显示的 Skill 安装命令。安装包不含个人凭据，不修改已有 CLI 登录、
-   模型或 MCP 配置。客户端未发现 Skill 时，重启客户端。
+1. 选择 Codex 或 Claude Code，页面会直接显示包含 Hub 地址和个人 Token 的完整 MCP 配置。
+2. 复制接入提示词，交给自己信任的本机 AI 客户端执行。提示词包含配置、配套 Skill 安装
+   命令和只读连接检查；也可以单独复制配置。安装器保留已有 CLI 登录和模型设置。
+   客户端未发现 Skill 时，重启客户端。
 3. 保存收件邮箱和通知偏好。需要离开终端时，同时启用任务结束报告和待处理提醒，
    选择**提交后邮件通知**。管理员需先配置 SMTP；未配置时可以使用终端交互等待。
 4. 可以使用 ProofBridge、Codex Bridge 或 CodexBridge 名称。例如输入：“请通过 ProofBridge，在我的默认端点阅读 README，使用已保存的默认
@@ -121,7 +121,9 @@ Hub 部署在实验室内网时，位于外部的客户端或 Bridge 需要 VPN�
 详细变量统一见[开发工作流](docs/dev-workflow.md#environment-variables)。
 
 邮件部署可通过 `CODEX_BRIDGE_ENV_FILE` 显式加载 `configs/mail*.env.example` 对应的私有配置；
-个人中心支持向已保存邮箱发送测试邮件。见[邮件配置与投递测试](docs/dev-workflow.md#smtp-setup-and-a-personal-delivery-test)。
+个人中心支持向已保存邮箱发送测试邮件。本地模板显式使用预览模式，邮件只进入本地测试
+收件器，不会到达外部邮箱。真实投递需要管理员填写自己的 SMTP 服务配置。
+见[邮件配置与投递测试](docs/dev-workflow.md#smtp-setup-and-a-personal-delivery-test)。
 
 ## 本地快速启动
 

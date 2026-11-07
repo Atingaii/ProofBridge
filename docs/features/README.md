@@ -35,3 +35,5 @@ Official Codex A/B model and reasoning selectors: [feature contract](official-co
 Android and phone presentation: [shared feature contract](android-mobile-redesign.md) and [lightweight host ADR](../adr/028-lightweight-android-webview.md).
 
 Natural-language access and task email: [MCP + Skill feature and 20-tool scope](mcp-skill-task-notifications.md), [ADR-029](../adr/029-hub-mcp-and-submission-notifications.md), and [current-source evidence](../reviews/proofbridge-mcp-current-state.md). Implemented locally; not deployed.
+
+Mail status: [outbound SMTP and local preview](mail-delivery-status.md).

@@ -205,6 +205,8 @@ func TestAutomationMailReadinessRequiresUsableSafeConfiguration(t *testing.T) {
 		want bool
 	}{
 		{"STARTTLS", func(*config.Config) {}, true},
+		{"preview-transport", func(c *config.Config) { c.Automation.SMTP.DeliveryMode = "preview" }, true},
+		{"invalid-delivery-mode", func(c *config.Config) { c.Automation.SMTP.DeliveryMode = "preveiw" }, false},
 		{"disabled", func(c *config.Config) { c.Automation.Enabled = false }, false},
 		{"missing-host", func(c *config.Config) { c.Automation.SMTP.Host = "" }, false},
 		{"invalid-sender", func(c *config.Config) { c.Automation.SMTP.From = "invalid" }, false},

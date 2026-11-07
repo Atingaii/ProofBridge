@@ -106,6 +106,7 @@ automation:
   enabled: true
   public_url: ""
   smtp:
+    delivery_mode: smtp # Set preview for a local sink that does not forward mail.
     host: ""
     port: 587
     username: ""

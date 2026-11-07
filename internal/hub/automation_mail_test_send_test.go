@@ -21,7 +21,7 @@ func TestAutomationMailTestUsesOnlyOwnedSavedAddressAndLimitsPerUser(t *testing.
 		t.Fatal(err)
 	}
 	result := authedJSON(t, s, uid, "POST", "/api/automation/mail/test", map[string]any{}, 200)
-	if result["status"] != "accepted" || result["smtpAccepted"] != true {
+	if result["status"] != "accepted" || result["smtpAccepted"] != true || result["deliveryMode"] != "smtp" {
 		t.Fatal("SMTP acceptance not reported")
 	}
 	select {
@@ -74,6 +74,68 @@ func TestAutomationMailTestUsesOnlyOwnedSavedAddressAndLimitsPerUser(t *testing.
 		t.Fatal("mail test created a proof run")
 	}
 }
+
+func TestAutomationMailTestPreviewReportsOnlyLocalAcceptance(t *testing.T) {
+	s, st, uid, _ := newOrchestrationTestServer(t)
+	var receipts <-chan automationSMTPReceipt
+	s.cfg.Automation.SMTP, receipts = automationSMTPSink(t, 0)
+	s.cfg.Automation.SMTP.DeliveryMode = "preview"
+	if _, err := st.PutAutomationSettings(context.Background(), uid, "account", json.RawMessage(`{"email":"owner@example.test"}`), 0); err != nil {
+		t.Fatal(err)
+	}
+	result := authedJSON(t, s, uid, "POST", "/api/automation/mail/test", map[string]any{}, 200)
+	message, _ := result["message"].(string)
+	if result["deliveryMode"] != "preview" || result["smtpAccepted"] != true || !strings.Contains(message, "不会送达真实邮箱") {
+		t.Fatal("preview acceptance was presented as external delivery")
+	}
+	select {
+	case receipt := <-receipts:
+		if !receipt.accepted || !strings.Contains(receipt.raw, "owner@example.test") {
+			t.Fatal("local preview receipt did not match saved recipient")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no local SMTP receipt for the accepted preview")
+	}
+}
+
+func TestAutomationMailMetadataAgreesAcrossBrowserAndMCP(t *testing.T) {
+	for _, tc := range []struct {
+		name, configured, want string
+	}{
+		{"local-relay", "", "smtp"},
+		{"local-preview", "preview", "preview"},
+		{"invalid-mode", "misspelled", "disabled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, uid, _ := newOrchestrationTestServer(t)
+			s.cfg.Automation.SMTP, _ = automationSMTPSink(t, 0)
+			s.cfg.Automation.SMTP.DeliveryMode = tc.configured
+			access := authedJSON(t, s, uid, "GET", "/api/automation/access", nil, 200)
+			if access["mailDeliveryMode"] != tc.want || access["mailReady"] != (tc.want != "disabled") {
+				t.Fatal("browser does not expose the usable configured transport")
+			}
+			server := httptest.NewServer(s.httpSrv.Handler)
+			defer server.Close()
+			session := automationSDKClient(t, server.URL+"/mcp", access["token"].(string))
+			current := callAutomationSDK(t, session, "get_context", map[string]any{}, false)
+			if current["mailDeliveryMode"] != access["mailDeliveryMode"] || current["mailReady"] != access["mailReady"] {
+				t.Fatal("MCP and browser disagree on mail readiness or delivery mode")
+			}
+			notifications := authedJSON(t, s, uid, "GET", "/api/automation/notifications", nil, 200)
+			mcpNotifications := callAutomationSDK(t, session, "get_notifications", map[string]any{}, false)
+			for _, result := range []map[string]any{notifications, mcpNotifications} {
+				if result["mailDeliveryMode"] != tc.want || result["deliveryModeScope"] != "current-transport" || result["sentStatusMeaning"] != "smtp-accepted" {
+					t.Fatal("notification receipt lacks current-mode and acceptance boundaries")
+				}
+				raw, err := json.Marshal(result)
+				if err != nil || strings.Contains(string(raw), "sender@example.test") || strings.Contains(string(raw), "127.0.0.1") {
+					t.Fatal("notification metadata exposed SMTP configuration")
+				}
+			}
+		})
+	}
+}
+
 func TestAutomationMailTestRejectsArbitraryRecipientAndReportsFailures(t *testing.T) {
 	s, st, uid, _ := newOrchestrationTestServer(t)
 	var receipts <-chan automationSMTPReceipt

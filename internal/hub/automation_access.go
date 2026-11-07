@@ -162,7 +162,7 @@ func (s *Server) handleAutomationAccess(w http.ResponseWriter, r *http.Request, 
 	if token == "" {
 		value = nil
 	}
-	serverutil.WriteJSON(w, 200, map[string]any{"token": value, "createdAt": record.CreatedAt, "revoked": record.RevokedAt != 0, "mcpUrl": base + "/mcp", "codexConfig": codex, "claudeConfig": claude, "skillInstallCommands": map[string]string{"codex": install("codex"), "claude": install("claude")}, "mailReady": s.automationMailReady(), "email": prefs["email"], "tokenExpiresAt": nil})
+	serverutil.WriteJSON(w, 200, map[string]any{"token": value, "createdAt": record.CreatedAt, "revoked": record.RevokedAt != 0, "mcpUrl": base + "/mcp", "codexConfig": codex, "claudeConfig": claude, "skillInstallCommands": map[string]string{"codex": install("codex"), "claude": install("claude")}, "mailReady": s.automationMailReady(), "mailDeliveryMode": s.automationMailDeliveryMode(), "email": prefs["email"], "tokenExpiresAt": nil})
 }
 func shellQuoteAutomation(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 func (s *Server) handleRotateAutomationToken(w http.ResponseWriter, r *http.Request, uid string) {
@@ -328,7 +328,7 @@ func (s *Server) handleAutomationNotifications(w http.ResponseWriter, r *http.Re
 		writeAutomationError(w, err)
 		return
 	}
-	serverutil.WriteJSON(w, 200, map[string]any{"notifications": rows})
+	serverutil.WriteJSON(w, 200, s.automationNotificationStatus(rows))
 }
 func writeAutomationError(w http.ResponseWriter, err error) {
 	switch {

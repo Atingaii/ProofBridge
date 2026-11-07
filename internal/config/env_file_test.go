@@ -24,13 +24,13 @@ func unsetEnvForTest(t *testing.T, key string) {
 func TestExplicitEnvironmentFileLoadAndProcessPrecedence(t *testing.T) {
 	root := t.TempDir()
 	file := filepath.Join(root, "mail.env")
-	for _, key := range []string{"SMTP_HOST", "SMTP_FROM", "SMTP_PASSWORD", "SMTP_PORT", "APP_ENV"} {
+	for _, key := range []string{"SMTP_HOST", "SMTP_DELIVERY_MODE", "SMTP_FROM", "SMTP_PASSWORD", "SMTP_PORT", "APP_ENV"} {
 		unsetEnvForTest(t, key)
 	}
 	t.Setenv("CODEX_BRIDGE_CONFIG_DIR", root)
 	t.Setenv("CODEX_BRIDGE_ENV_FILE", file)
 	t.Setenv("SMTP_USERNAME", "process-user")
-	raw := "APP_ENV=trial\nSMTP_HOST=smtp.resend.com\nSMTP_PORT=465\nSMTP_TLS=true\nSMTP_STARTTLS=false\nSMTP_USERNAME=file-user\nSMTP_PASSWORD='secret # $literal'\nSMTP_FROM=\"ProofBridge <mail@example.test>\"\n"
+	raw := "APP_ENV=trial\nSMTP_HOST=smtp.resend.com\nSMTP_DELIVERY_MODE=preview\nSMTP_PORT=465\nSMTP_TLS=true\nSMTP_STARTTLS=false\nSMTP_USERNAME=file-user\nSMTP_PASSWORD='secret # $literal'\nSMTP_FROM=\"ProofBridge <mail@example.test>\"\n"
 	if err := os.WriteFile(file, []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -41,15 +41,16 @@ func TestExplicitEnvironmentFileLoadAndProcessPrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.App.Env != "trial" || cfg.Gateway.Port != 9021 || cfg.Automation.SMTP.Host != "smtp.resend.com" || cfg.Automation.SMTP.Port != 465 || cfg.Automation.SMTP.Username != "process-user" || cfg.Automation.SMTP.Password != "secret # $literal" || !cfg.Automation.SMTP.TLS || cfg.Automation.SMTP.StartTLS {
+	if cfg.App.Env != "trial" || cfg.Gateway.Port != 9021 || cfg.Automation.SMTP.Host != "smtp.resend.com" || cfg.Automation.SMTP.DeliveryMode != "preview" || cfg.Automation.SMTP.Port != 465 || cfg.Automation.SMTP.Username != "process-user" || cfg.Automation.SMTP.Password != "secret # $literal" || !cfg.Automation.SMTP.TLS || cfg.Automation.SMTP.StartTLS {
 		t.Fatal("explicit env file not applied with process precedence")
 	}
 	if _, present := os.LookupEnv("SMTP_PASSWORD"); present {
 		t.Fatal("file values leaked into global process environment")
 	}
 	t.Setenv("SMTP_HOST", "")
+	t.Setenv("SMTP_DELIVERY_MODE", "smtp")
 	cfg, err = Load(root)
-	if err != nil || cfg.Automation.SMTP.Host != "" {
+	if err != nil || cfg.Automation.SMTP.Host != "" || cfg.Automation.SMTP.DeliveryMode != "smtp" {
 		t.Fatal("explicit empty process environment must override file")
 	}
 }
