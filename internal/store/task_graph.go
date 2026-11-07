@@ -294,7 +294,10 @@ func (s *Store) ListTaskGraphsByRun(ctx context.Context, runID string) ([]Orches
 // ListTaskGraphMetadataByRun reads the immutable graph payloads and boundaries
 // used by statistics, without hydrating unused tasks and dependencies.
 func (s *Store) ListTaskGraphMetadataByRun(ctx context.Context, runID string) ([]OrchestrationTaskGraph, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, run_id, generation, status, parallel_limit, payload_json, payload_digest, created_at, updated_at, COALESCE(finished_at,0) FROM orchestration_task_graphs WHERE run_id = ? ORDER BY generation`, runID)
+	return listTaskGraphMetadataByRun(ctx, s.db, runID)
+}
+func listTaskGraphMetadataByRun(ctx context.Context, q automationUsageQueryer, runID string) ([]OrchestrationTaskGraph, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id, run_id, generation, status, parallel_limit, payload_json, payload_digest, created_at, updated_at, COALESCE(finished_at,0) FROM orchestration_task_graphs WHERE run_id = ? ORDER BY generation`, runID)
 	if err != nil {
 		return nil, err
 	}

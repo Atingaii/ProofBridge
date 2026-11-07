@@ -244,6 +244,17 @@ chmod 600 /absolute/private/mail.env
 CODEX_BRIDGE_ENV_FILE=/absolute/private/mail.env ./bin/codex-bridge hub
 ```
 
+For a new production Hub, `configs/hub.env.example` combines the SMTP placeholders
+with the canonical automation URL, SQLite path and private JWT configuration.
+The repository's systemd Hub unit optionally loads
+`/opt/codex-bridge/configs/hub.env`; Docker uses `--env-file` with the same values.
+Keep this shared template's values unquoted and its comments on separate lines;
+Docker preserves quote characters that the other two readers would remove.
+Keep that populated file and the database outside Git, preserve the JWT secret on
+upgrade, and follow [repository deployment parity](deployment.md#repository-deployment-parity).
+`configs/mail.env.example` remains the smaller SMTP-only overlay for an existing
+Hub; changing it does not alter the account's saved notification preferences.
+
 The selected file supplements configuration without changing the process environment.
 Existing environment variables win, including an explicitly empty value. It accepts
 `NAME=value`, optional `export`, comments, and single/double quoted values. Shell

@@ -36,4 +36,6 @@ Android and phone presentation: [shared feature contract](android-mobile-redesig
 
 Natural-language access and task email: [MCP + Skill feature and 20-tool scope](mcp-skill-task-notifications.md), [ADR-029](../adr/029-hub-mcp-and-submission-notifications.md), and [current-source evidence](../reviews/proofbridge-mcp-current-state.md). Implemented locally; not deployed.
 
+Compact completion email: [result card, Token/cost snapshot and multipart contract](completion-email-summary.md) and [outbox projection ADR](../adr/031-completion-mail-usage-snapshot.md).
+
 Mail status: [outbound SMTP and local preview](mail-delivery-status.md).

@@ -78,7 +78,10 @@ func (s *Store) readOrchestrationUsageTimeline(ctx context.Context, runID string
 }
 
 func (s *Store) readOrchestrationUsageBatch(ctx context.Context, runID string, afterSeq, throughSeq int64) ([]rawOrchestrationUsageEvent, error) {
-	rows, err := s.db.QueryContext(ctx, orchestrationUsageBatchQuery, runID, afterSeq, throughSeq, orchestrationUsageBatchRows)
+	return readOrchestrationUsageBatchWith(ctx, s.db, runID, afterSeq, throughSeq)
+}
+func readOrchestrationUsageBatchWith(ctx context.Context, q automationUsageQueryer, runID string, afterSeq, throughSeq int64) ([]rawOrchestrationUsageEvent, error) {
+	rows, err := q.QueryContext(ctx, orchestrationUsageBatchQuery, runID, afterSeq, throughSeq, orchestrationUsageBatchRows)
 	if err != nil {
 		return nil, err
 	}

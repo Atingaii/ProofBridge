@@ -195,6 +195,9 @@ func automationFinalizeEventTx(ctx context.Context, tx *sql.Tx, event Orchestrat
 	if result.Verification.Summary == "" {
 		result.Verification.Summary = "Execution ended without an independent verification result."
 	}
+	if !enrich && event.ID != "" && result.Execution.TerminalReason != "recovered-unconfirmed" {
+		result.UsageCutoffSeq = event.Seq
+	}
 	raw, err := json.Marshal(result)
 	if err != nil {
 		return err
@@ -216,7 +219,7 @@ func automationFinalizeEventTx(ctx context.Context, tx *sql.Tx, event Orchestrat
 			return err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE automation_notifications SET snapshot_json=?,updated_at=? WHERE submission_id=? AND kind='completion' AND state IN ('queued','retry')`, string(raw), event.CreatedAt, sub.ID)
+	_, err = tx.ExecContext(ctx, `UPDATE automation_notifications SET snapshot_json=CASE WHEN json_type(snapshot_json,'$.usageSummary')='object' THEN json_set(?, '$.usageSummary',json_extract(snapshot_json,'$.usageSummary')) ELSE ? END,updated_at=? WHERE submission_id=? AND kind='completion' AND state IN ('queued','retry')`, string(raw), string(raw), event.CreatedAt, sub.ID)
 	return err
 }
 func queueAutomationNotificationTx(ctx context.Context, tx *sql.Tx, sub AutomationSubmission, kind, interactionID string, snapshot json.RawMessage, now int64) error {

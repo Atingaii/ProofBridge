@@ -125,6 +125,10 @@ Hub 部署在实验室内网时，位于外部的客户端或 Bridge 需要 VPN�
 收件器，不会到达外部邮箱。真实投递需要管理员填写自己的 SMTP 服务配置。
 见[邮件配置与投递测试](docs/dev-workflow.md#smtp-setup-and-a-personal-delivery-test)。
 
+完成邮件使用简短结果卡片，显示验证状态、Token、费用估算和详情入口，不发送完整对话。
+用量按本次提交结束时的运行累计冻结；缺失或不完整的统计会明确标注。
+见[邮件摘要与统计边界](docs/features/completion-email-summary.md)。
+
 ## 本地快速启动
 
 **构建要求：** Go **1.25.7+**、Node.js **22+** 及 npm、Git、Make。
@@ -184,6 +188,11 @@ chmod 600 configs/dev.yaml
 
 公网 Hub 需要配置 HTTPS、安全 Cookie、独立凭据和持久化 SQLite 存储。账号创建、
 注册策略、备份与验收步骤统一见[部署指南](docs/deployment.md)。
+
+从 Git 仓库更新或迁移到另一台服务器时，使用统一的
+[`hub.env` 模板](configs/hub.env.example)和
+[仓库部署清单](docs/deployment.md#repository-deployment-parity)。
+私有环境变量、SQLite 数据及原 JWT secret 保存在 Git 之外。
 
 ## 架构与数据边界
 

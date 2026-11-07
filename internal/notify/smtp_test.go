@@ -9,6 +9,7 @@ import (
 	"mime/quotedprintable"
 	"net"
 	"net/mail"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -140,6 +141,35 @@ func TestSMTPDeliveryModeIsExplicitAndPreservesLocalRelays(t *testing.T) {
 	}
 }
 
+func TestHubEnvironmentTemplateSupportsLiteralDockerValues(t *testing.T) {
+	data, err := os.ReadFile("../../configs/hub.env.example")
+	if err != nil {
+		t.Fatal("cannot read shared production environment template")
+	}
+	// Docker's --env-file preserves quotes in values. Inject each literal value
+	// through the process environment instead of the Hub's unquoting file loader.
+	t.Setenv("CODEX_BRIDGE_ENV_FILE", "")
+	t.Setenv("CODEX_BRIDGE_CONFIG_DIR", "")
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			t.Fatal("invalid shared production environment template")
+		}
+		t.Setenv(key, value)
+	}
+	cfg, err := config.Load(t.TempDir())
+	if err != nil {
+		t.Fatal("literal production environment template did not load")
+	}
+	if !NewSMTP(cfg.Automation.SMTP).Ready() {
+		t.Fatal("shared production template must keep SMTP ready when values are injected literally")
+	}
+}
+
 func TestSMTPRejectsMissingTLSAndHeaderInjection(t *testing.T) {
 	cfg, _ := smtpFixture(t)
 	cfg.StartTLS = true
@@ -189,7 +219,7 @@ func TestNotificationMessageSeparatesExecutionFromVerification(t *testing.T) {
 	raw, _ := json.Marshal(result)
 	n := store.AutomationNotification{ID: "mail", RunID: "orc_1", SubmissionID: "submission_1", Recipient: "owner@example.test", Kind: "completion", Snapshot: raw}
 	message := FromNotification(n, "https://lab.example.test/")
-	if strings.Contains(message.Subject, "验证通过") || !strings.Contains(message.Subject, "验证未通过") {
+	if strings.Contains(message.Subject, "验证通过") || !strings.Contains(message.Subject, "未完成验证") {
 		t.Fatal("completed was called verified:", message.Subject)
 	}
 	if !strings.Contains(message.Text, "/orchestrate/runs/orc_1") || !strings.Contains(message.Text, "submission_1") {

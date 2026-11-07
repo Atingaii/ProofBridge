@@ -40,6 +40,14 @@
   access/get_context 的 `mailReady` 只描述传输配置是否完整，另用 `mailDeliveryMode` 区分
   `disabled/smtp/preview`。notifications 顶层的 `deliveryModeScope:"current-transport"`
   仅描述当前传输，不能回填历史；`sentStatusMeaning:"smtp-accepted"` 不代表收件箱已收到。
+- **完成邮件**：`internal/notify/completion.go:FromNotification` 只输出短状态、确定性说明、用量及详情入口，
+  不复制模型长结论、原始错误或对话。`internal/notify/mime.go` 保留 HTML/plain-text alternative，动态内容按上下文转义。
+  真实终态事件冻结 `usageCutoffSeq`；claim 后用原网站聚合取运行累计到本次提交结束的指标，
+  读事务结束后以 id/claim token/原 snapshot 做 CAS，仅冻结 outbox 中的小投影，不改已接受的提交结果。
+  旧快照、截止不可信、后续提交归属不明或读失败均显示未记录；缺价格不能显示零费用。
+  已冻结数值不随后续任务、重试或迟到结论变化；过期 lease 不得继续发信。
+  Store 不注册 Hub 回调，终态事务不执行网络/价格刷新，不能在单连接事务内再调用 Store 获取连接。
+  设计见[完成邮件契约](../../../docs/features/completion-email-summary.md)。
 - **环境文件**：仅显式选择才读取，不隐式加载工作目录 `.env`。进程环境优先，包含显式空值；
   文件值不写入 `os.Environ`，不执行 shell、命令替换或变量展开。只解析合法键值/引号/注释；
   文件最多 1 MiB，错误只返回位置和安全原因，不回显值。
@@ -54,6 +62,10 @@
   安装、发现、Skill 加载、MCP 成功调用、终端回显分别留证。自然语言和显式模式分别验收，
   MCP 两项只读工具成功不能代替 Skill 加载 trace。默认测试跳过 opt-in 模型调用；
   超时或推理不可用产生的 skip 不计为通过，缺少加载证据的严格失败不能放宽。
+  探针准备阶段 30 秒、推理阶段独立 120 秒；超时也解析已观察证据，只记录布尔、事件类型、RPC 方法和阶段耗时。
+  Codex 探针使用明确标记的官方隔离路由，不代表用户当前自定义配置；Claude 保留进程认证与别名。
+  显式 Skill 的可信展开回执只证明选中准备展开，单独不能算正文已加载。保持未确认/失败记录，
+  不从模型自述、发现列表、请求字符串或未通过的 Go 子测试生成成功结论。
 
 ## 4. Validation & Error Matrix
 
@@ -66,6 +78,8 @@
 | 测试邮件 JSON 非法或带自定义字段 | 400 `BAD_REQUEST`，不发送 |
 | SMTP 未就绪；本人邮箱缺失或无效 | 503 `MAIL_NOT_CONFIGURED`；409 `EMAIL_REQUIRED` |
 | SMTP mode 为 preview；非法 mode | 页面/MCP说明仅本地预览；配置禁用并拒绝发信 |
+| 旧邮件缺可信用量；后续 prompt 归属不明；价格部分缺失 | 分别显示未记录、未记录、仅已知部分估算，不借用当前累计或补零 |
+| 用量读失败；迟到结论；通知 claim 过期 | 状态通知仍可发且用量未记录；保留已冻结用量；过期 claim 不发 |
 | uid 一分钟内重复测试 | 429 `MAIL_TEST_RATE_LIMIT`，`Retry-After: 60` |
 | SMTP 拒绝、连接失败或超时 | 502 `MAIL_TEST_FAILED`；不返回 SMTP 凭据或原始错误 |
 | 显式 env 文件缺失、超限、语法非法 | 配置加载失败；错误不包含值 |

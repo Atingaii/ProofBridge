@@ -89,7 +89,10 @@ func replaceUsageSessions(ctx context.Context, tx *sql.Tx, result protocol.Orche
 }
 
 func (s *Store) ListOrchestrationUsageEvents(ctx context.Context, runID string) ([]protocol.OrchestrationUsageEvent, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT event_id, cli, worker_slot, session_id, occurred_at, COALESCE(provider,''), COALESCE(model,''), input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, reasoning_tokens FROM orchestration_usage_events WHERE run_id = ? ORDER BY occurred_at, cli, worker_slot, event_id`, runID)
+	return listOrchestrationUsageEvents(ctx, s.db, runID)
+}
+func listOrchestrationUsageEvents(ctx context.Context, q automationUsageQueryer, runID string) ([]protocol.OrchestrationUsageEvent, error) {
+	rows, err := q.QueryContext(ctx, `SELECT event_id, cli, worker_slot, session_id, occurred_at, COALESCE(provider,''), COALESCE(model,''), input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, reasoning_tokens FROM orchestration_usage_events WHERE run_id = ? ORDER BY occurred_at, cli, worker_slot, event_id`, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +109,10 @@ func (s *Store) ListOrchestrationUsageEvents(ctx context.Context, runID string) 
 }
 
 func (s *Store) ListOrchestrationUsageSyncs(ctx context.Context, runID string) ([]OrchestrationUsageSync, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT run_id, cli, worker_slot, session_id, status, COALESCE(error,''), event_count, scanned_at FROM orchestration_usage_syncs WHERE run_id = ? ORDER BY cli, worker_slot, session_id`, runID)
+	return listOrchestrationUsageSyncs(ctx, s.db, runID)
+}
+func listOrchestrationUsageSyncs(ctx context.Context, q automationUsageQueryer, runID string) ([]OrchestrationUsageSync, error) {
+	rows, err := q.QueryContext(ctx, `SELECT run_id, cli, worker_slot, session_id, status, COALESCE(error,''), event_count, scanned_at FROM orchestration_usage_syncs WHERE run_id = ? ORDER BY cli, worker_slot, session_id`, runID)
 	if err != nil {
 		return nil, err
 	}

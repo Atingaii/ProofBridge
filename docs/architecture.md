@@ -701,6 +701,20 @@ transaction, and persists a bounded retry receipt. Attention notices identify
 requests without persisting native question or answer text. Native approvals
 are authoritative on Bridge; the Hub only brokers bounded in-flight replies.
 
+Completion email uses `internal/notify/completion.go:FromNotification` and
+`internal/notify/mime.go` for a short result card with HTML and plain-text
+alternatives. It never copies the conversation or a model's long conclusion.
+The final event freezes `usageCutoffSeq`; after claiming a notification,
+`internal/hub/automation_mail_summary.go:prepareAutomationNotification` reuses
+the website's statistics aggregation against that boundary. One read-only Store
+transaction collects inputs, then a claim-token/snapshot CAS freezes only the
+outbox's small usage projection. Retries and late conclusions preserve it.
+Missing boundaries, ambiguous later submissions and unavailable statistics are
+reported as unrecorded, never zero. No Store-to-Hub callback, schema migration,
+pricing refresh or network request is added to the terminal transaction. See
+[completion email summary](features/completion-email-summary.md) and
+[ADR-031](adr/031-completion-mail-usage-snapshot.md).
+
 Long-history interactive reads keep the existing single-connection model and use
 sparse event indexes rather than reading unrelated output bodies. Migration,
 rollback and query-plan requirements are recorded in

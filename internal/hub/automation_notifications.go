@@ -84,9 +84,21 @@ func (s *Server) runAutomationNotifications(ctx context.Context) {
 						slog.Warn("[automation] notification claim failed", "error", err)
 						break
 					}
-					sendCtx, cancel := context.WithTimeout(ctx, timeout)
-					err = sender.Send(sendCtx, notify.FromNotification(row, base))
-					cancel()
+					prepared, prepareErr := s.prepareAutomationNotification(ctx, row)
+					if errors.Is(prepareErr, store.ErrNotFound) || errors.Is(prepareErr, store.ErrConflict) {
+						continue // An expired/replaced claim cannot send or persist a receipt.
+					}
+					if prepareErr != nil {
+						err = errors.New("notification summary could not be prepared")
+					} else {
+						row = prepared
+						if row.LeaseUntil <= time.Now().Unix() {
+							continue
+						}
+						sendCtx, cancel := context.WithTimeout(ctx, timeout)
+						err = sender.Send(sendCtx, notify.FromNotification(row, base))
+						cancel()
+					}
 					var retryAt time.Time
 					if err != nil && row.Attempts < 5 {
 						delay := time.Second * time.Duration(1<<min(row.Attempts, 9))

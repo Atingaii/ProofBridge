@@ -99,3 +99,7 @@ SMTP sent 表示服务器接受，不等于收件箱已收到，也不承诺跨 
 自然语言 opt-in 测试：`PROOFBRIDGE_TEST_REAL_SKILL=1 PROOFBRIDGE_TEST_SKILL_ALIAS='Codex Bridge' go test ./internal/hub -run TestAutomationNativeSkillReadOnly -count=1 -v`。
 它安装真实 Skill、使用隔离客户端配置，服务器只执行两项只读工具；默认测试不会调用模型。别名还可设为 ProofBridge 或 CodexBridge。
 Codex 的超时是本次推理连接的观测，不足以归因于 MCP 或证明其自然语言路径可用。本轮已保留 natural/explicit 的独立结果，不再无依据重复调用模型。
+
+后续夹具将准备与推理窗口分离，推理有界120秒，且超时前的事件与RPC方法也保留安全诊断。
+Codex 官方隔离路由、长订阅含义与严格加载门禁见[探针诊断边界](native-skill-probe-diagnostics.md)。
+以上旧60秒结果保留原结论；确定性诊断测试通过不能代替新的opt-in模型验收。

@@ -18,12 +18,17 @@ RUN go mod download
 COPY . .
 # Overwrite the checked-in static assets with the freshly built ones.
 COPY --from=web /src/internal/web/static/ ./internal/web/static/
-RUN CGO_ENABLED=0 go build -ldflags "-s -w" -o /out/codex-bridge .
+RUN CGO_ENABLED=0 go build -ldflags "-s -w" -o /out/codex-bridge . \
+    && mkdir -p /out/hub/data \
+    && chmod 0750 /out/hub/data
 
 # --- Stage 3: minimal runtime ---
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /opt/codex-bridge
 COPY --from=build /out/codex-bridge /usr/local/bin/codex-bridge
+# Copy the parent tree to preserve the data subdirectory's mode and ownership.
+# A fresh named volume inherits these nonroot directory attributes.
+COPY --from=build --chown=65532:65532 /out/hub/ /opt/codex-bridge/
 # Mount your config at /opt/codex-bridge/configs and data at /opt/codex-bridge/data.
 ENV APP_ENV=prod \
     APP_HOST=0.0.0.0 \

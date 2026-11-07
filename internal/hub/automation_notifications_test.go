@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"mime"
-	"mime/quotedprintable"
+	"mime/multipart"
 	"net"
 	"net/mail"
 	"strings"
@@ -155,12 +155,23 @@ func TestAutomationNotificationWorkerDeliversAfterClientExitAndRetries(t *testin
 			}
 			accepted = true
 			subject, err := (&mime.WordDecoder{}).DecodeHeader(message.Header.Get("Subject"))
-			if err != nil || !strings.Contains(subject, "验证未通过") {
+			if err != nil || !strings.Contains(subject, "未完成验证") {
 				t.Fatalf("mail incorrectly claims proof success: %q %v", subject, err)
 			}
-			body, err := io.ReadAll(quotedprintable.NewReader(message.Body))
-			if err != nil || !strings.Contains(string(body), sub.ID) || !strings.Contains(string(body), "https://lab.example.test/orchestrate/runs/"+run.ID) || !strings.Contains(string(body), "One proof obligation remains") {
-				t.Fatalf("SMTP report lost submission or final result: %q %v", body, err)
+			kind, params, err := mime.ParseMediaType(message.Header.Get("Content-Type"))
+			if err != nil || kind != "multipart/alternative" {
+				t.Fatal("completion did not use multipart alternative")
+			}
+			reader := multipart.NewReader(message.Body, params["boundary"])
+			for _, contentType := range []string{"text/plain", "text/html"} {
+				part, err := reader.NextPart()
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, err := io.ReadAll(part)
+				if err != nil || !strings.HasPrefix(part.Header.Get("Content-Type"), contentType) || !strings.Contains(string(body), sub.ID) || !strings.Contains(string(body), "https://lab.example.test/orchestrate/runs/"+run.ID) || strings.Contains(string(body), "One proof obligation remains") {
+					t.Fatal("concise MIME report lost identity or copied the long conclusion")
+				}
 			}
 		case <-deadline.C:
 			t.Fatal("worker did not deliver the durable completion report to local SMTP")

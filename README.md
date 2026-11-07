@@ -134,6 +134,11 @@ that verification passed, and SMTP acceptance does not guarantee inbox delivery.
 Explicit model and reasoning choices depend on the selected endpoint's reported
 capabilities; an MCP connection does not add credentials or model access.
 
+Completion email contains a short result card, Token usage, estimated cost and a
+details link rather than the full conversation. Metrics freeze the run's cumulative
+usage at submission completion; missing or incomplete figures are labeled. See the
+[email summary contract](docs/features/completion-email-summary.md).
+
 Regenerating or revoking the personal Token invalidates old MCP configurations;
 it does not cancel running tasks. Use the complete newly generated template after
 rotation. For setup details, installation scopes and troubleshooting, see
@@ -208,6 +213,11 @@ Hub and one or more private Bridges; no inbound port is needed on those machines
 For an internet-facing Hub, configure HTTPS, secure cookies, private credentials,
 and persistent SQLite storage. Follow the [deployment guide](docs/deployment.md)
 for account creation, registration policy, backups, and verification.
+
+For a Git-based update or a move to another server, use the shared
+[`hub.env` template](configs/hub.env.example) and the
+[repository deployment checklist](docs/deployment.md#repository-deployment-parity).
+Keep private environment values, SQLite data, and the original JWT secret outside Git.
 
 ## Architecture and data boundaries
 

@@ -501,16 +501,35 @@ func (s *Store) claimAutomationRunForContinue(ctx context.Context, runID, uid, s
 
 // AutomationResult freezes the accepted task's public outcome, never credential/native-resume data.
 type AutomationResult struct {
-	SchemaVersion int                          `json:"schemaVersion"`
-	RunID         string                       `json:"runId"`
-	SubmissionID  string                       `json:"submissionId"`
-	PromptSeq     int64                        `json:"promptSeq"`
-	Title         string                       `json:"title"`
-	EndpointID    string                       `json:"endpointId"`
-	Execution     AutomationExecutionResult    `json:"execution"`
-	Verification  AutomationVerificationResult `json:"verification"`
-	Configuration json.RawMessage              `json:"configuration"`
-	FinishedAt    int64                        `json:"finishedAt"`
+	SchemaVersion  int                          `json:"schemaVersion"`
+	RunID          string                       `json:"runId"`
+	SubmissionID   string                       `json:"submissionId"`
+	PromptSeq      int64                        `json:"promptSeq"`
+	Title          string                       `json:"title"`
+	EndpointID     string                       `json:"endpointId"`
+	Execution      AutomationExecutionResult    `json:"execution"`
+	Verification   AutomationVerificationResult `json:"verification"`
+	Configuration  json.RawMessage              `json:"configuration"`
+	FinishedAt     int64                        `json:"finishedAt"`
+	UsageCutoffSeq int64                        `json:"usageCutoffSeq,omitempty"`
+	UsageSummary   *AutomationUsageSummary      `json:"usageSummary,omitempty"`
+}
+
+// Tokens use the statistics convention: InputTokens excludes cache tokens.
+// Only the outbox receives this small, credential-free frozen projection.
+type AutomationUsageSummary struct {
+	Available        bool    `json:"available"`
+	Reason           string  `json:"reason,omitempty"`
+	Scope            string  `json:"scope"`
+	ThroughSeq       int64   `json:"throughSeq,omitempty"`
+	InputTokens      int64   `json:"inputTokens"`
+	OutputTokens     int64   `json:"outputTokens"`
+	CacheTokens      int64   `json:"cacheTokens"`
+	TotalTokens      int64   `json:"totalTokens"`
+	EstimatedCostUSD float64 `json:"estimatedCostUsd"`
+	CostKnown        bool    `json:"costKnown"`
+	AccountingStatus string  `json:"accountingStatus,omitempty"`
+	AccountingSource string  `json:"accountingSource,omitempty"`
 }
 type AutomationExecutionResult struct {
 	Status         string `json:"status"`

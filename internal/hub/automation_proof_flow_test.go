@@ -4,7 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"mime/quotedprintable"
+	"mime"
+	"mime/multipart"
 	"net/http/httptest"
 	"net/mail"
 	"os"
@@ -212,7 +213,15 @@ func TestAutomationProofFlowRealCoqAndLocalSMTP(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			body, err := io.ReadAll(quotedprintable.NewReader(message.Body))
+			kind, params, err := mime.ParseMediaType(message.Header.Get("Content-Type"))
+			if err != nil || kind != "multipart/alternative" {
+				t.Fatal("completion report is not multipart alternative")
+			}
+			plain, err := multipart.NewReader(message.Body, params["boundary"]).NextPart()
+			if err != nil || !strings.HasPrefix(plain.Header.Get("Content-Type"), "text/plain") {
+				t.Fatal("completion report lacks readable text fallback")
+			}
+			body, err := io.ReadAll(plain)
 			if err != nil {
 				t.Fatal(err)
 			}

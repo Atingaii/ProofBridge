@@ -43,6 +43,74 @@ The web UI is compiled into the binary (`internal/web/static`). When you build
 from source you must build the frontend first (`make frontend` or `make
 build-all`); otherwise the embedded assets are stale.
 
+## Repository deployment parity
+
+A checkout containing the feature commit includes the personal MCP page, AI setup
+prompt, `/mcp`, Skill assets and installer, and SMTP outbox. They run inside the
+Hub binary; the deployment does not need this chat, a Resend/Cloudflare plugin,
+the developer's local startup helper, or files from a workstation. The external
+plugins are setup tools only. DNS verification remains at the mail provider; Hub
+uses its private SMTP credentials at runtime.
+
+Use the same release/branch on the target server and build it with `make build-all`.
+The following is a first-install environment setup for the systemd layout below:
+
+```bash
+sudo install -d -m 0750 /opt/codex-bridge/configs /opt/codex-bridge/data
+# First install only: do not overwrite an existing populated hub.env.
+sudo install -m 0600 configs/hub.env.example /opt/codex-bridge/configs/hub.env
+sudoedit /opt/codex-bridge/configs/hub.env
+```
+
+Replace the private placeholders before starting. Set `AUTOMATION_PUBLIC_URL` to
+the HTTPS origin reachable by the users and Bridges (through VPN when required),
+not the Hub's loopback listener. Both client configurations, the AI setup prompt's
+Skill command, and task links use that address. Set the verified sender and SMTP
+key; ordinary outbound mail uses `SMTP_DELIVERY_MODE=smtp`. The complete variable
+contract is in [the environment reference](dev-workflow.md#environment-variables).
+Self-registration remains opt-in and retains the existing Turnstile requirements.
+
+The checked-in Hub systemd unit optionally reads
+`/opt/codex-bridge/configs/hub.env`; an absent file retains existing YAML-based
+deployments. After installing the binary, create the first administrator only
+when initializing a new database:
+
+```bash
+sudo env CODEX_BRIDGE_ENV_FILE=/opt/codex-bridge/configs/hub.env /usr/local/bin/codex-bridge user
+sudo cp deploy/systemd-hub.service /etc/systemd/system/codex-bridge-hub.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now codex-bridge-hub
+```
+
+The `user` command reads its password from the private environment file; do not put
+it in shell history. It updates an existing account's password, so do not run it
+as an upgrade step. Keep the HTTPS reverse proxy from Option E. If a separate
+static frontend is routed by host, proxy `/mcp` and `/skills/*` to this same Hub
+alongside the existing API, WebSocket, health and download routes.
+
+For subsequent updates, use `git pull --ff-only` on the chosen branch, rebuild,
+take a SQLite online backup and retain the old binary, then replace the Hub binary
+and restart `codex-bridge-hub` when no task is active. Do not copy example configs
+over private configs or create a fresh database during an update. There is no
+need to regenerate user MCP tokens or publish Bridge packages for these Hub/UI
+changes. Changing a client's Hub address still requires it to copy the new setup
+configuration; code deployment cannot rewrite a remote client.
+
+Preserve `HUB_DB_PATH`'s SQLite database **and the original `JWT_SECRET`** when
+moving existing accounts to a new server. That secret also protects the model
+vault and recoverable personal MCP tokens. Preserve the target's private SMTP
+configuration and existing Bridge identities; copy code alone does not migrate
+accounts, histories, credentials or connected workstations. Never operate two
+Hubs on the same SQLite file. Secrets and runtime data are excluded from Git;
+populated `configs/*.env` files are also excluded from the Docker build context.
+
+After deployment, verify `/health`, the served settings page and `/skills/`
+installer, then copy each client's configuration and make the two read-only MCP
+checks from the generated AI prompt. Test mail from the account's saved address;
+SMTP acceptance and actual external receipt are separate checks. Run a proof on
+an already connected Bridge to verify execution; Hub health alone does not prove
+CLI authentication, toolchain availability or VPN reachability.
+
 ## Option A — From source (development / single host)
 
 ```bash
@@ -151,10 +219,19 @@ minimal distroless image.
 # Build (also available as: make docker)
 docker build -t codex-bridge:local .
 
-# Run the Hub (mount your config and a data volume)
+# Fill a private copy of configs/hub.env.example before these commands.
+# First installation only: create an account in the new persistent database.
+docker volume create codex-bridge-data
+docker run --rm \
+  --env-file /absolute/private/hub.env \
+  -v codex-bridge-data:/opt/codex-bridge/data \
+  codex-bridge:local user
+
+# Run the Hub using the same private environment and persistent data volume.
 docker run --rm -p 8088:8088 \
   -e APP_ENV=prod \
-  -v "$PWD/configs:/opt/codex-bridge/configs:ro" \
+  --env-file /absolute/private/hub.env \
+  -e APP_HOST=0.0.0.0 \
   -v codex-bridge-data:/opt/codex-bridge/data \
   codex-bridge:local hub
 ```
@@ -162,14 +239,34 @@ docker run --rm -p 8088:8088 \
 The image `ENTRYPOINT` is the binary and the default `CMD` is `hub`; pass
 `bridge` (or any subcommand) to change the mode. Provide config via a mounted
 `configs/prod.yaml` or via the environment variables listed below.
+The `user` command reads `HUB_USERNAME` and `HUB_PASSWORD` from the same private
+environment file; Hub does not create a login account on startup. Do not repeat
+`user` on normal upgrades because it updates an existing account's password.
 
 Notes:
 
+- Start from `configs/hub.env.example`, fill its private values, and keep the data
+  path at the mounted `/opt/codex-bridge/data`. The explicit `APP_HOST` override
+  above permits container traffic while the systemd template binds loopback.
+  `--env-file` injects variables directly; do not also select an unmounted
+  `CODEX_BRIDGE_ENV_FILE` path. Keep the same `JWT_SECRET` and persistent data
+  volume when replacing the container. Put the TLS reverse proxy in front of it.
+  If you instead use `CODEX_BRIDGE_ENV_FILE` inside the container, mount that
+  file read-only at the selected container path and give UID 65532 read access;
+  a host file owned by another UID with mode `0600` is not readable by this
+  nonroot process. Existing process variables still override the file.
+- Keep the shared `hub.env` values unquoted, including the `SMTP_FROM` display
+  name. Docker's environment-file reader preserves surrounding quotes as part
+  of the value; systemd and the Hub's explicit-file reader accept the template's
+  unquoted interior spaces. Use standalone comment lines and literal single-line
+  values. This environment file is not a shell script; do not source it.
 - A Bridge usually runs on your own workstation next to Codex/Claude, so the
   container path mainly suits the Hub. To run a Bridge in a container you must
   also make the Codex/Claude CLIs and their credentials available inside it.
-- The runtime image is non-root (`distroless ... :nonroot`); ensure mounted
-  volumes are writable by that user.
+- The runtime image is non-root (UID/GID 65532). Its pre-created `data/` directory
+  makes a new named volume writable on first mount. Reuse that volume on upgrades;
+  if binding an existing host directory instead, make it writable by UID 65532
+  before startup. Never initialize two Hub processes against the same database.
 
 ## Option E — Production (systemd + Caddy)
 

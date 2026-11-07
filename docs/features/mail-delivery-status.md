@@ -35,3 +35,17 @@
 为什么仍保留本地预览？本机和自动化验证需要不向外界发信的可观察收件器；它不能冒充生产外发服务。
 
 怎样启用真实邮件？由部署管理员填写标准 SMTP 主机、认证及已验证发件人，选择 `smtp` 后重启 Hub，再由用户测试自己的邮箱。完整变量见 [开发流程](../dev-workflow.md#environment-variables)。
+
+## Deployment Portability
+
+同一仓库提交必须能够在另一台服务器构建并运行相同的 MCP、个人配置页、接入提示词、Skill 安装器和 SMTP outbox；这些能力不能依赖本机未入库的启动脚本、桌面路径或当前聊天的插件。部署使用现有单 Hub 二进制，保留默认仅部署网站的范围，不增加 Bridge 安装包构建要求。
+
+`configs/hub.env.example` 提供生产环境的完整启动占位模板；`deploy/systemd-hub.service` 可选读取固定的私有 `configs/hub.env`，缺少该文件时保留旧 YAML/进程环境行为。Docker 显式用 `--env-file` 注入相同变量。MCP 配置、Skill 安装地址和结果链接由 `AUTOMATION_PUBLIC_URL` 生成，换主机后不用修改源码。完整操作只维护在[部署指南](../deployment.md#repository-deployment-parity)。
+
+代码与构建产物可以入库；环境文件中的 SMTP 凭据、JWT secret 和运行数据库不入库。原地升级或迁移账户时必须保留 SQLite 与原 JWT secret，因为个人 MCP token 和模型 vault 都依赖该密钥。新增服务器首次运行使用新的私有配置与数据库；复制代码不会自动复制旧账号、已连接机器或任务历史。
+
+Docker 运行保持 distroless nonroot。镜像内的持久化 `data/` 预先归 UID/GID 65532，首次挂载全新 named volume 时继承可写目录，而不是要求用户手动进入容器修权限。首次初始化用同一镜像的 `user` 子命令读取同一私有 env 和数据卷；Hub 启动本身不创建账号。更新复用原卷和 JWT，不能再次运行首次建用户命令来隐式改密码。绑定宿主机已有目录时，目录权限仍由宿主管理员提供。构建上下文排除填实的 `configs/*.env`。
+
+退出条件：用不含本机 `data/`、私有配置和 helper 的干净仓库副本构建 Hub，在独立端口/全新测试库中确认嵌入新页面与 Skill 资产可用、两个客户端配置和安装命令均引用配置的 HTTPS Hub、MCP 能读取账户上下文，环境重载后 token 和账户保持可用。SMTP 外部收件与 Linux systemd 实际运行仍须在目标环境单独验收，不能由本机隔离测试代替。
+
+Docker 另以全新 named volume 验证 nonroot 下首次建用户、Hub 健康、MCP 和重启后 SQLite/PAT 连续性；仅检查 Dockerfile 文本不能代替容器运行。测试仅操作独立命名的容器、卷、端口和镜像，不复用生产资源，不发外部邮件。

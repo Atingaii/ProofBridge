@@ -75,6 +75,19 @@ integration, and review in order. This deliberately trades candidate parallelism
 for direct, visible work in the user's selected checkout. The final graph cannot
 become `completed` unless the reviewer node is `succeeded`.
 
+For a retained run without pending deletion, cancellation acknowledgement must
+promote a validated current task's
+`run.cancelled` to the existing public canceled run, including while the run is
+`canceling`. The canceling dispatch guard still rejects starts and ordinary
+completion as reasons to resume work. The public terminal update uses the
+existing allowed-transition CAS: if the acknowledgement wins, a later timeout
+must not append a fallback or replace its error/result; if the timeout wins,
+a late acknowledgement must not overwrite that factual timeout. Repeated
+acknowledgements keep one public terminal result and one submission completion
+notification. An invalid task/attempt/digest is not an acknowledgement. See
+`internal/hub/task_graph.go:handleTaskGraphEvent` and
+`internal/store/store.go:CancelOrchestrationRunIfStillCanceling`.
+
 The `orchestration-plan-workspace` rollout prepends a planning barrier without
 replacing the ordinary topology. Its stable default is `all`:
 

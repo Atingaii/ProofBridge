@@ -840,7 +840,9 @@ func (s *Server) handleTaskGraphEvent(ctx context.Context, payload protocol.Orch
 	if err != nil {
 		return true, err
 	}
-	if run.DeleteRequested || run.Status == store.OrchestrationCanceling {
+	// Canceling blocks further work, but a validated task cancellation is the
+	// Bridge acknowledgement that must settle the public run before timeout.
+	if run.DeleteRequested || (run.Status == store.OrchestrationCanceling && status != store.TaskCanceled) {
 		return true, nil
 	}
 	if status == store.TaskRunning {
@@ -936,8 +938,10 @@ func (s *Server) handleTaskGraphEvent(ctx context.Context, payload protocol.Orch
 		if status == store.TaskCanceled {
 			runStatus = store.OrchestrationCanceled
 		}
-		if err := s.store.UpdateOrchestrationRunStatus(ctx, payload.RunID, runStatus, payload.Error); err != nil {
+		if changed, err := s.store.UpdateOrchestrationRunStatusIfAllowed(ctx, payload.RunID, runStatus, payload.Error); err != nil {
 			return true, err
+		} else if !changed {
+			return true, nil
 		}
 		kind := "run.error"
 		if status == store.TaskCanceled {
