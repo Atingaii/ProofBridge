@@ -789,3 +789,7 @@ Decision details: [ADR 022](adr/022-canceled-planning-native-identity.md).
 Historical recovery scheduling uses `usageModelRecovery: 2` capabilities, persistent
 zero-usage retry markers and serialized private scans. Completed runs with earlier
 syncs remain eligible when planning identity is missing. See [ADR 023](adr/023-retryable-native-model-recovery.md).
+
+内网部署可分离浏览器/结果地址与 MCP 客户端地址：automation.public_url 保留内网网页，
+automation.mcp_url 指定回环 MCP；单 Hub/单 SQLite/反向 Bridge 边界不变。
+详见[8088 内网部署](deployment-8088.md)。

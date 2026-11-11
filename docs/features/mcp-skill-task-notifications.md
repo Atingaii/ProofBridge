@@ -477,3 +477,7 @@ python3 scripts/mcp-batch.py --url 'https://<实验室Hub地址>/mcp' --manifest
 的 MCP 连接、固定 CLI transport fixture 调用实际 Coq、本地 SMTP TCP 收件。
 客户端连接成功不代表模型已自然语言路由，也不等于整个原生证明会话已经实测。
 实验室 VPN 开关/重连、部署地址和实际外部邮箱投递需使用部署环境继续验收；本次不修改在线实例。
+
+内网回环接入可用 automation.mcp_url 独立配置 MCP 基址，automation.public_url 保留浏览器结果与邮件地址。
+MCP override 仅接受 HTTPS 或 HTTP 回环；显式回环 override 下，浏览器结果地址可为 HTTP 私有 IP。
+默认未配置 override 的部署保持原 HTTPS/回环校验，见[内网部署](../deployment-8088.md)。

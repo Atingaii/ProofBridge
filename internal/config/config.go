@@ -20,6 +20,7 @@ type AppConfig struct {
 type AutomationConfig struct {
 	Enabled   bool       `yaml:"enabled"`
 	PublicURL string     `yaml:"public_url"`
+	MCPURL    string     `yaml:"mcp_url"`
 	SMTP      SMTPConfig `yaml:"smtp"`
 }
 

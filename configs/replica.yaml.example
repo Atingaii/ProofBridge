@@ -7,7 +7,7 @@ gateway:
   port: 18089
 hub:
   db_path: /opt/proofbridge/data/codex-bridge.db
-  cookie_secure: true
+  cookie_secure: false
   allowed_origins: []
   feature_rollouts:
     strict-workspace: all
@@ -21,3 +21,4 @@ auth:
 automation:
   enabled: true
   public_url: ""
+  mcp_url: ""

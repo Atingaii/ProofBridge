@@ -105,6 +105,8 @@ observability:
 automation:
   enabled: true
   public_url: ""
+  # Optional client-facing MCP base; empty inherits public_url.
+  mcp_url: ""
   smtp:
     delivery_mode: smtp # Set preview for a local sink that does not forward mail.
     host: ""

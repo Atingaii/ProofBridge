@@ -12,6 +12,7 @@ func TestAutomationDefaultsAndEnvironment(t *testing.T) {
 	}
 	t.Setenv("AUTOMATION_ENABLED", "false")
 	t.Setenv("AUTOMATION_PUBLIC_URL", "https://lab.example.test")
+	t.Setenv("AUTOMATION_MCP_URL", "http://127.0.0.1:8088")
 	t.Setenv("SMTP_HOST", "127.0.0.1")
 	t.Setenv("SMTP_DELIVERY_MODE", "preview")
 	t.Setenv("SMTP_PORT", "2525")
@@ -22,7 +23,7 @@ func TestAutomationDefaultsAndEnvironment(t *testing.T) {
 	t.Setenv("SMTP_ALLOW_INSECURE", "true")
 	t.Setenv("SMTP_TIMEOUT", "3s")
 	applyEnv(&cfg)
-	if cfg.Automation.Enabled || cfg.Automation.PublicURL != "https://lab.example.test" || cfg.Automation.SMTP.Host != "127.0.0.1" || cfg.Automation.SMTP.DeliveryMode != "preview" || cfg.Automation.SMTP.Port != 2525 || cfg.Automation.SMTP.Password != "fixture-secret" || cfg.Automation.SMTP.StartTLS || !cfg.Automation.SMTP.AllowInsecure || cfg.Automation.SMTP.Timeout.Duration != 3*time.Second {
+	if cfg.Automation.MCPURL != "http://127.0.0.1:8088" || cfg.Automation.Enabled || cfg.Automation.PublicURL != "https://lab.example.test" || cfg.Automation.SMTP.Host != "127.0.0.1" || cfg.Automation.SMTP.DeliveryMode != "preview" || cfg.Automation.SMTP.Port != 2525 || cfg.Automation.SMTP.Password != "fixture-secret" || cfg.Automation.SMTP.StartTLS || !cfg.Automation.SMTP.AllowInsecure || cfg.Automation.SMTP.Timeout.Duration != 3*time.Second {
 		t.Fatal("automation environment not applied")
 	}
 }

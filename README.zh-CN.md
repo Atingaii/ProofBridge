@@ -289,3 +289,7 @@ Trellis 是可选开发工具，配置见[开发工作流](docs/dev-workflow.md#
 
 
 复现源机 8088 动态版本：[部署手册](docs/deployment-8088.md)与[AI 提示词](docs/deploy-8088-ai-prompt.md)。
+
+内网复现模式：网页 `http://服务器IP:8088`、MCP `http://127.0.0.1:8088/mcp`；
+分别配置 `AUTOMATION_PUBLIC_URL` 与 `AUTOMATION_MCP_URL`。
+回环 MCP 适用于同机 CLI 或已建立本地端口转发的客户端，详见上述部署手册。

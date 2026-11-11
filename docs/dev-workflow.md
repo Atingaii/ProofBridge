@@ -94,7 +94,8 @@ should list names and point here for detail.
 | `TURNSTILE_SECRET` | Server-only Cloudflare Turnstile Siteverify secret | config `auth.registration.turnstile_secret` |
 | `TURNSTILE_HOSTNAME` | Expected production hostname returned by Siteverify | config `auth.registration.turnstile_hostname` |
 | `AUTOMATION_ENABLED` | Enable authenticated `/mcp`, personal connection settings and task email processing | config `automation.enabled`; default `true` |
-| `AUTOMATION_PUBLIC_URL` | Canonical Hub base URL used in MCP templates, Skill commands and task email links; use the address reachable through your lab/VPN and HTTPS outside loopback | config `automation.public_url`; empty only falls back for a loopback Hub listener |
+| `AUTOMATION_PUBLIC_URL` | Browser/result/email base URL; also MCP base unless independently overridden. HTTPS normally; HTTP private IP allowed with an explicit valid loopback MCP URL | config `automation.public_url`; empty only falls back for a loopback Hub listener |
+| `AUTOMATION_MCP_URL` | Optional independent MCP base URL (without /mcp), e.g. http://127.0.0.1:8088 for same-server CLI or a client local tunnel. HTTPS or HTTP loopback only; does not change task result links | config `automation.mcp_url`; empty inherits the public URL |
 | `SMTP_HOST` | Hub-side SMTP server hostname | config `automation.smtp.host`; empty disables ready mail status |
 | `SMTP_DELIVERY_MODE` | `smtp` for outbound SMTP; `preview` for a local sink that does not forward mail; unknown values disable mail readiness | config `automation.smtp.delivery_mode`; default `smtp` |
 | `SMTP_PORT` | SMTP port | config `automation.smtp.port`; default `587` |
@@ -227,7 +228,7 @@ Follow-up tasks use the same run and native context. Interactive observation use
 bounded waits; ending observation does not cancel execution.
 
 If configuration cannot be loaded, check login, VPN and `AUTOMATION_ENABLED` /
-`AUTOMATION_PUBLIC_URL`, then use **Reload**. If a settings save reports a version
+`AUTOMATION_PUBLIC_URL` / `AUTOMATION_MCP_URL`, then use **Reload**. If a settings save reports a version
 conflict, the unsaved draft remains; reload before saving again. If mail is not
 configured, use interactive monitoring or ask the administrator to configure SMTP.
 For delivery errors, ask the client to query `proofbridge_get_notifications` and

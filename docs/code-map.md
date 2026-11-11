@@ -492,3 +492,7 @@ Round totals and original call costs are projected by
 `frontend/src/app/lib/roundModelUsage.ts:roundModelUsage`.
 
 独立部署模板：`deploy/systemd-hub-8088.service`、`deploy/Caddyfile` 与 `configs/replica.yaml.example`；步骤见[8088 部署](deployment-8088.md)。
+
+`internal/hub/automation_access.go:automationMCPURL` 生成个人 MCP 基址，
+`internal/hub/automation_access.go:automationPublicURL` 保留网页结果链接，
+`internal/config/automation.go:applyAutomationEnvWithLookup` 加载独立 MCP 地址。

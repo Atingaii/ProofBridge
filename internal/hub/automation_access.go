@@ -36,14 +36,36 @@ func (s *Server) automationPublicURL() (string, error) {
 			return "", &operationError{503, "AUTOMATION_URL_MISSING", "请由部署管理员设置 AUTOMATION_PUBLIC_URL，然后重新复制配置。"}
 		}
 	}
+	// An explicit loopback MCP endpoint allows the browser/result origin to
+	// remain on the private HTTP LAN without exposing remote HTTP MCP templates.
+	allowPrivateHTTP := false
+	if override := strings.TrimSpace(s.cfg.Automation.MCPURL); override != "" {
+		if clean, err := validatedAutomationURL(override, false); err == nil {
+			u, _ := url.Parse(clean)
+			ip := net.ParseIP(u.Hostname())
+			allowPrivateHTTP = u.Hostname() == "localhost" || ip != nil && ip.IsLoopback()
+		}
+	}
+	return validatedAutomationURL(raw, allowPrivateHTTP)
+}
+
+func (s *Server) automationMCPURL() (string, error) {
+	if raw := strings.TrimSpace(s.cfg.Automation.MCPURL); raw != "" {
+		return validatedAutomationURL(raw, false)
+	}
+	return s.automationPublicURL()
+}
+
+func validatedAutomationURL(raw string, allowPrivateHTTP bool) (string, error) {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "https" && u.Scheme != "http") {
 		return "", &operationError{503, "AUTOMATION_URL_INVALID", "自动化访问地址配置无效，请联系部署管理员。"}
 	}
 	if u.Scheme == "http" && u.Hostname() != "localhost" {
 		ip := net.ParseIP(u.Hostname())
-		if ip == nil || !ip.IsLoopback() {
-			return "", &operationError{503, "AUTOMATION_TLS_REQUIRED", "内网 MCP 地址需使用 HTTPS；本地回环测试可使用 HTTP。"}
+		if ip == nil || !(ip.IsLoopback() || allowPrivateHTTP && ip.IsPrivate()) {
+			return "", &operationError{503, "AUTOMATION_TLS_REQUIRED", "MCP 地址需使用 HTTPS；本地回环可使用 HTTP。内网 HTTP 网页须另行配置回环 MCP 地址。"}
 		}
 	}
 	return raw, nil
@@ -136,7 +158,7 @@ func (s *Server) handleAutomationAccess(w http.ResponseWriter, r *http.Request, 
 	if !s.automationManagementReady(w, r) {
 		return
 	}
-	base, err := s.automationPublicURL()
+	base, err := s.automationMCPURL()
 	if err != nil {
 		writeOperationError(w, err)
 		return

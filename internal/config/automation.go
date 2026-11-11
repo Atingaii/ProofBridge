@@ -14,6 +14,9 @@ func applyAutomationEnvWithLookup(cfg *Config, lookup envLookup) {
 	if v, ok := lookup("AUTOMATION_PUBLIC_URL"); ok {
 		cfg.Automation.PublicURL = v
 	}
+	if v, ok := lookup("AUTOMATION_MCP_URL"); ok {
+		cfg.Automation.MCPURL = v
+	}
 	if v, ok := lookup("SMTP_HOST"); ok {
 		cfg.Automation.SMTP.Host = v
 	}

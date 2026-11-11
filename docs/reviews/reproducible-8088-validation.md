@@ -2,7 +2,21 @@
 
 发布版本分支：proofbridge-8088-20261111（下载后记录完整 commit 并据此固定版本）。部署与 AI 提示词见[部署手册](../deployment-8088.md)。
 
-## 来源与范围
+## 内网回环方案修订验收
+
+后续修订按用户现用方式设置：网页 HTTP 私有 IP:8088、MCP HTTP 127.0.0.1:8088/mcp。
+新增 AUTOMATION_MCP_URL 独立配置；下面的 HTTPS 记录是初版验收，当前默认步骤以[部署手册](../deployment-8088.md)为准。
+
+- Go 全量测试与候选二进制构建通过；新增测试覆盖 env 文件/进程优先级、两客户端配置、
+  LAN 结果链接、默认 HTTPS 兼容、非法 override 与地址边界。
+- Go MCP SDK 通过真实 loopback httptest listener 调用 get_context/list_endpoints，未执行模型任务。
+- Caddy + 独立 Hub/SQLite 在临时 14289/14488 端口实测：真实 LAN IP HTTP 登录，
+  同一入口的回环 MCP 配置与两项 JSON-RPC 只读调用成功；安装脚本生成 LAN 下载地址，下载 SHA 匹配。
+- 原 8088 入口 PID 保持不变，健康正常；未修改其配置、二进制、数据库或运行中的 Bridge。
+- 文档检查 0 错误、8 个既有锚点警告；前端未变更，沿用下列已通过的浏览器回归。
+- 未验收其他电脑的实际 SSH 转发或真实模型/外部邮件；文档提供转发步骤并说明同机条件。
+
+## 初版来源与范围
 
 源机后端源码基线为 e375f57748b0292c647646189e6b080671fbc157；该源码工作树无额外后端补丁。
 发布基于 e3d6efd0bc7b7cf25c772e2db02a096c0e309af9，保留其 GitHub Skill 分发修复，

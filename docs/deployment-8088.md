@@ -1,17 +1,20 @@
-# 8088 动态版本的独立部署
+# 8088 内网 IP 网页与回环 MCP 部署
 
-此版本把源机动态前端和配套后端纳入同一份源码，使用 Caddy 直接代理 Hub。
-源机原有 IP、回环 MCP 响应替换和静态资源绝对路径无需搬迁。
-[AI 部署提示词](deploy-8088-ai-prompt.md)可直接复制到目标机。
-设计与兼容边界见[功能说明](features/reproducible-8088-deployment.md)。
+默认复现方式：网页 http://服务器内网IP:8088，Codex/Claude MCP http://127.0.0.1:8088/mcp，
+Skill 来自 GitHub proofbridge-skill-v1.1.0。无需域名或证书。
+文中的 10.0.0.10 是示例，请替换为目标服务器的实际内网/VPN IP。
+[AI 提示词](deploy-8088-ai-prompt.md)可直接复制到目标机；
+[设计与边界](features/reproducible-8088-deployment.md)说明配置与兼容关系。
 
-## 固定源码与构建
+## 1. 固定源码与构建
+
+准备 Linux、与 go.mod 匹配的 Go、Node 20+、npm、Caddy 和 systemd。
 
 ```sh
 git clone --branch proofbridge-8088-20261111 https://github.com/Atingaii/ProofBridge.git
 cd ProofBridge
 git rev-parse HEAD
-# 保存以上完整 commit；后续机器使用 git checkout <完整 commit>。
+# 记录完整 commit，其他机器复现时 git checkout <该 commit>。
 cd frontend
 npm ci
 cd ..
@@ -19,74 +22,117 @@ make frontend-8088
 CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/codex-bridge .
 ```
 
-Go 版本以 go.mod 为准，Node 20+。构建目标固定 VITE_LEADING=true 和
-VITE_OFFICIAL_CODEX_MODELS=true；重新执行普通前端构建会取消这两个开关。
-源机 UUID 与简短接入提示词修复已在源码中，构建输出包含于 Go 二进制。
+frontend-8088 固定动态编排和官方 Codex 模型选择开关；重新普通构建会取消开关。
+HTTP UUID 修复及简短 MCP 提示词在源码中，Go 二进制包含重建后的页面。
 
-## Hub 服务与私有配置
-
-安装到 /opt/proofbridge，保留 bin/、configs/、data/ 三个目录。
-将 bin/codex-bridge、configs/replica.yaml.example、configs/replica.env.example
-复制到对应目录。后两者分别复制为 replica.yaml 和 replica.env。
-将环境文件权限设为 600，填写随机 JWT_SECRET（openssl rand -hex 32）、新管理员密码，
-AUTOMATION_PUBLIC_URL 使用真实客户端可达的 HTTPS URL，例如 https://bridge.example.com:8088。
-在 /opt/proofbridge 下初始化账户：
+## 2. 安装与私有配置
 
 ```sh
-CODEX_BRIDGE_ENV_FILE=/opt/proofbridge/configs/replica.env ./bin/codex-bridge user
+sudo mkdir -p /opt/proofbridge/bin /opt/proofbridge/configs /opt/proofbridge/data
+sudo install -m 755 bin/codex-bridge /opt/proofbridge/bin/codex-bridge
+sudo install -m 600 configs/replica.yaml.example /opt/proofbridge/configs/replica.yaml
+sudo install -m 600 configs/replica.env.example /opt/proofbridge/configs/replica.env
 ```
 
-安装 deploy/systemd-hub-8088.service 为 /etc/systemd/system/proofbridge-hub.service，
-执行 systemctl daemon-reload 和 systemctl enable --now proofbridge-hub。
-默认上游只监听 127.0.0.1:18089；工作目录改变时同步修改配置、路径和 unit。
-SMTP 按[环境变量与邮件设置](dev-workflow.md#environment-variables)独立配置；默认没有发送能力。
+编辑私有 replica.env：生成随机 JWT_SECRET（openssl rand -hex 32）和新管理员密码，
+保留数据库路径，并将示例内网 IP 换成目标服务器实际地址。核心值：
 
-## Caddy 入口
+```ini
+APP_ENV=replica
+APP_HOST=127.0.0.1
+APP_PORT=18089
+HUB_COOKIE_SECURE=false
+AUTOMATION_PUBLIC_URL=http://10.0.0.10:8088
+AUTOMATION_MCP_URL=http://127.0.0.1:8088
+```
 
-安装 Caddy 后，将 deploy/Caddyfile 安装到 /etc/caddy/Caddyfile。
-使用 systemctl edit caddy 添加环境（这两个值不会从 replica.env 自动加载）：
+AUTOMATION_PUBLIC_URL 用于网页结果/详情与邮件链接；AUTOMATION_MCP_URL 用于两客户端配置，
+填写基址，不附加 /mcp。两者分离，无需复制原机的 JSON 地址重写代理。
+HTTP 页面使用 HUB_COOKIE_SECURE=false；不将明文 HTTP 内网方案直接暴露到公网。
+在安装目录初始化新账户：
+
+```sh
+cd /opt/proofbridge
+sudo env CODEX_BRIDGE_ENV_FILE=/opt/proofbridge/configs/replica.env ./bin/codex-bridge user
+```
+
+从源码目录安装 deploy/systemd-hub-8088.service 为 /etc/systemd/system/proofbridge-hub.service，
+执行 sudo systemctl daemon-reload 和 sudo systemctl enable --now proofbridge-hub。
+Hub 仅监听回环 18089，数据与 JWT 独立于源服务器，不复制其账号、历史或模型登录。
+
+## 3. HTTP 8088 代理
+
+将源码 deploy/Caddyfile 安装到 /etc/caddy/Caddyfile。
+执行 sudo systemctl edit caddy 添加：
 
 ```ini
 [Service]
-Environment=PROOFBRIDGE_SITE_ADDRESS=https://bridge.example.com:8088
+Environment=PROOFBRIDGE_SITE_ADDRESS=http://:8088
 Environment=PROOFBRIDGE_UPSTREAM=127.0.0.1:18089
 ```
 
-先用同样的环境运行 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile，
-再执行 systemctl daemon-reload 和 systemctl restart caddy。
-DNS 指向目标机；自动签发公网证书时按 Caddy 要求开放挑战端口或配置已有证书。
-若使用 443，去掉两个 URL 中的 :8088；若需要 HTTP 8088 兼容入口，可另设
- http://bridge.example.com:8088 站点重定向到正式 HTTPS 站点。
-内网地址可在站点块使用 tls internal，并将 Caddy 根证书安装到所有客户端信任库。
-未设置变量时默认 localhost 和上游 8088，沿用常规 Hub 布局；独立部署务必设置上面的环境变量。
-localhost 会使用本地证书；不能把它作为其他机器的 MCP URL。
-仅做 LAN HTTP 页面测试时，可显式使用 http://目标地址:8088 并关闭安全 Cookie，
-但远程 MCP 仍需 HTTPS。无需放宽 Hub 的 TLS 校验，也不要复制旧代理的 JSON 重写。
+明确使用 http://:8088，使同一个入口既支持内网 IP，也支持服务器本机 127.0.0.1。
+保持 Host 和转发头，不添加针对 /mcp 的 Host 改写。
+验证后重启 Caddy（仅目标新服务器）：
 
-Caddy 保留外部 Host 并设置转发头；Hub 返回本站下载地址，AUTOMATION_PUBLIC_URL
-负责 MCP 与结果地址。Skill 安装脚本固定 GitHub tag，不随站点变化。
-参考 [Caddy 环境替换](https://caddyserver.com/docs/caddyfile/concepts#environment-variables)
-与[反向代理](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)。
+```sh
+sudo env PROOFBRIDGE_SITE_ADDRESS=http://:8088 PROOFBRIDGE_UPSTREAM=127.0.0.1:18089 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+sudo systemctl daemon-reload
+sudo systemctl enable --now caddy
+sudo systemctl restart caddy
+```
 
-## Bridge 下载与接入
+目标服务器防火墙仅向需要访问的内网/VPN 放行 TCP 8088；无需开放 18089。
+浏览器打开 http://10.0.0.10:8088；服务器本机检查 http://127.0.0.1:8088/health。
+Caddy 变量属于代理进程，不会自动从 replica.env 加载。
 
-当前架构的 Hub 本身可用于同平台下载。其他平台从与此部署相同的 commit 构建后，
-放在 /opt/proofbridge/bin/downloads/codex-bridge-<linux|darwin>-<amd64|arm64>。
-仅按需要构建目标平台，例如 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build
- -ldflags "-s -w" -o bin/downloads/codex-bridge-linux-arm64 .；全部四平台可显式运行 make bridge-downloads。
-不要设置指向旧服务器的 HUB_BRIDGE_DOWNLOAD_URL。
-在新站创建账户与端点注册令牌后，使用新站生成的端点安装命令。
-CLI 登录和项目权限保留在执行端；Hub 登录不会提供模型凭据。
+## 4. MCP 与 Skill
 
-## 验收与回滚
+在新站个人中心复制配置，自动生成如下结构，Token 来自新站当前账户：
 
-- 运行 npm test、关键浏览器回归、go test ./...、make doc-lint；健康地址为 /health。
-- 登录新站，确认没有固定轮次选择器，动态编排与官方 Codex 选择可见；原生问答还依赖支持 v3 的 Bridge。
-- 在新站个人中心复制 Codex/Claude 两套提示词：MCP URL 必须为新站 /mcp，Skill URL 必须为 GitHub 固定 tag，Token 属于新站当前账户。
-- 检查 /install.sh 与实际目标平台下载能成功返回；不以页面上存在下载按钮代替下载验收。
-- 使用真实 MCP 客户端调用 proofbridge_get_context、proofbridge_list_endpoints；再用支持的真实模型验收同一 run 的消息与问答。
-- 结果与详情链接必须回到新站；不回显 Token。供应商 500、模型权限缺失或端点离线分别记录，不能称为模型通过。
-- 升级前备份 SQLite（停 Hub 后复制或使用 SQLite backup）、JWT、配置及旧二进制。验证候选服务后切流量。
-  回滚恢复旧二进制与对应配置后重启；保留数据和 JWT，除非恢复数据库已明确获准。
+```toml
+[mcp_servers.proofbridge]
+url = "http://127.0.0.1:8088/mcp"
+http_headers = { Authorization = "Bearer <新站自己的Token>" }
+```
 
-源码版本不包含源机历史、模型登录或邮件凭据，也不承诺逐字节相同的前端 hash。
+Codex/Claude 运行在这台服务器上时，127.0.0.1 可直接使用。
+若客户端运行在其他电脑，先在那台电脑建立本地转发：
+
+```sh
+ssh -N -L 127.0.0.1:8088:127.0.0.1:8088 user@10.0.0.10
+```
+
+保持转发连接，再使用上面的 MCP 配置。若客户端 8088 已占用，可用本地 18088 转发到
+服务器 8088，并仅将该客户端 MCP URL 改成 http://127.0.0.1:18088/mcp。
+没有同机运行或本地转发时，其他电脑上的 127.0.0.1 不会自动连接服务器。
+
+Skill 安装命令仍由新站生成，两层下载均来自固定 GitHub tag，不随内网 IP 变化。
+执行安装提示词，只调用 proofbridge_get_context 与 proofbridge_list_endpoints 做只读检查。
+不要把源站个人 Token 写进文档或复用到目标站。
+
+## 5. Bridge、模型与下载
+
+在新站创建端点注册令牌，使用新站生成的安装命令接入真实 Bridge。
+选择明确的项目目录与已有 CLI 登录；Hub 账户不提供模型凭据。
+源机当前架构 Hub 可直接作为同平台下载；其他平台从相同 commit 构建，置于
+/opt/proofbridge/bin/downloads/codex-bridge-<linux|darwin>-<amd64|arm64>。
+仅构建需要的平台；显式需要全部四平台时运行 make bridge-downloads。
+HUB_BRIDGE_DOWNLOAD_URL 留空，下载和安装脚本应使用目标站 IP，不指向源机。
+SMTP 独立按[环境变量](dev-workflow.md#environment-variables)配置，默认不发送邮件。
+
+## 6. 验收、原服务保护与回滚
+
+- 独立目标部署不修改源机现有 8088 的代理、Hub、Bridge、配置与数据库。已占用 8088 时先识别进程，不直接覆盖。
+- 健康、登录、页面资源、动态编排和官方模型选择正常；原生问答依赖支持 v3 的 Bridge。
+- 从内网 IP 打开个人中心，MCP 仍为 http://127.0.0.1:8088/mcp；Skill 为 GitHub 固定 tag。
+- 实际从新站下载目标平台文件并核对；MCP 调用两项只读工具；结果链接回到内网 IP 网页。
+- 真实任务使用目标 Bridge 与可用模型验收，同一 run 的追加消息与问答保持连续；未验证项如实列出。
+- 升级前备份数据库、JWT、配置和二进制，候选端口验收后再切换；回滚恢复旧二进制与配置，保留数据和 JWT。
+
+## 可选 HTTPS 部署
+
+如需其他电脑直接通过网络访问 MCP，可另选 HTTPS：Caddy 站点改为实际 HTTPS 地址，
+HUB_COOKIE_SECURE=true，AUTOMATION_PUBLIC_URL=同一地址，清空 AUTOMATION_MCP_URL
+或设置为另一个可达 HTTPS 基址。私有 CA 须安装到客户端信任库。
+默认文档采用内网 HTTP 网页与回环 MCP，不要求此可选方案。

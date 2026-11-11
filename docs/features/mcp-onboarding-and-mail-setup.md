@@ -92,3 +92,6 @@ ArraySet 真实运行保持 `orc_ed3af20a59e135a9553f55620c9f4aab`，目录为 `
 证明失败能改弱命题吗？不能。保留原始模型与主定理；若发现模型问题，报告具体障碍，不通过axiom、Admitted或弱化定义宣称成功。
 
 MCP 能调用为何 Skill 还未通过？客户端可能直接选择 MCP 工具。当前已保存探针只证明两项查询成功，没有观察到 Skill 加载 trace。严格失败保留；安装成功、静态别名或模型自述不能补足加载证据。
+
+内网网页和 MCP 地址分离：个人配置优先读取 automation.mcp_url，为空才继承 public_url；
+结果/邮件链接始终使用 public_url。HTTP 回环接入和其他电脑的本地转发见[8088 部署](../deployment-8088.md)。
