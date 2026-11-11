@@ -3,10 +3,26 @@
 This is the single overview for runtime architecture. Detailed rationale lives
 in ADRs; implementation paths live in [docs/code-map.md](code-map.md).
 
+Implemented on the MCP feature branch and running locally at `http://127.0.0.1:8088`; laboratory/VPN and public production deployment remain unverified: [MCP + Skill access and task email](features/mcp-skill-task-notifications.md), [ADR-029](adr/029-hub-mcp-and-submission-notifications.md). User-owned Bridges retain workspace execution; Hub adds an authenticated automation entry and submission-level notification outbox. [The local validation record](reviews/proofbridge-mcp-local-validation.md) separates code checks, client calls, Skill loading, proof results and mail delivery. [The source audit](reviews/proofbridge-mcp-current-state.md) records historical wording that must not be mistaken for current implementation facts.
+
+Recommended Skill installation downloads the installer and assets from a fixed
+official GitHub Skill release. Embedded `/skills/*` remains compatible; MCP keeps
+the actual Hub URL and its existing network/TLS trust requirements. See the
+[distribution contract](features/github-skill-distribution.md).
+
+The public [orchestration design article](features/orchestration-design-article.md)
+is a lazy-loaded static page at `/blog/orchestration-design`. Like the help page,
+it skips account bootstrap; it does not query runs or other private API data.
+
 User-facing production rollouts are evaluated by `internal/rollout` from
 `hub.feature_rollouts`. The Hub enforces gates on protected operations and
 returns enabled keys in `user.features`; browser code never determines rollout
 membership itself. See [ADR-010](adr/010-user-feature-rollouts.md).
+
+Administrator authorization, user metadata, and administrator rollout membership
+share `internal/hub/server.go:isAdminUser`: the bootstrap administrator plus the
+optional `auth.admin_usernames` allowlist. See
+[ADR-018](adr/018-additional-administrator-usernames.md).
 
 The Hub owns the reviewed, CLI-scoped model reasoning and Claude-context policy
 in `internal/hub/model_catalog.go`; it resolves immutable saved-preset and
@@ -15,7 +31,11 @@ decrypts credentials and materializes native configuration. It does not infer
 capabilities or create a Codex model catalog. Codex gets `config.toml` and
 `auth.json`; Claude Code gets `settings.json`, including the selected
 `effortLevel` and Hub-reviewed context values. See
-[ADR-014](adr/014-cross-cli-model-effort-values.md).
+[ADR-021](adr/021-refreshable-model-catalog.md).
+The Hub refreshes public model metadata and reference prices every six hours,
+loads an atomic last-good cache beside its database, and falls back to compiled
+metadata offline. Request paths read only memory; vendor credentials are never
+sent to the catalog.
 
 ```text
 Browser UI (one selected run stream)
@@ -98,6 +118,72 @@ review-required approval pipeline).
 The orchestration UI uses HTTP for create/continue/cancel plus a run-scoped
 WebSocket for event streaming:
 
+Leading builds (`VITE_LEADING=true`) create `executionMode=dynamic` runs. The
+Hub persists `orchestration_runs.execution_mode`; historical rows default to
+`bounded`. Dynamic graphs retain completion/stagnation checks but have no total
+round limit. Node-local `MaxTurns=1` is independent of that policy.
+`orchestration_messages` persists idempotent live instructions on the same run;
+`orchestration_input` and `orchestration_input_status` connect Hub and Bridge.
+Queued/sending receipts remain distinct from native delivery and execution.
+The graph's input version invalidates verdicts for superseded instructions,
+and later workers receive delivered instructions in the acceptance contract.
+Instruction acceptance and graph completion share a Hub critical section.
+Two frontend hosts share one Hub/SQLite/Bridge pool; never run competing
+schedulers against the same database. See
+[dynamic orchestration and input](features/dynamic-orchestration-input.md).
+
+Native structured questions use the same run-scoped WebSocket without creating
+a new orchestration prompt or run. Codex synchronous requests answer their
+original JSON-RPC call; Codex async `agentMessage` questions carry a native
+`questionItemId` and are answered within the same CLI thread via `turn/steer`
+or, once its native turn has ended, `turn/start`. The Bridge keeps the pending
+question and sole event reader alive until delivery or cancellation.
+`internal/protocol/envelope.go:UserInputRequestPayload`
+defines the Bridge-owned question, answer, status, and snapshot frames.
+`internal/hub/user_input.go:handleUserInputFromBridge` verifies the owning
+Bridge and the `native-user-input` rollout; the browser response is checked
+against the authenticated run before it is sent to that Bridge. The Bridge
+holds the live native callback, so questions and answers are not written into
+Hub SQLite events or public shares. A refreshed browser requests a snapshot;
+only an active native process can confirm an outstanding question. Approval
+decisions remain on their separate permission path. See
+[native structured user input](features/native-structured-user-input.md).
+
+Hub query rejections carry the original `syncId` in
+`internal/protocol/envelope.go:UserInputStatusPayload` and are decoded separately
+from request statuses. They report route failure, never delivery or closure;
+only a matching current run/query may update the query notice. This additive
+repair needs a matching Hub/UI deployment, not a Bridge upgrade. See
+[ADR 024](adr/024-native-structured-user-input.md#addendum-correlated-sync-rejection-2026-10-03).
+
+Participant labels use the native worker slot independently of task role and
+model name. Claude's question helper binds that slot at session creation and
+updates its turn/role before a new prompt is written. The browser keeps
+multi-question drafts in memory while navigating and submits one answer map.
+See [participant identity and question flow](features/participant-identity-and-question-flow.md).
+
+The Bridge retains a bounded, content-free terminal receipt window after a
+native request closes. An owning browser may make a read-only sync for a
+finished run to recover a lost delivery acknowledgement; Hub still rejects
+answers once the run is no longer active. Bridge instance identity separates
+revision domains across restarts, and native writes run outside the reverse
+WebSocket reader through a bounded, per-client-fair scheduler. The browser
+declares `clientVersion=3` on `user_input_sync`, and create/continue requests
+carry `nativeUserInputClientVersion=3`. Hub advertises support through `/api/me`,
+restricts active question flow to negotiated v3 browser connections, and
+requires a v3 Bridge capability. The start payload repeats the negotiated
+version so a new Bridge attached to an old Hub cannot enable questions from an
+old true-only payload. The browser stores only pending submission identities in
+session storage and asks Bridge to reconcile them after refresh; Bridge
+atomically fences an unseen submission before returning `not_sent`. An old
+page may receive a terminal run's read-only snapshot, but cannot submit an
+answer. The UI opens the question panel on a new request, keeps a single
+editable card per selected request and a visible entry outside the timeline
+scroll container. See
+`internal/bridge/user_input.go:UserInputSync`,
+`internal/hub/user_input.go:handleUserInputFromBrowser`, and
+`frontend/src/app/pages/OrchestrationWorkspace.tsx:connectRun`.
+
 ```text
 Browser UI
   | POST /api/orchestrations
@@ -111,7 +197,9 @@ Codex CLI / Claude CLI
 ```
 
 For users in the `orchestration-plan-workspace` rollout, new durable runs
-prepend planner and independent plan-review tasks. Their structured event
+prepend planner and independent plan-review tasks once per user task. Later
+internal rounds carry the reviewed plan and validated updates without repeating
+planning. Planning uses tokens/time but no additional execution round. Their structured event
 markers are projected by `internal/hub/task_graph.go:reduceOrchestrationPlan`
 into one proof-domain plan containing the overall goal, branches,
 dependencies, difficulty, priority, readiness, local progress, and evidence.
@@ -153,10 +241,10 @@ Direct serial relay reviewer/critic turns may end below their configured ceiling
 only after an explicit resolved handoff with independent evidence. For
 graph-capable Bridges, `max_turns` instead budgets whole collaboration rounds:
 each round runs two bounded candidates, serial integration, and an independent
-reviewer, and Hub automatically creates every configured generation under the
-same run id. Intermediate valid `resolved`, `needs_next`, and `blocked`
-handoffs advance the graph; only the final generation applies the resolved
-completion barrier. Formal-proof review additionally requires a successful
+reviewer, and Hub creates subsequent generations under the same run id when
+independent verification does not confirm completion. Intermediate reviewer
+handoffs may report task completion; the separate verifier decides whether
+unused rounds can end. Formal-proof review additionally requires a successful
 reviewing-turn checker/audit command. Hub SQLite is the task authority; node
 attempts carry stable identities and payload digests, ambiguous restart state
 becomes `unknown`, and Bridge executes each node serially in the selected
@@ -177,19 +265,52 @@ retains the matching private `CODEX_HOME` or `CLAUDE_CONFIG_DIR`. Bridge copies
 only the Codex session JSONL or normalized Claude transcript into the ordinary
 picker location; it never copies a slot's configuration or credential files.
 Thus `/resume` can discover the conversation while direct resume still uses
-the model preset that created it. After successful Claude turns,
-Bridge updates only the current cwd entry in `~/.claude.json` so native Claude
+the model preset that created it.
+
+Official Codex bindings can reuse native authentication while carrying independent
+per-slot model and reasoning effort in the existing worker-profile JSON. The
+`cli_config_official_models` request returns a separate endpoint-native catalog;
+ConfigSwitcher v3 promises both discovery and effective runtime overrides.
+Hub validates choices against that catalog and forwards them through the native
+exec/resume and app-server turn paths without per-selection shared-config writes.
+The enhanced frontend adds only the two selectors and preserves run/thread
+continuity. See [official Codex worker models](features/official-codex-worker-models.md).
+
+After successful Claude turns, Bridge updates only the current cwd entry in
+`~/.claude.json` so native Claude
 project metadata points at the Bridge session without touching unrelated
 projects, and materializes the same Claude-written transcript so Claude Code's
 interactive `/resume` picker can show it from the run cwd. It does not add
-model-driven proof strategy or remediation turns. After each successful worker
-turn, Bridge first applies local hard evidence gates. For a completion
-candidate, it starts two fresh, isolated Agent Verifier calls using role 1 and
-role 2's bound presets. They independently judge handoff completeness,
-command/proof evidence, and the reviewer boundary without seeing one another's
-answer or entering the worker sessions. The two model verdicts and local hard
-evidence gates must all pass. A visible `verifier.verdict` records the quorum,
-and only a unanimous pass ends unused rounds with `verified-early`.
+model-driven proof strategy or remediation turns. After every round's
+durable reviewer, or a resolved worker/integrator completion candidate, Bridge
+starts two fresh Agent Verifier calls using role 1 and
+role 2's bound presets, executed serially to bound machine load. Each receives
+the full original `TaskPrompt`, excluding durable-node instructions, and runs in
+the real project workspace under the endpoint's configured execution permissions,
+including build outputs when authorized, without changing source. Bridge
+limits temporary verifier scripts, reports, and logs to the existing runtime
+boundary `.codex-bridge/verifier-audit/`, or stdin/stdout; README and ordinary
+workspace reports remain read-only. This prompt contract lives in
+`internal/bridge/orchestration_verifier.go:composeAgentVerifierPrompt` and does
+not broaden the exclusions in
+`internal/bridge/orchestration_completion.go:completionSourceDigest` or change
+execution permissions or verifier quorum. Bridge
+waits for both results before emitting a visible `verifier.verdict`; any
+passing Agent Verifier without a concrete evidence conflict ends unused rounds
+with `verified-early`, while the Hub
+dispatches the next configured round when both verifiers continue and budget
+remains. Final rounds still verify; budget exhaustion is `max-turns` with a
+blocked conclusion unless independently verified. Bounded source/usage/blocker
+observations persist in graph JSON across internal rounds, reset on a new user
+prompt, and are stripped from public shares. Low native reviewer output is
+diagnostic only; three unchanged source states with the same verified blocker
+end as `stalled` with a completed run result, retaining the actual failed verdict.
+Plan output, progress and checkboxes never enter completion adjudication.
+Verified execution candidates atomically cancel undispatched graph successors;
+only reviewer samples count toward stagnation. Task identity prevents reuse across
+follow-up tasks. Independent agent checks are serialized across runs.
+See [ADR-020](adr/020-independent-early-run-completion.md) and
+[independent early completion](features/independent-early-run-completion.md).
 Formal-proof guidance is opt-in
 through the persisted `profile=formal-proof` run setting selected in the
 orchestration UI; the default profile does not activate proof guidance based on
@@ -201,6 +322,13 @@ final adjudication that cannot call placeholder, weakened, axiom-tainted, or
 unfinished output a completed proof. Existing UI modes, role identifiers,
 turn counts, and protocol payloads are unchanged. See
 [docs/features/formal-proof-orchestration-contracts.md](features/formal-proof-orchestration-contracts.md).
+Each orchestration run persists `verification_mode`; new requests support only
+`agent`, and an omitted mode selects that default. Two independent Agent
+Verifiers judge completion using the original task, workspace, and actual
+checker evidence. Unsupported explicit modes fail at Hub and Bridge boundaries.
+Historical mode values remain readable, but continuing such a run requires an
+explicit supported choice. No existing user data is rewritten. See
+[ADR-030](adr/030-agent-only-verification.md).
 Relay prompts reuse each worker's native session as the primary memory: a
 returning worker receives only the newest cross-worker handoff plus bounded
 command evidence instead of copies of its own earlier output. A worker entering
@@ -250,7 +378,19 @@ structured `run.conclusion` event before `run.end`, `run.error`, or
 and elapsed wall-clock time, so follow-up turns append independent timing to the
 same run.
 
-Legacy Bridges emit a persisted `turn.usage` snapshot after each relay turn.
+Bridge emits persisted `turn.usage` snapshots for each actual model used in a
+turn, including verifier calls and observed usage on verifier failure. Model
+parts are emitted without a duplicate aggregate. Native provider cost takes
+precedence; catalog fallback requires an explicit known model. Unallocated
+provider totals are retained separately without inventing model assignments.
+Snapshots now carry worker slots. Historical statistics recover slots/models
+from matching turn metadata and immutable task bindings, adding `byWorker`
+series to run/task/round responses while preserving `byCli`. Official-login
+bindings use native home logs during synchronization; old CLI/slot aliases are
+normalized. Independent verifier series retain their assigned slot separately
+from worker calls; historical verdict assignments and immutable bindings restore
+identity at read time, with inherited default-model attribution labelled.
+See [participant usage](features/orchestration-worker-usage.md).
 Current Bridges additionally handle `orchestration_usage_sync_request` by
 scanning only the named native CLI session logs read-only and returning
 normalized, content-free usage events. The Hub validates run ownership and
@@ -258,7 +398,15 @@ stores those events idempotently in a separate ledger. Terminal runs trigger a
 sync automatically, while the owner-scoped statistics endpoint and retry route
 support historical backfill. Ledger statistics distinguish non-cached input,
 cache read/write, output, and reasoning; legacy snapshots remain visible but
-are explicitly incomplete. See
+are explicitly incomplete. Codex app-server snapshots accumulate response
+deltas within the current turn, excluding resumed history and duplicate
+notifications. Snapshot statistics subtract cached Codex input before adding
+cache separately; Claude native records deduplicate by assistant message ID.
+Snapshots containing verifier usage or provider costs remain authoritative over
+a worker-only ledger refresh. Unknown rates retain tokens and the UI displays
+known cost subtotals; see
+[early-completion-model-accounting.md](features/early-completion-model-accounting.md).
+See
 [docs/features/embedded-cli-usage-ledger.md](features/embedded-cli-usage-ledger.md).
 
 Bridge long-command observation is controlled by
@@ -366,8 +514,17 @@ ids, transcript paths, and the run cwd never reach anonymous viewers.
 | ADR-007 | Public conversation share links | Anonymous readers can view sanitized transcripts without workspace access |
 | ADR-009 | Remote CLI configuration switcher | Hub stores encrypted presets; Bridge probes providers and updates native CLI configuration |
 | ADR-010 | User feature rollouts | Hub centrally evaluates account-level gray rollout policies and exposes enabled feature keys |
+| ADR-024 | Native structured user input | Live native questions return browser answers to the same orchestration call |
 | ADR-011 | Orchestration worker profiles and verdicts | Per-slot isolated CLI profiles and deterministic early-stop verification |
 | ADR-012 | Dual Claude workers and quorum verification | Independent Claude slots and a conservative multi-checker completion barrier |
+
+## Android presentation host
+
+Android uses one system WebView to load the shared mobile website. The native
+host owns navigation, file selection and renderer lifecycle; business state,
+authentication and the reverse Bridge remain unchanged. See
+[ADR 028](adr/028-lightweight-android-webview.md) and the
+[mobile contract](features/android-mobile-redesign.md).
 
 ## Protocol
 
@@ -387,6 +544,7 @@ Implemented frame types:
 - `open_session`, `session_opened`, `close_session`
 - `prompt`, `session_update`, `prompt_complete`
 - `approval_request`, `approval_response`
+- `user_input_request`, `user_input_response`, `user_input_status`, `user_input_sync`, `user_input_snapshot`
 - `cancel`, `error`, `status`
 - `orchestration_start`, `orchestration_event`, `orchestration_cancel`
 - `agent_shutdown`
@@ -464,6 +622,12 @@ Chat session isolation:
 
 ## Authentication And User Isolation
 
+Bridge installation detects Linux/macOS and CPU architecture in `/install.sh`.
+Platform-specific HTTP downloads serve the native Hub executable or a validated
+ELF/Mach-O sibling artifact. See
+[Linux ARM64 installation](features/linux-arm64-installation.md) and
+[macOS installation](features/macos-installation.md).
+
 The bootstrap administrator is created by CLI/config. Operators may explicitly
 enable self-service registration with a Cloudflare Turnstile Managed widget.
 The browser receives only the public site key from `GET /api/auth/config`; the
@@ -481,7 +645,7 @@ endpoints and records. Legacy unowned agents require an explicit ownership
 migration before use. Public shares remain an explicit, revocable exception
 containing sanitized read-only data.
 
-The bootstrap administrator additionally has one explicit, read-only
+The bootstrap and additional configured administrators have one explicit, read-only
 cross-user analytics boundary: `GET /api/admin/usage` and
 `GET /api/admin/users/{userID}/usage`, plus the on-demand read endpoint
 `GET /api/admin/users/{userID}/conversations/{kind}/{conversationID}`. The
@@ -495,6 +659,72 @@ to user-scoped mutation APIs. See
 
 ## Storage
 
+The Hub also exposes personal automation through the official MCP Go SDK's
+stateless Streamable HTTP adapter at `/mcp`. Per-request bearer verification
+is separate from browser cookies and Bridge enrollment. Both browser and MCP
+entry points use shared creation, continuation, live-message and cancellation
+operations; the existing reverse WebSocket and scheduler retain execution
+authority. No project commands run on Hub. See [ADR-029](adr/029-hub-mcp-and-submission-notifications.md)
+and the [MCP feature](features/mcp-skill-task-notifications.md).
+
+The existing `GET /api/orchestrations/{runID}` first authorizes the owned run in
+`internal/hub/orchestration.go:handleGetOrchestration`, then adds
+`executionConfiguration` and `submissionId` through
+`internal/hub/orchestration_configuration.go:orchestrationExecutionConfiguration`.
+This field whitelist uses the accepted submission snapshot, or persisted run
+and worker bindings for older runs; it excludes credentials, native resume
+identities and task text. The browser configuration card never substitutes
+new-run form defaults for historical choices.
+
+`internal/config/env_file.go:configurationEnvironment` loads an environment
+file only when `CODEX_BRIDGE_ENV_FILE` is explicitly set. Process environment
+values, including empty values, take precedence. Parsing does not execute shell
+commands or expand variables, and errors do not repeat secret values. The
+canonical configuration contract remains in [the development workflow](dev-workflow.md).
+
+`POST /api/automation/mail/test` is a browser-account operation in
+`internal/hub/automation_mail_test_send.go:handleAutomationMailTest`, separate
+from the 20 MCP tools. It sends fixed content only to the current user's saved
+email, rejects custom recipients or text, limits each user to one attempt per
+minute and bounds SMTP work to at most 15 seconds. A successful response means
+SMTP accepted the message; it does not prove inbox delivery. See
+[onboarding and mail setup](features/mcp-onboarding-and-mail-setup.md).
+`internal/notify/smtp.go:DeliveryMode` distinguishes explicitly configured
+`preview` from outbound `smtp`; loopback addresses are not interpreted as preview.
+Access and MCP context expose `mailDeliveryMode`, and test-mail success exposes
+`deliveryMode`. A preview transport can be ready while sending nothing outside
+the local sink. Notification-list metadata labels the current transport separately
+from historical rows and defines `sent` as SMTP acceptance. No delivery mode is
+retroactively inferred for an old receipt. See
+[the delivery-mode contract](features/mail-delivery-status.md).
+
+Top-level `user.message.Seq` binds a durable submission before dispatch. Final
+public lifecycle events atomically freeze that submission's independent
+verification result and enqueue its notification. Node-level events do not
+complete submissions. The Hub SMTP worker leases outbox rows, sends outside a
+transaction, and persists a bounded retry receipt. Attention notices identify
+requests without persisting native question or answer text. Native approvals
+are authoritative on Bridge; the Hub only brokers bounded in-flight replies.
+
+Completion email uses `internal/notify/completion.go:FromNotification` and
+`internal/notify/mime.go` for a short result card with HTML and plain-text
+alternatives. It never copies the conversation or a model's long conclusion.
+The final event freezes `usageCutoffSeq`; after claiming a notification,
+`internal/hub/automation_mail_summary.go:prepareAutomationNotification` reuses
+the website's statistics aggregation against that boundary. One read-only Store
+transaction collects inputs, then a claim-token/snapshot CAS freezes only the
+outbox's small usage projection. Retries and late conclusions preserve it.
+Missing boundaries, ambiguous later submissions and unavailable statistics are
+reported as unrecorded, never zero. No Store-to-Hub callback, schema migration,
+pricing refresh or network request is added to the terminal transaction. See
+[completion email summary](features/completion-email-summary.md) and
+[ADR-031](adr/031-completion-mail-usage-snapshot.md).
+
+Long-history interactive reads keep the existing single-connection model and use
+sparse event indexes rather than reading unrelated output bodies. Migration,
+rollback and query-plan requirements are recorded in
+[ADR 027](adr/027-sparse-orchestration-read-indexes.md).
+
 SQLite tables:
 
 - `users`
@@ -507,7 +737,8 @@ SQLite tables:
   `profile`, cwd, max turns, status, native CLI continuity state,
   `codex_thread_ids_json`, `claude_session_ids_json`,
   `claude_started_slots_json`, native context compaction preference, locked
-  runtime cwd, uploaded file metadata, and a durable cancel-before-delete intent)
+  runtime cwd, uploaded file metadata, reversible `archived_at` history metadata,
+  and a durable cancel-before-delete intent)
 - `orchestration_worker_profiles` (private per-run Bridge-targeted preset
   ciphertext, excluded from run JSON, progress responses, and public shares)
 - `orchestration_events` (including `source`, `severity`, lifecycle status,
@@ -524,6 +755,21 @@ SQLite tables:
 - `cli_config_preset_credentials` (per-Bridge API-key envelopes materialized
   from the vault or retained from legacy machine-scoped presets)
 - `cli_config_active_presets` (machine-scoped native CLI activation pointers)
+- `automation_tokens` (one recoverable AES-GCM personal PAT and authentication
+  hash per user, with explicit revocation)
+- `automation_settings` and `automation_presets` (versioned account/workspace
+  defaults and non-secret execution choices)
+- `automation_submissions` (owned request-key/digest, run and PromptSeq binding,
+  resolved configuration, accepted recipient and immutable result snapshot)
+- `automation_notifications` (unique submission/request notification identity,
+  frozen payload, lease, retry attempts and safe delivery receipt)
+
+History archive is separate from deletion and execution state. Owned terminal
+runs may be archived/restored; continuing a run restores visibility without
+changing its ID or native context. Usage includes archived history. The history
+API filters ownership, endpoint, status and search before stable creation-time
+keyset pagination. See [ADR 026](adr/026-orchestration-history-metadata.md) and
+[desktop audit fixes](features/desktop-audit-fixes.md).
 
 Hub stores browser auth, chat history, and encrypted-at-rest user model
 credentials. Bridge stores its generated `machine_id`, persistent configuration
@@ -532,3 +778,18 @@ private machine. Configuration test/apply/reset/export frames are
 capability-gated and request-correlated; export wraps a key to Hub's vault
 receiver and requires Bridge capability version 2. Older Bridges retain their
 existing machine credential behavior until upgraded.
+
+Canceled planning identity is persisted before completion through existing
+`bridge.note` events (`internal/bridge/orchestration_native_identity.go:nativeIdentityEvent`).
+The existing usage-sync request optionally carries bounded historical recovery
+hints; only the private Bridge reads matching native logs, returning usage rows
+without log text. See [participant usage](features/orchestration-worker-usage.md).
+Decision details: [ADR 022](adr/022-canceled-planning-native-identity.md).
+
+Historical recovery scheduling uses `usageModelRecovery: 2` capabilities, persistent
+zero-usage retry markers and serialized private scans. Completed runs with earlier
+syncs remain eligible when planning identity is missing. See [ADR 023](adr/023-retryable-native-model-recovery.md).
+
+内网部署可分离浏览器/结果地址与 MCP 客户端地址：automation.public_url 保留内网网页，
+automation.mcp_url 指定回环 MCP；单 Hub/单 SQLite/反向 Bridge 边界不变。
+详见[8088 内网部署](deployment-8088.md)。

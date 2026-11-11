@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/tencent/codex-bridge/internal/config"
 	"github.com/tencent/codex-bridge/internal/protocol"
 	"github.com/tencent/codex-bridge/internal/store"
@@ -23,8 +24,27 @@ func TestBuildOrchestrationRunStatsAggregatesUsage(t *testing.T) {
 		{Kind: "turn.usage", CLI: "codex", Data: map[string]any{"cli": "codex", "model": "gpt-5-codex", "inputTokens": float64(10), "outputTokens": float64(4), "cacheReadTokens": float64(2), "estimatedCostUsd": .01, "estimated": true}},
 		{Kind: "turn.usage", CLI: "claude", Data: map[string]any{"cli": "claude", "model": "claude-sonnet-4", "inputTokens": float64(8), "outputTokens": float64(3), "estimatedCostUsd": .02, "estimated": true}},
 	})
-	if stats.RuntimeSeconds != 30 || stats.InputTokens != 18 || stats.OutputTokens != 7 || stats.CacheReadTokens != 2 || len(stats.ByCLI) != 2 || !stats.Estimated {
+	if stats.RuntimeSeconds != 30 || stats.InputTokens != 16 || stats.OutputTokens != 7 || stats.CacheReadTokens != 2 || len(stats.ByCLI) != 2 || !stats.Estimated {
 		t.Fatalf("stats = %#v", stats)
+	}
+}
+
+func TestUsageStatsSerializeEmptyCollectionsAsArrays(t *testing.T) {
+	stats := buildOrchestrationRunStats(store.OrchestrationRun{ID: "orc_empty", CreatedAt: 100}, nil)
+	raw, err := json.Marshal(stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"byCli":[]`) {
+		t.Fatalf("empty usage breakdown serialized as non-array: %s", raw)
+	}
+
+	overview, err := json.Marshal(orchestrationUsageOverview{Trend: []orchestrationUsageTrendPoint{}, Items: []orchestrationUsageOverviewItem{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(overview), `"trend":[]`) || !strings.Contains(string(overview), `"items":[]`) {
+		t.Fatalf("empty overview collections serialized as non-arrays: %s", overview)
 	}
 }
 
@@ -38,12 +58,12 @@ func TestBuildOrchestrationRunStatsPreservesUsageProvenance(t *testing.T) {
 	}
 }
 
-func TestBuildOrchestrationRunStatsPricesLegacyCodexDefault(t *testing.T) {
+func TestBuildOrchestrationRunStatsPreservesUnpricedLegacyCodexDefault(t *testing.T) {
 	run := store.OrchestrationRun{ID: "orc_legacy_usage", CreatedAt: 100, FinishedAt: 110, Status: store.OrchestrationCompleted}
 	stats := buildOrchestrationRunStats(run, []store.OrchestrationEvent{{Kind: "turn.usage", CLI: "codex", Data: map[string]any{
 		"cli": "codex", "model": "default", "inputTokens": float64(23858), "outputTokens": float64(1605), "estimated": true, "costKnown": false, "costSource": "unavailable",
 	}}})
-	if !stats.CostKnown || stats.CostSource != "official-catalog" || len(stats.PricingModels) != 1 || stats.PricingModels[0] != "gpt-5.6-sol" || len(stats.ByCLI) != 1 || stats.ByCLI[0].PricingModel != "gpt-5.6-sol" || stats.EstimatedCostUSD < 0.167439 || stats.EstimatedCostUSD > 0.167441 {
+	if stats.CostKnown || stats.CostSource != "unavailable" || len(stats.PricingModels) != 0 || len(stats.ByCLI) != 1 || stats.ByCLI[0].PricingModel != "" || stats.EstimatedCostUSD != 0 || stats.TotalTokens != 25463 {
 		t.Fatalf("stats = %#v", stats)
 	}
 }
@@ -64,6 +84,32 @@ func TestBuildLedgerOrchestrationRunStatsNormalizesCalls(t *testing.T) {
 	stats := buildOrchestrationRunStatsWithLedger(run, nil, []protocol.OrchestrationUsageEvent{{CLI: "codex", Provider: "openai", Model: "gpt-5.6-sol", InputTokens: 20, CacheReadTokens: 80, OutputTokens: 5, ReasoningTokens: 2}}, []store.OrchestrationUsageSync{{Status: "complete", ScannedAt: 105}})
 	if stats.AccountingStatus != "complete" || stats.AccountingSource != "local-cli-ledger" || stats.InputTokens != 20 || stats.CacheReadTokens != 80 || stats.OutputTokens != 5 || stats.ReasoningTokens != 2 || stats.CallCount != 1 || stats.CacheTokens != 80 || stats.TotalTokens != 105 || len(stats.Rounds) != 1 || stats.Rounds[0].TotalTokens != 105 || !stats.CostKnown {
 		t.Fatalf("stats = %#v", stats)
+	}
+}
+
+func TestBuildOrchestrationRunStatsFallsBackWhenLedgerSyncIsUnavailable(t *testing.T) {
+	run := store.OrchestrationRun{ID: "orc_isolated_fallback", CreatedAt: 100, FinishedAt: 110, Status: store.OrchestrationCompleted}
+	timeline := []store.OrchestrationEvent{{Kind: "turn.usage", CLI: "claude", Data: map[string]any{
+		"cli": "claude", "model": "claude-sonnet-5", "inputTokens": float64(100), "cacheReadTokens": float64(20), "outputTokens": float64(5), "native": true, "costKnown": true, "costSource": "provider", "estimatedCostUsd": .01,
+	}}}
+	stats := buildOrchestrationRunStatsWithLedger(run, timeline, nil, []store.OrchestrationUsageSync{{Status: "unavailable", Error: "isolated worker runtime is no longer available"}})
+	if stats.AccountingSource != "turn-snapshots" || stats.InputTokens != 100 || stats.CacheReadTokens != 20 || stats.OutputTokens != 5 || stats.TotalTokens != 125 || stats.CallCount != 1 {
+		t.Fatalf("stats = %#v", stats)
+	}
+}
+
+func TestAppendOverviewTrendFallsBackWhenLedgerSyncIsUnavailable(t *testing.T) {
+	trend := map[string]*orchestrationUsageTrendPoint{}
+	appendOverviewTrend(trend, store.OrchestrationRun{CreatedAt: 100}, []store.OrchestrationEvent{{Kind: "turn.usage", CLI: "claude", CreatedAt: 100, Data: map[string]any{
+		"cli": "claude", "model": "claude-sonnet-5", "inputTokens": float64(100), "outputTokens": float64(5), "costKnown": true, "estimatedCostUsd": .01,
+	}}}, nil, []store.OrchestrationUsageSync{{Status: "unavailable"}}, 0)
+	if len(trend) != 1 {
+		t.Fatalf("trend = %#v", trend)
+	}
+	for _, point := range trend {
+		if point.InputTokens != 100 || point.OutputTokens != 5 || point.TotalTokens != 105 || point.CallCount != 1 {
+			t.Fatalf("point = %#v", point)
+		}
 	}
 }
 
@@ -607,7 +653,7 @@ func TestOrchestrationEventsPersistRunSessionState(t *testing.T) {
 	}
 }
 
-func TestCompletedOrchestrationStreamIsRejected(t *testing.T) {
+func TestCompletedOrchestrationStreamAllowsReceiptSyncConnection(t *testing.T) {
 	t.Parallel()
 
 	s, st, userID, agentID := newOrchestrationTestServer(t)
@@ -620,12 +666,29 @@ func TestCompletedOrchestrationStreamIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/ws/orchestrations?runId="+run.ID, nil)
-	req.AddCookie(&http.Cookie{Name: accessCookieName, Value: token})
-	rr := httptest.NewRecorder()
-	s.httpSrv.Handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusConflict {
-		t.Fatalf("completed orchestration stream status = %d, want %d, body = %s", rr.Code, http.StatusConflict, rr.Body.String())
+	server := httptest.NewServer(s.httpSrv.Handler)
+	defer server.Close()
+	header := http.Header{}
+	header.Add("Cookie", (&http.Cookie{Name: accessCookieName, Value: token}).String())
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/orchestrations?runId=" + run.ID
+	conn, response, err := websocket.DefaultDialer.Dial(wsURL, header)
+	if err != nil {
+		status := 0
+		if response != nil {
+			status = response.StatusCode
+		}
+		t.Fatalf("completed orchestration receipt stream rejected: status=%d err=%v", status, err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var initial protocol.Envelope
+	if err := conn.ReadJSON(&initial); err != nil {
+		t.Fatal(err)
+	}
+	if initial.Type != protocol.TypeStatus {
+		t.Fatalf("completed orchestration initial frame = %s", initial.Type)
 	}
 }
 
@@ -815,10 +878,11 @@ func TestContinueOrchestrationSendsCompactedContext(t *testing.T) {
 		"prompt":                  "second task",
 		"maxTurns":                20,
 		"profile":                 "formal-proof",
+		"verificationMode":        "agent",
 		"nativeContextCompaction": "after-turn",
 	}, http.StatusOK)
 	loaded := body["run"].(map[string]any)
-	if loaded["id"] != run.ID || loaded["status"] != store.OrchestrationRunning {
+	if loaded["id"] != run.ID || loaded["status"] != store.OrchestrationRunning || loaded["verificationMode"] != "agent" {
 		t.Fatalf("continue body = %#v", loaded)
 	}
 	var env protocol.Envelope
@@ -837,7 +901,7 @@ func TestContinueOrchestrationSendsCompactedContext(t *testing.T) {
 	if payload.CodexThreadID != "thread_resume" || !payload.ClaudeStarted || payload.RunCWD != "/abs/resume" {
 		t.Fatalf("payload session state = %#v", payload)
 	}
-	if payload.Profile != "formal-proof" || payload.NativeContextCompaction != "after-turn" || payload.MaxTurns != 12 || payload.MaxTurnsRequested != 20 {
+	if payload.Profile != "formal-proof" || payload.VerificationMode != "agent" || payload.NativeContextCompaction != "after-turn" || payload.MaxTurns != 12 || payload.MaxTurnsRequested != 20 {
 		t.Fatalf("payload profile/maxTurns = %#v", payload)
 	}
 	if !strings.Contains(payload.Context, "first task") || !strings.Contains(payload.Context, "implemented first task") {
@@ -1098,13 +1162,15 @@ func TestCreateOrchestrationForwardsFirstCLI(t *testing.T) {
 	defer s.pool.UnregisterAgent(agentID, conn)
 
 	body := createOrchestrationHTTP(t, s, userID, map[string]any{
-		"agentId":  agentID,
-		"prompt":   "run visible proof smoke",
-		"firstCli": "codex",
-		"maxTurns": 2,
+		"agentId":          agentID,
+		"prompt":           "run visible proof smoke",
+		"firstCli":         "codex",
+		"profile":          "formal-proof",
+		"verificationMode": "agent",
+		"maxTurns":         2,
 	}, http.StatusCreated)
 	run := body["run"].(map[string]any)
-	if run["firstCli"] != "codex" {
+	if run["firstCli"] != "codex" || run["verificationMode"] != "agent" {
 		t.Fatalf("run firstCli = %#v", run["firstCli"])
 	}
 
@@ -1113,8 +1179,72 @@ func TestCreateOrchestrationForwardsFirstCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload.FirstCLI != "codex" {
+	if payload.FirstCLI != "codex" || payload.VerificationMode != "agent" {
 		t.Fatalf("payload first cli = %q", payload.FirstCLI)
+	}
+}
+
+func TestNormalizeOrchestrationRejectsUnsupportedVerification(t *testing.T) {
+	t.Parallel()
+	s, _, _, _ := newOrchestrationTestServer(t)
+	for _, profile := range []string{"default", "formal-proof"} {
+		w := httptest.NewRecorder()
+		_, ok := s.normalizeOrchestrationStart(w, orchestrationStartRequest{Prompt: "ordinary task", Profile: profile, VerificationMode: "retired-verifier", MaxTurns: 2})
+		if ok || w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "BAD_VERIFICATION_MODE") {
+			t.Fatalf("unsupported mode normalized: ok:%v status:%d body:%s", ok, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestValidateVerificationSupportsOnlyAgent(t *testing.T) {
+	t.Parallel()
+	s, _, _, agentID := newOrchestrationTestServer(t)
+	for _, mode := range []string{"", "agent"} {
+		if err := s.validateVerificationCapability(agentID, "formal-proof", mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.validateVerificationCapability(agentID, "formal-proof", "retired-verifier"); err == nil {
+		t.Fatal("unsupported authority silently accepted")
+	}
+}
+
+func TestContinueHistoricalVerificationRequiresExplicitSupportedChoice(t *testing.T) {
+	t.Parallel()
+	s, st, userID, agentID := newOrchestrationTestServer(t)
+	ctx := context.Background()
+	run, err := st.CreateOrchestrationRun(ctx, store.CreateOrchestrationRunParams{
+		UserID: userID, AgentID: agentID, Mode: "collaboration", FirstCLI: "codex",
+		Prompt: "original proof", Profile: "formal-proof", VerificationMode: "retired-verifier", MaxTurns: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateOrchestrationRunStatus(ctx, run.ID, store.OrchestrationCompleted, ""); err != nil {
+		t.Fatal(err)
+	}
+	conn := &BridgeConn{
+		agentID: agentID,
+		capabilities: &protocol.BridgeCapabilities{
+			Sandbox: "danger-full-access", ApprovalPolicy: "never",
+			Orchestration: map[string]protocol.BridgeCLICapability{"claude": {Available: true}, "codex": {Available: true}},
+		},
+		wsSender: wsSender{send: make(chan protocol.Envelope, 2), done: make(chan struct{})},
+	}
+	s.pool.RegisterAgent(conn)
+	defer s.pool.UnregisterAgent(agentID, conn)
+	body := continueOrchestration(t, s, userID, run.ID, map[string]any{"prompt": "follow up", "maxTurns": 2}, http.StatusBadRequest)
+	if body["code"] != "BAD_VERIFICATION_MODE" {
+		t.Fatalf("implicit authority change = %#v", body)
+	}
+	loaded, err := st.OrchestrationRunByID(ctx, run.ID, userID)
+	if err != nil || loaded.VerificationMode != "retired-verifier" || loaded.Status != store.OrchestrationCompleted {
+		t.Fatalf("rejected continuation changed historical run: %#v, %v", loaded, err)
+	}
+	continueOrchestration(t, s, userID, run.ID, map[string]any{"prompt": "follow up", "maxTurns": 2, "verificationMode": "agent"}, http.StatusOK)
+	payload, err := protocol.Decode[protocol.OrchestrationStartPayload](<-conn.send)
+	if err != nil || payload.RunID != run.ID || !payload.Resume || payload.VerificationMode != "agent" {
+		t.Fatalf("explicit continuation = %#v, %v", payload, err)
 	}
 }
 

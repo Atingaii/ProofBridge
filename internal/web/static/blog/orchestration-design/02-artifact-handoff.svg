@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="t d">
+<title id="t">以交付物为中心的阶段交接</title>
+<desc id="d">小黑把文件、命令结果和未解决缺口放进三个抽屉，另一个小黑逐项打开检查。</desc>
+<rect width="1600" height="900" fill="#fff"/>
+<g fill="none" stroke="#151515" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M533 253 C650 229 817 235 930 259 L926 654 C805 679 650 677 540 651Z"/>
+  <path d="M543 367 C657 350 809 351 926 369"/><path d="M541 493 C660 479 812 481 927 496"/>
+  <path d="M561 303 C666 286 798 288 905 305"/><path d="M559 420 C665 407 801 408 905 424"/><path d="M560 548 C672 537 797 538 905 551"/>
+  <path d="M711 332 C719 338 735 339 743 332"/><path d="M711 455 C719 462 735 462 743 455"/><path d="M711 582 C720 589 735 589 744 582"/>
+  <path d="M516 335 C473 348 440 365 407 389"/><path d="M948 531 C1011 526 1056 507 1097 476"/>
+</g>
+<g fill="#101010">
+  <path d="M337 395 C308 374 311 330 338 306 C363 283 407 287 428 316 C448 343 432 382 406 399 C386 413 357 410 337 395Z"/>
+  <circle cx="360" cy="336" r="7" fill="#fff"/><circle cx="390" cy="338" r="7" fill="#fff"/>
+  <path d="M1105 426 C1081 400 1089 360 1116 338 C1143 316 1185 324 1204 352 C1221 379 1206 414 1182 431 C1158 447 1124 445 1105 426Z"/>
+  <circle cx="1130" cy="366" r="7" fill="#fff"/><circle cx="1159" cy="368" r="7" fill="#fff"/>
+</g>
+<g fill="none" stroke="#151515" stroke-width="5" stroke-linecap="round">
+  <path d="M360 404 L348 476 M397 404 L413 469"/><path d="M350 439 L310 475 M409 438 L458 413"/>
+  <path d="M1131 437 L1111 511 M1169 438 L1186 506"/><path d="M1119 474 L1074 505 M1177 470 L1227 488"/>
+  <path d="M458 413 C486 391 510 382 542 376"/><path d="M1075 505 C1035 530 1003 541 950 544"/>
+</g>
+<g fill="none" stroke="#e76732" stroke-width="6" stroke-linecap="round"><path d="M452 247 C477 223 505 208 539 200"/><path d="M937 691 C983 683 1020 666 1056 636"/></g>
+<g font-family="Arial,'PingFang SC','Microsoft YaHei',sans-serif" font-size="28" font-weight="600">
+  <text x="594" y="326" fill="#2466d1">文件改动</text><text x="594" y="451" fill="#151515">命令结果</text><text x="594" y="579" fill="#e76732">剩余缺口</text>
+  <text x="286" y="258" fill="#e76732" transform="rotate(-5 286 258)">不是一句“做完了”</text>
+  <text x="1041" y="624" fill="#2466d1" transform="rotate(3 1041 624)">按证据接手</text>
+</g>
+<g fill="none" stroke="#2466d1" stroke-width="4" stroke-linecap="round"><path d="M1214 332 C1265 305 1315 296 1354 304"/><path d="M1354 304 l-18 -12 M1354 304 l-17 13"/></g>
+</svg>

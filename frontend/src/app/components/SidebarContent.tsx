@@ -111,7 +111,7 @@ export function SidebarContent({
                     <button
                       type="button"
                       className={cn(
-                        "h-7 w-7 rounded flex items-center justify-center hover:bg-sidebar-border text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
+                        "h-12 w-12 md:h-7 md:w-7 rounded flex items-center justify-center hover:bg-sidebar-border text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
                         shareCopiedSessionId === session.id && "text-emerald-600 dark:text-emerald-400"
                       )}
                       disabled={sharingSessionId === session.id || deletingSessionId === session.id}
@@ -126,7 +126,7 @@ export function SidebarContent({
                     </button>
                     <button
                       type="button"
-                      className="h-7 w-7 rounded flex items-center justify-center hover:bg-sidebar-border text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                      className="h-12 w-12 md:h-7 md:w-7 rounded flex items-center justify-center hover:bg-sidebar-border text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
                       disabled={deletingSessionId === session.id}
                       onClick={(event) => {
                         event.stopPropagation();
@@ -139,7 +139,7 @@ export function SidebarContent({
                     </button>
                     <button
                       type="button"
-                      className="h-7 w-7 rounded flex items-center justify-center hover:bg-destructive/10 hover:text-destructive text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                      className="h-12 w-12 md:h-7 md:w-7 rounded flex items-center justify-center hover:bg-destructive/10 hover:text-destructive text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
                       disabled={deletingSessionId === session.id}
                       onClick={(event) => {
                         event.stopPropagation();

@@ -1,0 +1,16 @@
+[Unit]
+Description=ProofBridge reproducible 8088 Hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/proofbridge
+EnvironmentFile=/opt/proofbridge/configs/replica.env
+ExecStart=/opt/proofbridge/bin/codex-bridge hub
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

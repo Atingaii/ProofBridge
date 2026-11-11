@@ -110,12 +110,13 @@ func handleClaudeApprovalMCPToolCall(socketPath string, rawParams json.RawMessag
 	if len(input) == 0 {
 		input = json.RawMessage(`{}`)
 	}
+	toolName, toolInput := claudePermissionTool(input, params.Name)
 	socketReq := claudeApprovalSocketRequest{
 		RequestID: fmt.Sprintf("claude_%d", time.Now().UnixNano()),
 		Kind:      "claude.permission_prompt",
-		ToolName:  params.Name,
-		Input:     input,
-		Command:   claudeApprovalCommand(params.Name, input),
+		ToolName:  toolName,
+		Input:     toolInput,
+		Command:   claudeApprovalCommand(toolName, input),
 		Reason:    claudeApprovalReason(input),
 	}
 	if cwd := claudeApprovalCWD(input); cwd != "" {
@@ -124,6 +125,9 @@ func handleClaudeApprovalMCPToolCall(socketPath string, rawParams json.RawMessag
 	socketRes, err := callClaudeApprovalSocket(socketPath, socketReq)
 	if err != nil {
 		return nil, err
+	}
+	if toolName == "AskUserQuestion" && socketRes.Decision == "accept" && len(socketRes.UpdatedInput) == 0 {
+		return nil, errors.New("Claude native user input returned no answers")
 	}
 	allow := socketRes.Decision == "accept"
 	behavior := "deny"
@@ -137,7 +141,11 @@ func handleClaudeApprovalMCPToolCall(socketPath string, rawParams json.RawMessag
 		"message":  text,
 	}
 	if allow {
-		decision["updatedInput"] = map[string]any{}
+		if toolName == "AskUserQuestion" {
+			decision["updatedInput"] = socketRes.UpdatedInput
+		} else {
+			decision["updatedInput"] = map[string]any{}
+		}
 	} else {
 		decision["interrupt"] = true
 	}
@@ -150,7 +158,6 @@ func handleClaudeApprovalMCPToolCall(socketPath string, rawParams json.RawMessag
 			"type": "text",
 			"text": string(decisionJSON),
 		}},
-		"structuredContent": decision,
 	}, nil
 }
 
@@ -160,7 +167,9 @@ func callClaudeApprovalSocket(socketPath string, req claudeApprovalSocketRequest
 		return claudeApprovalSocketResponse{}, err
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Minute))
+	if req.ToolName != "AskUserQuestion" {
+		_ = conn.SetDeadline(time.Now().Add(10 * time.Minute))
+	}
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return claudeApprovalSocketResponse{}, err
 	}

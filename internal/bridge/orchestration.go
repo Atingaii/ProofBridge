@@ -22,22 +22,35 @@ import (
 )
 
 type OrchestrationManager struct {
-	cfg         *config.Config
-	cliConfig   *cliConfigManager
-	lifetime    context.Context
-	stop        context.CancelFunc
-	sendMu      sync.Mutex
-	progressMu  sync.Mutex
-	mu          sync.Mutex
-	runs        map[string]*orchestrationRunHandle
-	sessions    map[string]*orchestrationNativeSession
-	output      chan<- protocol.Envelope
-	pending     []protocol.Envelope
-	approvals   map[string]orchestrationApproval
-	conclusions map[string]bool
-	executions  map[string]orchestrationExecution
-	progress    map[commandProgressKey]*pendingCommandProgress
-	progressSeq uint64
+	cfg                     *config.Config
+	cliConfig               *cliConfigManager
+	lifetime                context.Context
+	stop                    context.CancelFunc
+	sendMu                  sync.Mutex
+	progressMu              sync.Mutex
+	mu                      sync.Mutex
+	liveInputs              map[string]*liveInputMailbox
+	runs                    map[string]*orchestrationRunHandle
+	sessions                map[string]*orchestrationNativeSession
+	output                  chan<- protocol.Envelope
+	pending                 []protocol.Envelope
+	userInputOutbox         *userInputOutbox
+	approvals               map[string]orchestrationApproval
+	approvalReceipts        map[string]approvalReceiptRecord
+	userInputs              map[string]*pendingUserInput
+	userInputRevision       map[string]uint64
+	userInputOrder          []string
+	userInputInstanceID     string
+	userInputDispatchMu     sync.Mutex
+	userInputDispatchQueue  []queuedUserInputWork
+	userInputDispatchActive int
+	userInputDispatchBusy   map[string]bool
+	codexUserInputOnce      sync.Once
+	codexUserInputAvailable bool
+	conclusions             map[string]bool
+	executions              map[string]orchestrationExecution
+	progress                map[commandProgressKey]*pendingCommandProgress
+	progressSeq             uint64
 	// modelCapacityRetryWaits is intentionally kept on the manager rather than
 	// as global mutable test state. Production uses the default schedule; focused
 	// tests can shorten it without changing other concurrently running managers.
@@ -58,8 +71,10 @@ type orchestrationExecution struct {
 }
 
 type orchestrationApproval struct {
-	runID string
-	ch    chan protocol.ApprovalResponsePayload
+	request protocol.ApprovalRequestPayload
+	ctx     context.Context
+	runID   string
+	ch      chan protocol.ApprovalResponsePayload
 }
 
 type orchestrationRunHandle struct {
@@ -140,9 +155,13 @@ func NewOrchestrationManager(cfg *config.Config) *OrchestrationManager {
 		cfg:                       cfg,
 		lifetime:                  lifetime,
 		stop:                      stop,
+		userInputOutbox:           newUserInputOutbox(lifetime),
 		runs:                      make(map[string]*orchestrationRunHandle),
 		sessions:                  make(map[string]*orchestrationNativeSession),
 		approvals:                 make(map[string]orchestrationApproval),
+		userInputs:                make(map[string]*pendingUserInput),
+		userInputRevision:         make(map[string]uint64),
+		userInputInstanceID:       store.NewID("uiinst"),
 		conclusions:               make(map[string]bool),
 		executions:                make(map[string]orchestrationExecution),
 		progress:                  make(map[commandProgressKey]*pendingCommandProgress),
@@ -166,6 +185,7 @@ func (m *OrchestrationManager) AttachOut(out chan<- protocol.Envelope) {
 	pending := append([]protocol.Envelope(nil), m.pending...)
 	m.pending = nil
 	m.output = out
+	m.userInputOutbox.attach(out)
 	m.mu.Unlock()
 
 	for index, env := range pending {
@@ -193,6 +213,7 @@ func (m *OrchestrationManager) AttachOut(out chan<- protocol.Envelope) {
 func (m *OrchestrationManager) DetachOut(out chan<- protocol.Envelope) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.userInputOutbox.detach(out)
 	if m.output == out {
 		m.output = nil
 	}
@@ -241,6 +262,7 @@ func (m *OrchestrationManager) Start(payload protocol.OrchestrationStartPayload)
 
 	go func() {
 		defer close(handle.done)
+		defer m.closeLiveInput(executionKey)
 		defer func() {
 			m.flushCommandProgressForRun(executionKey)
 			cancel()
@@ -253,6 +275,7 @@ func (m *OrchestrationManager) Start(payload protocol.OrchestrationStartPayload)
 			m.mu.Unlock()
 			if current == handle {
 				m.cancelApprovals(executionKey)
+				m.closeRunUserInputs(executionKey, "run ended")
 			}
 		}()
 		m.run(ctx, payload)
@@ -279,6 +302,7 @@ func (m *OrchestrationManager) Cancel(runID string) {
 	for _, key := range keys {
 		m.closeNativeSession(key)
 		m.cancelApprovals(key)
+		m.closeRunUserInputs(key, "run canceled")
 	}
 }
 
@@ -345,6 +369,7 @@ func (m *OrchestrationManager) CloseAll() {
 	}
 	for _, runID := range runIDs {
 		m.cancelApprovals(runID)
+		m.closeRunUserInputs(runID, "bridge stopped")
 	}
 }
 
@@ -706,6 +731,8 @@ func (r orchestrationApprovalRequester) RequestApproval(ctx context.Context, req
 	} else {
 		req.RunID = r.runID
 	}
+	req.InstanceID = r.manager.userInputInstanceID
+	req.ExecutionID = r.runID
 	req.TurnID = r.turnID
 	if req.CWD == "" {
 		req.CWD = r.cwd
@@ -719,7 +746,7 @@ func (r orchestrationApprovalRequester) RequestApproval(ctx context.Context, req
 	if m.approvals == nil {
 		m.approvals = make(map[string]orchestrationApproval)
 	}
-	m.approvals[req.RequestID] = orchestrationApproval{runID: r.runID, ch: ch}
+	m.approvals[req.RequestID] = orchestrationApproval{request: req, ctx: ctx, runID: r.runID, ch: ch}
 	m.mu.Unlock()
 
 	m.send(protocol.MustEnvelope(protocol.TypeApprovalRequest, "", req))
@@ -728,6 +755,7 @@ func (r orchestrationApprovalRequester) RequestApproval(ctx context.Context, req
 	for {
 		select {
 		case res := <-ch:
+			m.approvalCallbackConsumed(req, res)
 			return res, nil
 		case <-ticker.C:
 			m.send(protocol.MustEnvelope(protocol.TypeApprovalRequest, "", req))
@@ -746,26 +774,51 @@ func (m *OrchestrationManager) ApprovalResponse(res protocol.ApprovalResponsePay
 		return false
 	}
 	delete(m.approvals, res.RequestID)
+	m.rememberApprovalLocked(protocol.ApprovalStatusPayload{RunID: pending.request.RunID, RequestID: res.RequestID, ExecutionID: pending.request.ExecutionID, InstanceID: m.userInputInstanceID, Decision: res.Decision, Status: "queued", Outcome: "queued", Reason: "decision queued for the waiting approval callback"})
 	pending.ch <- res
 	return true
 }
 
 func (m *OrchestrationManager) removeApproval(requestID string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	var statuses []protocol.ApprovalStatusPayload
+	if pending, ok := m.approvals[requestID]; ok {
+		status := protocol.ApprovalStatusPayload{RunID: pending.request.RunID, RequestID: requestID, ExecutionID: pending.request.ExecutionID, InstanceID: m.userInputInstanceID, Status: "closed", Outcome: "not_sent", Reason: "native approval is no longer available"}
+		m.rememberApprovalLocked(status)
+		statuses = append(statuses, status)
+	}
 	delete(m.approvals, requestID)
+	for _, record := range m.approvalReceipts {
+		if record.status.RequestID == requestID && record.status.Status == "queued" {
+			status := record.status
+			status.Status, status.Outcome, status.Reason = "closed", "unknown", "approval callback ended before consumption was confirmed"
+			m.rememberApprovalLocked(status)
+			statuses = append(statuses, status)
+		}
+	}
+	m.mu.Unlock()
+	for _, status := range statuses {
+		m.send(protocol.MustEnvelope(protocol.TypeApprovalStatus, "", status))
+	}
 }
 
 func (m *OrchestrationManager) cancelApprovals(runID string) {
 	m.mu.Lock()
 	var pending []orchestrationApproval
+	var statuses []protocol.ApprovalStatusPayload
 	for requestID, approval := range m.approvals {
 		if approval.runID == runID {
 			pending = append(pending, approval)
+			status := protocol.ApprovalStatusPayload{RunID: approval.request.RunID, RequestID: requestID, ExecutionID: approval.request.ExecutionID, InstanceID: m.userInputInstanceID, Status: "closed", Outcome: "not_sent", Reason: "run canceled"}
+			m.rememberApprovalLocked(status)
+			statuses = append(statuses, status)
 			delete(m.approvals, requestID)
 		}
 	}
 	m.mu.Unlock()
+	for _, status := range statuses {
+		m.send(protocol.MustEnvelope(protocol.TypeApprovalStatus, "", status))
+	}
 	for _, approval := range pending {
 		approval.ch <- protocol.ApprovalResponsePayload{Decision: "cancel"}
 	}
@@ -774,6 +827,11 @@ func (m *OrchestrationManager) cancelApprovals(runID string) {
 func (m *OrchestrationManager) run(ctx context.Context, payload protocol.OrchestrationStartPayload) {
 	runCWD := m.cwd(payload)
 	profile := normalizeOrchestrationProfile(payload.Profile)
+	verificationMode := protocol.NormalizeVerificationMode(payload.VerificationMode)
+	if verificationMode != protocol.VerificationModeAgent {
+		m.emit(payload.RunID, protocol.OrchestrationEventPayload{Kind: "run.error", Status: store.OrchestrationFailed, Error: "unsupported verification mode; choose agent verification"})
+		return
+	}
 	var bootstrapNote string
 	if profile == bridgeprofiles.Formal() {
 		harness, err := prepareFormalProofHarness(m.cfg, payload, runCWD)
@@ -853,6 +911,12 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 		}
 	}
 	if workerPair == protocol.WorkerPairClaudeClaude {
+		// A fresh durable Claude+Claude task has no persisted session IDs yet.
+		// cleanCodexThreadIDs intentionally returns nil for an empty payload, so
+		// initialize the map before assigning the deterministic slot IDs below.
+		if sessionState.ClaudeSessionIDs == nil {
+			sessionState.ClaudeSessionIDs = map[string]string{}
+		}
 		if sessionState.ClaudeSessionIDs[orchestrationClaudeSlotA] == "" {
 			sessionState.ClaudeSessionIDs[orchestrationClaudeSlotA] = stableOrchestrationSessionID(payload.RunID, orchestrationClaudeSlotA)
 		}
@@ -886,6 +950,7 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 			MaxRounds:               maxRounds,
 			PromptSeq:               payload.PromptSeq,
 			Profile:                 profile,
+			VerificationMode:        verificationMode,
 			NativeContextCompaction: nativeContextCompaction,
 		},
 		Data: map[string]any{
@@ -900,6 +965,7 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 			"maxRounds":               maxRounds,
 			"promptSeq":               payload.PromptSeq,
 			"profile":                 profile,
+			"verificationMode":        verificationMode,
 			"nativeContextCompaction": nativeContextCompaction,
 		},
 	})
@@ -925,6 +991,7 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 	var history []orchestrationTurn
 	var terminalReason string
 	var verifierVerdict *protocol.VerifierVerdict
+	var completionObservation *protocol.CompletionObservation
 	for turn := 1; turn <= maxTurns; turn++ {
 		if err := ctx.Err(); err != nil {
 			m.emit(payload.RunID, protocol.OrchestrationEventPayload{
@@ -1081,77 +1148,89 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 			RunEndData:  m.relayRunEndData(cli, workerSlot, workerPair, sessionState, runCWD),
 			Data:        relayTurnEndData(cli, workerSlot, sessionState),
 		})
-		if turnStatus == "success" {
-			verdict, verifierAgents := m.evaluateAgentVerifierQuorum(ctx, payload, mode, profile, workerPair, firstCLI, history)
-			m.emit(payload.RunID, verifierVerdictEvent(turnID, record, verdict, verifierAgents))
+		reviewerBoundary := shouldRunAgentVerifier(payload)
+		shouldRunVerifier := turnStatus == "success" && (reviewerBoundary || completionCandidate(payload, record))
+		if shouldRunVerifier {
+			sourceBefore := completionSourceDigest(ctx, runCWD)
+			sample := completionSample(payload, record, sourceBefore)
+			sample.Plateau = reviewerBoundary && completionPlateau(payload.CompletionHistory, sample)
+			if sample.Plateau {
+				m.emit(payload.RunID, protocol.OrchestrationEventPayload{Kind: "bridge.note", Source: "bridge", Role: "verifier", Content: "评审输出 token 连续下降并趋稳：正在独立验收；低消耗本身不会判定完成。", BridgeNoteData: &protocol.BridgeNoteData{Category: "completion-diagnostic"}})
+			}
+			var verdict protocol.VerifierVerdict
+			var verifierAgents []agentVerifierResult
+			verdictRecord := record
+			verdict, verifierAgents = m.evaluateAgentVerifierQuorum(ctx, payload, mode, profile, workerPair, firstCLI, history)
+			sourceAfter := completionSourceDigest(ctx, runCWD)
+			if sourceBefore != "" && sourceAfter != "" && sourceBefore != sourceAfter {
+				verdict = protocol.VerifierVerdict{Status: verifierVerdictContinue, Reason: "source changed during independent verification; rerun verification on the final source", Checkers: []protocol.VerifierCheck{verifierCheckContinue("source-integrity", "source changed during verification")}}
+			}
+			sample.SourceDigest = sourceAfter
+			sample.BlockerKey = completionBlockerKey(verdict, verifierAgents)
+			if reviewerBoundary {
+				completionObservation = &sample
+			}
+			verifierVerdict = &verdict
+			m.emit(payload.RunID, verifierVerdictEvent(turnID, verdictRecord, verdict, verifierAgents))
 			for _, agent := range verifierAgents {
-				if agent.Usage.Model == "" {
-					continue
-				}
 				m.emitTurnUsage(payload.RunID, orchestrationTurn{
-					TurnID: turnID + "-" + agent.Agent,
-					Role:   "verifier",
-					CLI:    agent.CLI,
-					Usage:  agent.Usage,
+					TurnID:     turnID + "-" + agent.Agent,
+					WorkerSlot: agent.Slot,
+					Role:       "verifier",
+					CLI:        agent.CLI,
+					Usage:      agent.Usage,
 				})
+			}
+			if ctx.Err() != nil {
+				m.emit(payload.RunID, protocol.OrchestrationEventPayload{Kind: "run.cancelled", Status: store.OrchestrationCanceled, Error: "canceled"})
+				return
+			}
+			if reviewerBoundary && verdict.Status != verifierVerdictPass && completionStalled(payload.CompletionHistory, sample) {
+				terminalReason = "stalled"
+				break
 			}
 			if verdict.Status == verifierVerdictPass {
 				terminalReason = "verified-early"
-				verifierVerdict = &verdict
 				break
 			}
+		} else if payload.TaskGraph == nil && turnStatus == "success" && relayCanConverge(mode, profile, history) {
+			// Retain the legacy in-process relay's documented reviewer/critic
+			// convergence behavior. Durable graphs use the Agent Verifier quorum.
+			terminalReason = "verified-early"
+			legacyVerdict := collectOrchestrationVerifierFacts(mode, profile, false, history)
+			verifierVerdict = &legacyVerdict
+			m.emit(payload.RunID, verifierVerdictEvent(turnID, record, legacyVerdict, nil))
+			break
 		}
 		if turn < maxTurns && turnStatus == "success" {
 			m.runPostTurnNativeMaintenance(ctx, payload.RunID, turnID, role, cli, workerSlot, &sessionState)
 		}
 	}
 	finalContent := relayTerminalContent(history)
-	if payload.TaskGraph != nil && len(payload.TaskGraph.Tasks) == 1 {
-		task := payload.TaskGraph.Tasks[0]
-		finalRound := payload.TaskGraph.MaxRounds <= 0 || payload.TaskGraph.Round >= payload.TaskGraph.MaxRounds
-		if task.Role == store.TaskRoleReviewer && !durableReviewerCanAdvance(profile, history) {
-			reason := "reviewer did not return a resolved structured handoff with independent command evidence"
-			if profile == bridgeprofiles.Formal() && !durableTaskHasFormalCheck(history) {
-				reason = "formal-proof reviewer did not record a successful checker command"
-			}
-			m.emit(payload.RunID, protocol.OrchestrationEventPayload{
-				Kind:          "run.error",
-				Status:        store.OrchestrationFailed,
-				Error:         reason,
-				Content:       finalContent,
-				RunConclusion: runConclusionForStatus(store.OrchestrationFailed, reason, history),
-			})
-			return
-		}
-		if task.Role == store.TaskRoleReviewer && finalRound && !durableReviewerCanComplete(profile, history) {
-			reason := fmt.Sprintf("configured collaboration rounds exhausted after round %d with unresolved obligations", payload.TaskGraph.Round)
-			m.emit(payload.RunID, protocol.OrchestrationEventPayload{
-				Kind:          "run.error",
-				Status:        store.OrchestrationFailed,
-				Error:         reason,
-				Content:       finalContent,
-				RunConclusion: runConclusionForStatus(store.OrchestrationFailed, reason, history),
-			})
-			return
-		}
+	if terminalReason == "stalled" {
+		finalContent = completedExecutionConclusion(finalContent, history, verifierVerdict, terminalReason).Summary
+	}
+	if terminalReason == "" && shouldRunAgentVerifier(payload) {
+		terminalReason = "max-turns"
 	}
 	finalRunEndData := m.runEndDataWithNativeResumeForSession(&protocol.RunEndData{
-		WorkerPair:         workerPair,
-		CodexThreadID:      sessionState.CodexThreadID,
-		CodexThreadIDs:     cleanCodexThreadIDs(sessionState.CodexThreadIDs),
-		ClaudeSessionID:    sessionState.ClaudeSessionID,
-		ClaudeSessionIDs:   sessionState.claudeSessionIDsCopy(),
-		CodexNativeResume:  codexNativeResumeInfoForSlot(orchestrationDefaultCodexSlot(workerPair), sessionState.CodexThreadID, runCWD, codexWorkerRuntime(sessionState.NativeSession, orchestrationDefaultCodexSlot(workerPair))),
-		ClaudeNativeResume: m.claudeNativeResumeInfoForSlotWithRuntime(orchestrationClaudeDefaultSlot, sessionState.ClaudeSessionID, runCWD, claudeWorkerRuntime(sessionState.NativeSession, orchestrationClaudeDefaultSlot)),
-		TerminalReason:     terminalReason,
-		VerifierVerdict:    verifierVerdict,
+		WorkerPair:            workerPair,
+		CodexThreadID:         sessionState.CodexThreadID,
+		CodexThreadIDs:        cleanCodexThreadIDs(sessionState.CodexThreadIDs),
+		ClaudeSessionID:       sessionState.ClaudeSessionID,
+		ClaudeSessionIDs:      sessionState.claudeSessionIDsCopy(),
+		CodexNativeResume:     codexNativeResumeInfoForSlot(orchestrationDefaultCodexSlot(workerPair), sessionState.CodexThreadID, runCWD, codexWorkerRuntime(sessionState.NativeSession, orchestrationDefaultCodexSlot(workerPair))),
+		ClaudeNativeResume:    m.claudeNativeResumeInfoForSlotWithRuntime(orchestrationClaudeDefaultSlot, sessionState.ClaudeSessionID, runCWD, claudeWorkerRuntime(sessionState.NativeSession, orchestrationClaudeDefaultSlot)),
+		TerminalReason:        terminalReason,
+		VerifierVerdict:       verifierVerdict,
+		CompletionObservation: completionObservation,
 	}, runCWD, sessionState.NativeSession)
 	m.emit(payload.RunID, protocol.OrchestrationEventPayload{
 		Kind:          "run.end",
 		Status:        store.OrchestrationCompleted,
 		Content:       finalContent,
 		RunEndData:    finalRunEndData,
-		RunConclusion: runConclusionForStatus(store.OrchestrationCompleted, finalContent, history),
+		RunConclusion: completedExecutionConclusion(finalContent, history, verifierVerdict, terminalReason),
 		Data: map[string]any{
 			"relayOnly":          true,
 			"workerPair":         workerPair,
@@ -1168,6 +1247,10 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 		},
 	})
 	m.runFinalNativeMaintenance(ctx, workerPair, mode, firstCLI, len(history), &sessionState)
+}
+
+func shouldRunAgentVerifier(payload protocol.OrchestrationStartPayload) bool {
+	return payload.TaskGraph != nil && len(payload.TaskGraph.Tasks) == 1 && payload.TaskGraph.Tasks[0].Role == store.TaskRoleReviewer
 }
 
 func durableTaskHasFormalCheck(history []orchestrationTurn) bool {
@@ -1400,6 +1483,7 @@ func mergeOrchestrationTurnAttempts(current, next orchestrationTurn) orchestrati
 		current.Err = next.Err
 	}
 	current.Tools = append(current.Tools, next.Tools...)
+	current.Usage.ByModel = append(usageModelParts(current.Usage), usageModelParts(next.Usage)...)
 	current.Usage.InputTokens += next.Usage.InputTokens
 	current.Usage.OutputTokens += next.Usage.OutputTokens
 	current.Usage.CacheReadTokens += next.Usage.CacheReadTokens
@@ -1709,4 +1793,363 @@ func safeOrchestrationUploadName(name string) string {
 	name = filepath.Base(strings.TrimSpace(name))
 	name = safeOrchestrationFileName.ReplaceAllString(name, "-")
 	return strings.Trim(name, ".-")
+}
+
+const (
+	userInputOutboxActiveMax = 256
+	userInputOutboxSyncMax   = 64
+	userInputOutboxBatch     = 16
+)
+
+type userInputOutboxIdentity struct {
+	runID        string
+	closedAt     time.Time
+	revision     uint64
+	closedStatus protocol.UserInputStatusPayload
+}
+
+// The outbox owns only native-question frames. Ordinary events retain their
+// existing pending queue. Its mutex is never acquired before manager.mu, and
+// delivery never holds manager.mu or sendMu. A nonblocking channel send under
+// this mutex makes detach atomic with respect to choosing the old connection.
+type userInputOutbox struct {
+	mu         sync.Mutex
+	ctx        context.Context
+	output     chan<- protocol.Envelope
+	identities map[string]userInputOutboxIdentity
+	frames     map[string]protocol.Envelope
+	order      []string
+	syncs      int
+	running    bool
+	closed     bool
+}
+
+func newUserInputOutbox(ctx context.Context) *userInputOutbox {
+	b := &userInputOutbox{ctx: ctx, identities: make(map[string]userInputOutboxIdentity), frames: make(map[string]protocol.Envelope)}
+	context.AfterFunc(ctx, func() {
+		b.mu.Lock()
+		b.closed = true
+		b.output, b.frames, b.order, b.identities = nil, nil, nil, nil
+		b.mu.Unlock()
+	})
+	return b
+}
+
+func (b *userInputOutbox) reserve(id, runID string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pruneLocked()
+	if b.closed || b.ctx.Err() != nil || len(b.identities) >= userInputOutboxActiveMax+userInputTerminalMax {
+		return false
+	}
+	b.identities[id] = userInputOutboxIdentity{runID: runID}
+	return true
+}
+
+func (b *userInputOutbox) attach(out chan<- protocol.Envelope) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return
+	}
+	b.output = out
+	b.startLocked()
+}
+
+func (b *userInputOutbox) detach(out chan<- protocol.Envelope) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.output == out {
+		b.output = nil
+	}
+}
+
+func (b *userInputOutbox) enqueue(env protocol.Envelope) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed || b.ctx.Err() != nil {
+		return
+	}
+	b.pruneLocked()
+	key := ""
+	switch env.Type {
+	case protocol.TypeUserInputRequest:
+		req, err := protocol.Decode[protocol.UserInputRequestPayload](env)
+		identity, exists := b.identities[req.RequestID]
+		if err != nil || !exists || !identity.closedAt.IsZero() || req.Revision < identity.revision {
+			return
+		}
+		identity.revision = req.Revision
+		b.identities[req.RequestID] = identity
+		key = "request:" + req.RequestID
+	case protocol.TypeUserInputStatus:
+		status, err := protocol.Decode[protocol.UserInputStatusPayload](env)
+		if err != nil {
+			return
+		}
+		identity, exists := b.identities[status.RequestID]
+		if !exists {
+			// Unavailable/expired requests have no reserved active slot. Bound
+			// these terminal diagnostics independently of native registration.
+			if len(b.identities) >= userInputOutboxActiveMax+userInputTerminalMax {
+				return
+			}
+			identity = userInputOutboxIdentity{runID: status.RunID}
+		}
+		closing := status.Lifecycle == "closed" || status.Status == "closed"
+		if closing && identity.closedAt.IsZero() {
+			identity.closedAt = time.Now()
+			b.removeLocked("request:" + status.RequestID)
+			b.scrubSnapshotsLocked(status)
+			// Earlier queued statuses must not briefly reopen a closed card;
+			// transport receipts remain independently recoverable.
+			for candidate, pending := range b.frames {
+				if candidate == "status:"+status.RequestID || strings.HasPrefix(candidate, "status:"+status.RequestID+":") {
+					prior, _ := protocol.Decode[protocol.UserInputStatusPayload](pending)
+					prior.Lifecycle, prior.Status = "closed", "closed"
+					b.frames[candidate] = protocol.MustEnvelope(protocol.TypeUserInputStatus, "", prior)
+				}
+			}
+		}
+		if !identity.closedAt.IsZero() {
+			status.Lifecycle, status.Status = "closed", "closed"
+		}
+		if status.Revision > identity.revision {
+			identity.revision = status.Revision
+		}
+		if closing {
+			identity.closedStatus = status
+		}
+		b.identities[status.RequestID] = identity
+		key = "status:" + status.RequestID
+		if status.Receipt != nil {
+			key += ":" + status.Receipt.SubmissionID
+			// Manager receipt admission is bounded to 64/run. Also cap this
+			// boundary so malformed callers cannot create an unbounded map.
+			count := 0
+			for candidate := range b.frames {
+				if strings.HasPrefix(candidate, "status:"+status.RequestID+":") {
+					count++
+				}
+			}
+			if _, known := b.frames[key]; !known && count >= userInputTerminalPerRunMax {
+				return
+			}
+		}
+		if previous, ok := b.frames[key]; ok {
+			prior, _ := protocol.Decode[protocol.UserInputStatusPayload](previous)
+			if prior.Revision > status.Revision && !closing {
+				return
+			}
+		}
+		env = protocol.MustEnvelope(protocol.TypeUserInputStatus, "", status)
+	case protocol.TypeUserInputSnapshot:
+		snapshot, err := protocol.Decode[protocol.UserInputSnapshotPayload](env)
+		if err != nil {
+			return
+		}
+		key = "sync:" + snapshot.RunID + ":" + snapshot.SyncID
+		if _, exists := b.frames[key]; !exists {
+			if b.syncs >= userInputOutboxSyncMax {
+				// Do not acknowledge a sync we cannot retain. Its client timeout
+				// performs bounded reconciliation using a fresh sync identity.
+				return
+			}
+			b.syncs++
+		}
+	default:
+		return
+	}
+	if _, exists := b.frames[key]; !exists {
+		b.order = append(b.order, key)
+	}
+	b.frames[key] = env
+	if env.Type == protocol.TypeUserInputSnapshot {
+		for _, identity := range b.identities {
+			if !identity.closedAt.IsZero() {
+				b.scrubSnapshotsLocked(identity.closedStatus)
+			}
+		}
+	}
+	b.pruneLocked()
+	// Preserve immediate delivery when idle without waiting on the channel.
+	b.drainLocked(1)
+	b.startLocked()
+}
+
+func (b *userInputOutbox) scrubSnapshotsLocked(status protocol.UserInputStatusPayload) {
+	for key, env := range b.frames {
+		if env.Type != protocol.TypeUserInputSnapshot {
+			continue
+		}
+		snapshot, err := protocol.Decode[protocol.UserInputSnapshotPayload](env)
+		if err != nil || snapshot.RunID != status.RunID {
+			continue
+		}
+		requests := make([]protocol.UserInputRequestPayload, 0, len(snapshot.Requests))
+		removed := false
+		for _, request := range snapshot.Requests {
+			if request.RequestID == status.RequestID {
+				removed = true
+				continue
+			}
+			requests = append(requests, request)
+		}
+		statuses := make([]protocol.UserInputStatusPayload, 0, len(snapshot.Statuses))
+		for _, pending := range snapshot.Statuses {
+			if pending.RequestID == status.RequestID {
+				removed = true
+				continue
+			}
+			statuses = append(statuses, pending)
+		}
+		// A queued snapshot is a bounded recovery view, not an event log.
+		// Keep one closure per identity and the newest 64 closures. Receipts
+		// have their own snapshot collection and are not removed here.
+		closed := make([]protocol.UserInputStatusPayload, 0, len(snapshot.Closed)+1)
+		indices := make(map[string]int, len(snapshot.Closed))
+		for _, prior := range snapshot.Closed {
+			if index, exists := indices[prior.RequestID]; exists {
+				if prior.Revision > closed[index].Revision {
+					closed[index] = prior
+				}
+				continue
+			}
+			indices[prior.RequestID] = len(closed)
+			closed = append(closed, prior)
+		}
+		if index, exists := indices[status.RequestID]; exists {
+			if status.Revision >= closed[index].Revision {
+				latest := status
+				if latest.Receipt == nil {
+					latest.Receipt = closed[index].Receipt
+				}
+				closed[index] = latest
+			}
+		} else if removed {
+			closed = append(closed, status)
+		}
+		if !removed && len(closed) == len(snapshot.Closed) {
+			if _, exists := indices[status.RequestID]; !exists {
+				continue
+			}
+		}
+		for len(closed) > userInputTerminalPerRunMax {
+			oldest := 0
+			for i := 1; i < len(closed); i++ {
+				if closed[i].Revision < closed[oldest].Revision {
+					oldest = i
+				}
+			}
+			closed = append(closed[:oldest], closed[oldest+1:]...)
+		}
+		snapshot.Requests, snapshot.Statuses, snapshot.Closed = requests, statuses, closed
+		if status.Revision > snapshot.Revision {
+			snapshot.Revision = status.Revision
+		}
+		b.frames[key] = protocol.MustEnvelope(protocol.TypeUserInputSnapshot, "", snapshot)
+	}
+}
+
+func (b *userInputOutbox) removeLocked(key string) {
+	if _, exists := b.frames[key]; !exists {
+		return
+	}
+	delete(b.frames, key)
+	if strings.HasPrefix(key, "sync:") {
+		b.syncs--
+	}
+	for i, candidate := range b.order {
+		if candidate == key {
+			copy(b.order[i:], b.order[i+1:])
+			b.order[len(b.order)-1] = ""
+			b.order = b.order[:len(b.order)-1]
+			break
+		}
+	}
+}
+
+func (b *userInputOutbox) pruneLocked() {
+	perRun := make(map[string]int)
+	terminal := 0
+	for _, identity := range b.identities {
+		if !identity.closedAt.IsZero() {
+			terminal++
+			perRun[identity.runID]++
+		}
+	}
+	for {
+		oldestID := ""
+		var oldest time.Time
+		for id, identity := range b.identities {
+			if identity.closedAt.IsZero() || (time.Since(identity.closedAt) < userInputTerminalTTL && terminal <= userInputTerminalMax && perRun[identity.runID] <= userInputTerminalPerRunMax) {
+				continue
+			}
+			if oldestID == "" || identity.closedAt.Before(oldest) {
+				oldestID, oldest = id, identity.closedAt
+			}
+		}
+		if oldestID == "" {
+			return
+		}
+		identity := b.identities[oldestID]
+		delete(b.identities, oldestID)
+		terminal--
+		perRun[identity.runID]--
+		for key := range b.frames {
+			if key == "request:"+oldestID || key == "status:"+oldestID || strings.HasPrefix(key, "status:"+oldestID+":") {
+				b.removeLocked(key)
+			}
+		}
+	}
+}
+
+func (b *userInputOutbox) drainLocked(limit int) {
+	for i := 0; i < limit && b.output != nil && len(b.order) > 0; i++ {
+		key := b.order[0]
+		select {
+		case b.output <- b.frames[key]:
+			b.removeLocked(key)
+		default:
+			return
+		}
+	}
+}
+
+func (b *userInputOutbox) startLocked() {
+	if b.running || b.closed || b.output == nil || len(b.order) == 0 {
+		return
+	}
+	b.running = true
+	go func() {
+		// A short pause bounds shared-channel occupancy to one batch per tick.
+		// No timer or worker exists for a manager without pending questions.
+		ticker := time.NewTicker(25 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-b.ctx.Done():
+				b.mu.Lock()
+				b.running = false
+				b.mu.Unlock()
+				return
+			case <-ticker.C:
+				b.mu.Lock()
+				b.pruneLocked()
+				b.drainLocked(userInputOutboxBatch)
+				if b.closed || b.output == nil || len(b.order) == 0 {
+					b.running = false
+					b.mu.Unlock()
+					return
+				}
+				b.mu.Unlock()
+			}
+		}
+	}()
 }

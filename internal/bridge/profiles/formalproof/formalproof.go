@@ -104,7 +104,7 @@ func FinalTurnGuidance(mode string) string {
 	if mode == "debate" {
 		method = "adversarial proof adjudication"
 	}
-	return "This is the final formal-proof turn. Produce a user-ready section titled \"最终结论：\" or \"最终测试结果：\" based on " + method + ". Name the unchanged target statement, proof assistant and project, final proof state, exact checker commands and exit results, and dependency/trust audit. Separate checked facts from assumptions and list every unmet obligation. A build containing sorry, admit, Admitted, new axioms, oracle-tainted facts, a weakened statement, or remaining goals is not a completed proof. Do not hand work to another CLI that will not run."
+	return "This is the final formal-proof turn. Produce a user-ready section titled \"最终结论：\" or \"最终测试结果：\" based on " + method + ". Name the unchanged target statement, proof assistant and project, final proof state, exact checker commands and exit results, and dependency/trust audit. Separate checked facts from assumptions and list every unmet obligation. A build containing sorry, admit, Admitted, new axioms, oracle-tainted facts, a weakened statement, or remaining goals is not a completed proof. When the original obligation is discharged and your independent checks pass, the terminal machine handoff must use next=none and risks=none. Do not put optional future re-audits, limits of a bounded source review, or commands that merely repeat already-passing checks in next or risks; report an actual unmet proof obligation, failed check, or unresolved trust issue there instead. Do not hand work to another CLI that will not run."
 }
 
 func systemARelayGuidance(userPrompt string) string {

@@ -3,6 +3,7 @@ package hub
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -47,6 +48,12 @@ func (p *Pool) AgentOnline(agentID string) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.agents[agentID] != nil
+}
+
+func (p *Pool) CurrentAgent(agentID string, conn *BridgeConn) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.agents[agentID] == conn
 }
 
 func (p *Pool) AgentSupportsUsageLedger(agentID string) bool {
@@ -185,6 +192,23 @@ func (p *Pool) BroadcastToOrchestrationBrowsers(runID string, env protocol.Envel
 	}
 }
 
+// Active native questions and statuses are only delivered to pages that
+// negotiated v2 on this WebSocket. Terminal empty snapshots remain read-only
+// compatible with older pages; they cannot create a new answer lease.
+func (p *Pool) BroadcastNativeUserInput(runID string, env protocol.Envelope, terminalReadOnly bool) {
+	p.mu.RLock()
+	var conns []*BrowserConn
+	for conn := range p.orchestrationBrowsers[runID] {
+		if conn.nativeUserInputVersion.Load() >= 3 || terminalReadOnly {
+			conns = append(conns, conn)
+		}
+	}
+	p.mu.RUnlock()
+	for _, conn := range conns {
+		_ = conn.Send(env)
+	}
+}
+
 type wsSender struct {
 	ws   *websocket.Conn
 	send chan protocol.Envelope
@@ -300,6 +324,7 @@ func (p *Pool) AgentCapabilities(agentID string) (*protocol.BridgeCapabilities, 
 type BrowserConn struct {
 	sid string
 	wsSender
+	nativeUserInputVersion atomic.Int32
 }
 
 func NewBrowserConn(sid string, ws *websocket.Conn, queue int) *BrowserConn {

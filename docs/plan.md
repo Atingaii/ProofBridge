@@ -1,5 +1,9 @@
 # ProofBridge Plan
 
+Native Mac installation: platform downloads and cross-builds are implemented;
+actual Mac install/link validation remains an operator exit gate. See
+[macOS installation](features/macos-installation.md).
+
 ## Goal
 
 Let a single user talk from any browser to Codex CLI running on a private machine.
@@ -41,8 +45,21 @@ Let a single user talk from any browser to Codex CLI running on a private machin
 | P10.1 | Orchestration runtime, token usage, cost estimates, one-turn mode, and prominent final conclusion | implemented |
 | P10.2 | Administrator activity and usage dashboard with user aggregates and read-only conversation detail | implemented |
 | P10.3 | Isolated Codex/Claude worker profiles, dual-provider pairs, and deterministic quorum early-stop | implemented |
+| P10.4 | [Intermediate completion and actual-model usage fixes](features/early-completion-model-accounting.md), including verifier usage and partial cost display | implemented; local verification |
+| P10.5 | [Independent early completion and completed lifecycle results](features/independent-early-run-completion.md) | Go/frontend checks passed; experimental v0.3.66 deployed |
+| P10.6 | [Native structured orchestration questions](features/native-structured-user-input.md) | v3 remediation implemented with historical automated checks; [queued native interaction](features/native-structured-user-input-runtime-plan.md) approved and in implementation; real model/browser acceptance and target component versions remain unverified |
+| P10.7 | [Official Codex A/B model and reasoning selections](features/official-codex-worker-models.md) with a shared-data enhanced leading website | website deployed 2026-10-08; runtime selections require ConfigSwitcher v3 |
+| P10.8 | [Lightweight Android host and shared phone presentation](features/android-mobile-redesign.md) | software published 2026-10-08 on codex.sparkon.cn; signed Android 1.1.0 available; actual-device footprint/memory acceptance pending |
 
 ## Engineering Workflow
+
+Implemented on feature branch: [MCP access, verification Skill and submission-level email notifications](features/mcp-skill-task-notifications.md). The 2026-11-06 work implements the 20-tool contract, [ADR-029](adr/029-hub-mcp-and-submission-notifications.md), and [source/document audit](reviews/proofbridge-mcp-current-state.md). Product implementation is under local acceptance; laboratory/VPN deployment has not started. Execution remains on user-owned Bridge endpoints.
+
+The Skill installer and its files now use a fixed official GitHub release to
+avoid depending on a laboratory Hub's private CA during installation. MCP retains
+the configured Hub and still requires client certificate trust. Publication and
+installation checks are tracked in the [distribution contract](features/github-skill-distribution.md);
+native-client loading and proof acceptance remain separate gates.
 
 - Non-trivial changes need ADR or feature design before code.
 - Use [docs/change-impact.md](change-impact.md) before editing and before
@@ -52,6 +69,12 @@ Let a single user talk from any browser to Codex CLI running on a private machin
 
 ## Follow-up
 
+- Implemented on the feature branch (2026-11-06): natural-language mentions of **Codex Bridge**,
+  **CodexBridge**, and **ProofBridge** share the same end-user verification Skill.
+  Discovery descriptions, examples and alias regression inputs now use the same workflow.
+  Keep the `proofbridge` MCP server label/tool names,
+  managed-worker recursion isolation, and existing run continuity unchanged.
+  Actual native-client matching is recorded separately from metadata checks.
 - Chat resumes native Codex history: short-lived `codex exec` paths resume with the
   returned thread id, and review-required chat uses the `codex app-server` runner
   (`internal/bridge/appserver_runner.go`) with `initialize` / `thread/start` /
@@ -63,9 +86,12 @@ Let a single user talk from any browser to Codex CLI running on a private machin
   `claude-b` sessions. Native sessions are reused across turns so the
   user can `resume` them from the workspace. The Bridge only relays worker
   output and turn context; it does not inject remediation into worker sessions.
-  Local hard gates nominate completion candidates; two fresh Agent Verifiers
-  use the role presets for those candidates, and a run ends early only when both models and local evidence gates accept the
-  structured, independently evidenced final handoff.
+  After every round's durable reviewer, two fresh Agent Verifiers
+  independently inspect the original task and real workspace using the role
+  presets. Either passing verdict ends unused rounds early. Final rounds also
+  verify; repeated unchanged blockers can stop as incomplete, and the initial
+  plan remains advisory. See
+  [independent-early-run-completion.md](features/independent-early-run-completion.md).
   Saved CLI presets can be pinned independently to `claude`, `codex-a`,
   `codex-b`, `claude-a`, and `claude-b` worker slots without changing
   machine-wide configuration.
@@ -83,6 +109,37 @@ Let a single user talk from any browser to Codex CLI running on a private machin
   [docs/features/orchestration-plan-progress-workspace.md](features/orchestration-plan-progress-workspace.md).
 
 ## Maintenance Log
+
+- 2026-10-03: Deployed the standard frontend and shared Hub as
+  `v0.3.82-input-recovery-20261003`. Structured-input query errors now correlate
+  by syncId, distinguish discovery failure from unknown answer delivery, and
+  recover without stale notices or answer replay. The standard site also picks
+  up the desktop repairs below; test retains its leading frontend. No Bridge
+  was upgraded or restarted. See [native structured input](features/native-structured-user-input.md)
+  and [deployment variants](deployment.md#leading-and-experimental-websites).
+  Eleven desktop recovery scenarios, targeted checks, frontend tests and builds
+  pass. Full Go testing reported two timing-sensitive connection/lease failures;
+  both passed individual rechecks, without making the full run all-green.
+- 2026-09-30: Desktop audit repairs are implemented and deployed to the leading
+  website and shared Hub as `v0.3.82-desktop-fixes-20260930`: isolated drafts,
+  recoverable authentication/statistics requests, history search and reversible
+  archive, plus accurate bilingual help/version information. See
+  [desktop audit fixes](features/desktop-audit-fixes.md). The separately authorized
+  website release retains the previous site's frontend and running Bridges;
+  public health, resources, desktop pages, history and statistics reads were
+  verified. The first post-release usage overview timed out; a bounded retry
+  returned successfully in about three seconds, without establishing the cause.
+  Mobile changes and notification/budget suggestions remain outside this work item.
+  Desktop browser, Hub/Store and integration checks pass; the full Go gate still
+  exposes an existing intermittent Bridge CLI stderr collection failure.
+- 2026-09-11: Added participant/model charts with historical slot and native-log
+  recovery, and a cached automatic model capability/reference-price catalog.
+  Preset probes survive reselecting the same model. See
+  [participant usage](features/orchestration-worker-usage.md) and
+  [catalog ADR](adr/021-refreshable-model-catalog.md).
+- 2026-09-08: Added Linux ARM64 endpoint downloads, platform detection and
+  pre-replacement execution checks in the installer, with sequential dual-arch
+  builds. See [Linux ARM64 installation](features/linux-arm64-installation.md).
 
 - 2026-08-15: Delayed durable task recovery until the existing bounded Bridge
   reconnect window after Hub startup, so a brief Hub-only reload preserves
@@ -141,3 +198,9 @@ Let a single user talk from any browser to Codex CLI running on a private machin
   to root routing/bootstrap and moving pages, shared helpers, chat components,
   settings, orchestration renderers, and UI primitives under
   `frontend/src/app/{pages,components,lib}`.
+
+## Main integration and laboratory deployment (2026-11-11)
+
+The dynamic edition, MCP/Skill and notifications are integrated with main while retaining the mainline design article.
+The command-line lab guide covers VPN, independent browser/MCP origins, SSH forwarding, services and upgrades.
+See [integration contract](features/main-lab-deployment.md). Running deployments are managed independently of source publication.

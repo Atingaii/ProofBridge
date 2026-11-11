@@ -9,6 +9,8 @@ WorkingDirectory=/opt/codex-bridge
 Environment=APP_ENV=prod
 Environment=APP_HOST=127.0.0.1
 Environment=APP_PORT=8088
+# Optional private overrides; a missing file preserves existing YAML deployments.
+EnvironmentFile=-/opt/codex-bridge/configs/hub.env
 ExecStart=/usr/local/bin/codex-bridge hub
 Restart=always
 RestartSec=5

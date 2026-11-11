@@ -1,4 +1,4 @@
-name: Linux Release
+name: Bridge Release
 
 on:
   push:
@@ -31,10 +31,11 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           make portable-package
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -ldflags "-s -w -X main.Version=${VERSION} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            -o dist/codex-bridge-linux-amd64 .
+          make bridge-downloads DOWNLOAD_DIR=dist VERSION="$VERSION"
           (cd dist && sha256sum codex-bridge-linux-amd64 > codex-bridge-linux-amd64.sha256)
+          (cd dist && sha256sum codex-bridge-linux-arm64 > codex-bridge-linux-arm64.sha256)
+          (cd dist && sha256sum codex-bridge-darwin-amd64 > codex-bridge-darwin-amd64.sha256)
+          (cd dist && sha256sum codex-bridge-darwin-arm64 > codex-bridge-darwin-arm64.sha256)
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -45,5 +46,11 @@ jobs:
           files: |
             dist/codex-bridge-linux-amd64
             dist/codex-bridge-linux-amd64.sha256
+            dist/codex-bridge-linux-arm64
+            dist/codex-bridge-linux-arm64.sha256
+            dist/codex-bridge-darwin-amd64
+            dist/codex-bridge-darwin-amd64.sha256
+            dist/codex-bridge-darwin-arm64
+            dist/codex-bridge-darwin-arm64.sha256
             dist/codex-bridge-${{ github.ref_name }}-linux-amd64.tar.gz
             dist/codex-bridge-${{ github.ref_name }}-linux-amd64.tar.gz.sha256

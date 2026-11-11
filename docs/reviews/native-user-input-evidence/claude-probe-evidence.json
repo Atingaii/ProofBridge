@@ -1,0 +1,359 @@
+{
+  "date": "2026-09-24",
+  "cli_version": "2.1.281",
+  "scope": "real CLI and project MCP helper with temporary structuredContent-removal wrapper; synthetic socket answer receiver, no Hub/browser",
+  "results": [
+    {
+      "test": "default-array-text-wrapper",
+      "exit": 0,
+      "timeout": false,
+      "callbacks": [
+        {
+          "tool": "AskUserQuestion",
+          "questions": [
+            {
+              "question": "Which color do you choose?",
+              "header": "Color",
+              "options": [
+                {
+                  "label": "Red",
+                  "description": "Choose red."
+                },
+                {
+                  "label": "Blue",
+                  "description": "Choose blue."
+                }
+              ],
+              "multiSelect": false
+            },
+            {
+              "question": "Which features do you want?",
+              "header": "Features",
+              "options": [
+                {
+                  "label": "Search",
+                  "description": "Include search."
+                },
+                {
+                  "label": "Export",
+                  "description": "Include export."
+                },
+                {
+                  "label": "Print",
+                  "description": "Include print."
+                }
+              ],
+              "multiSelect": true
+            },
+            {
+              "question": "Which title length do you prefer?",
+              "header": "Title",
+              "options": [
+                {
+                  "label": "Short",
+                  "description": "Use a short title."
+                },
+                {
+                  "label": "Long",
+                  "description": "Use a long title."
+                }
+              ],
+              "multiSelect": false
+            }
+          ],
+          "answers": {
+            "Which color do you choose?": "Red",
+            "Which features do you want?": [
+              "Search",
+              "Export"
+            ],
+            "Which title length do you prefer?": "CUSTOM_CAPABILITY_729"
+          }
+        }
+      ],
+      "events": [
+        {
+          "type": "init",
+          "model": "gpt-6-sol",
+          "permissionMode": "default",
+          "mcp_servers": [
+            {
+              "name": "codex_bridge",
+              "status": "connected",
+              "source": "dynamic"
+            }
+          ],
+          "tools": [
+            "AskUserQuestion"
+          ]
+        },
+        {
+          "type": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "call_ItuTNVPZRc5fZGSuUojKFelt",
+              "name": "AskUserQuestion",
+              "input": {
+                "questions": [
+                  {
+                    "header": "Color",
+                    "question": "Which color do you choose?",
+                    "multiSelect": false,
+                    "options": [
+                      {
+                        "label": "Red",
+                        "description": "Choose red."
+                      },
+                      {
+                        "label": "Blue",
+                        "description": "Choose blue."
+                      }
+                    ]
+                  },
+                  {
+                    "header": "Features",
+                    "question": "Which features do you want?",
+                    "multiSelect": true,
+                    "options": [
+                      {
+                        "label": "Search",
+                        "description": "Include search."
+                      },
+                      {
+                        "label": "Export",
+                        "description": "Include export."
+                      },
+                      {
+                        "label": "Print",
+                        "description": "Include print."
+                      }
+                    ]
+                  },
+                  {
+                    "header": "Title",
+                    "question": "Which title length do you prefer?",
+                    "multiSelect": false,
+                    "options": [
+                      {
+                        "label": "Short",
+                        "description": "Use a short title."
+                      },
+                      {
+                        "label": "Long",
+                        "description": "Use a long title."
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "type": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "content": "The user answered: \"Which color do you choose?\"=\"Red\", \"Which features do you want?\"=\"Search,Export\", \"Which title length do you prefer?\"=\"CUSTOM_CAPABILITY_729\". Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say.",
+              "tool_use_id": "call_ItuTNVPZRc5fZGSuUojKFelt"
+            }
+          ]
+        },
+        {
+          "type": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "Red\nSearch,Export\nCUSTOM_CAPABILITY_729"
+            }
+          ]
+        },
+        {
+          "type": "result",
+          "subtype": "success",
+          "is_error": false,
+          "result": "Red\nSearch,Export\nCUSTOM_CAPABILITY_729",
+          "num_turns": 2,
+          "permission_denials": []
+        }
+      ]
+    },
+    {
+      "test": "bypassPermissions-array-text-wrapper",
+      "exit": 0,
+      "timeout": false,
+      "callbacks": [
+        {
+          "tool": "AskUserQuestion",
+          "questions": [
+            {
+              "question": "Which color do you choose?",
+              "header": "Color",
+              "options": [
+                {
+                  "label": "Red",
+                  "description": "Choose Red."
+                },
+                {
+                  "label": "Blue",
+                  "description": "Choose Blue."
+                }
+              ],
+              "multiSelect": false
+            },
+            {
+              "question": "Which features do you want?",
+              "header": "Features",
+              "options": [
+                {
+                  "label": "Search",
+                  "description": "Include Search."
+                },
+                {
+                  "label": "Export",
+                  "description": "Include Export."
+                },
+                {
+                  "label": "Print",
+                  "description": "Include Print."
+                }
+              ],
+              "multiSelect": true
+            },
+            {
+              "question": "Which title length do you prefer?",
+              "header": "Title",
+              "options": [
+                {
+                  "label": "Short",
+                  "description": "Use a short title."
+                },
+                {
+                  "label": "Long",
+                  "description": "Use a long title."
+                }
+              ],
+              "multiSelect": false
+            }
+          ],
+          "answers": {
+            "Which color do you choose?": "Red",
+            "Which features do you want?": [
+              "Search",
+              "Export"
+            ],
+            "Which title length do you prefer?": "CUSTOM_CAPABILITY_729"
+          }
+        }
+      ],
+      "events": [
+        {
+          "type": "init",
+          "model": "gpt-6-sol",
+          "permissionMode": "bypassPermissions",
+          "mcp_servers": [
+            {
+              "name": "codex_bridge",
+              "status": "connected",
+              "source": "dynamic"
+            }
+          ],
+          "tools": [
+            "AskUserQuestion"
+          ]
+        },
+        {
+          "type": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "call_vqPGIdgSkIoBvvdozORkKki1",
+              "name": "AskUserQuestion",
+              "input": {
+                "questions": [
+                  {
+                    "header": "Color",
+                    "question": "Which color do you choose?",
+                    "multiSelect": false,
+                    "options": [
+                      {
+                        "label": "Red",
+                        "description": "Choose Red."
+                      },
+                      {
+                        "label": "Blue",
+                        "description": "Choose Blue."
+                      }
+                    ]
+                  },
+                  {
+                    "header": "Features",
+                    "question": "Which features do you want?",
+                    "multiSelect": true,
+                    "options": [
+                      {
+                        "label": "Search",
+                        "description": "Include Search."
+                      },
+                      {
+                        "label": "Export",
+                        "description": "Include Export."
+                      },
+                      {
+                        "label": "Print",
+                        "description": "Include Print."
+                      }
+                    ]
+                  },
+                  {
+                    "header": "Title",
+                    "question": "Which title length do you prefer?",
+                    "multiSelect": false,
+                    "options": [
+                      {
+                        "label": "Short",
+                        "description": "Use a short title."
+                      },
+                      {
+                        "label": "Long",
+                        "description": "Use a long title."
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "type": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "content": "The user answered: \"Which color do you choose?\"=\"Red\", \"Which features do you want?\"=\"Search,Export\", \"Which title length do you prefer?\"=\"CUSTOM_CAPABILITY_729\". Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say.",
+              "tool_use_id": "call_vqPGIdgSkIoBvvdozORkKki1"
+            }
+          ]
+        },
+        {
+          "type": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "Red\nSearch,Export\nCUSTOM_CAPABILITY_729"
+            }
+          ]
+        },
+        {
+          "type": "result",
+          "subtype": "success",
+          "is_error": false,
+          "result": "Red\nSearch,Export\nCUSTOM_CAPABILITY_729",
+          "num_turns": 2,
+          "permission_denials": []
+        }
+      ]
+    }
+  ]
+}

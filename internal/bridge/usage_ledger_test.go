@@ -64,3 +64,22 @@ func TestScanUsageSessionDoesNotFallBackForIsolatedWorker(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestClaudeUsageDeduplicatesMessageBlocks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session-12345678.jsonl")
+	content := `{"type":"assistant","message":{"id":"one","usage":{"input_tokens":40,"output_tokens":1}}}
+{"type":"assistant","message":{"id":"one","usage":{"input_tokens":40,"output_tokens":30}}}
+{"type":"assistant","message":{"id":"one","usage":{"input_tokens":40,"output_tokens":1}}}
+{"type":"assistant","message":{"id":"two","usage":{"input_tokens":40,"output_tokens":30}}}
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	events, err := parseClaudeUsageLog(path, protocol.OrchestrationUsageSession{CLI: "claude", SessionID: "session-12345678"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].InputTokens != 40 || events[0].OutputTokens != 30 || events[0].EventID == events[1].EventID {
+		t.Fatalf("events = %#v", events)
+	}
+}

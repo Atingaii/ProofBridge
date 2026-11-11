@@ -1,3 +1,4 @@
+import { MobileViewport } from '../components/MobileSurface';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Activity, AlertCircle, Check, Command, GitBranch, ImagePlus, Lock, MessageSquare, RefreshCw, Send, Share2 } from 'lucide-react';
 import { api } from '../lib/api';
@@ -93,7 +94,8 @@ export function PublicSharePage({ shareID, t }: { shareID: string; t: UIText }) 
   const ignoreApprovalDecision = () => undefined;
 
   return (
-    <div className="h-screen w-full flex bg-background text-foreground overflow-hidden font-sans">
+    <div className="phone-page phone-workspace h-screen w-full flex bg-background text-foreground overflow-hidden font-sans">
+      <MobileViewport />
       <aside className="hidden md:flex w-[260px] flex-col border-r border-sidebar-border bg-sidebar">
         <div className="h-14 flex items-center px-4 border-b border-sidebar-border shrink-0">
           <div className="flex items-center gap-2 font-medium">

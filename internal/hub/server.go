@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/tencent/codex-bridge/internal/modelcatalog"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -20,6 +22,7 @@ import (
 	"time"
 
 	"github.com/tencent/codex-bridge/internal/auth"
+	"github.com/tencent/codex-bridge/internal/automationassets"
 	"github.com/tencent/codex-bridge/internal/config"
 	"github.com/tencent/codex-bridge/internal/protocol"
 	"github.com/tencent/codex-bridge/internal/rollout"
@@ -48,12 +51,18 @@ type BuildInfo struct {
 }
 
 type Server struct {
-	cfg      *config.Config
-	store    *store.Store
-	signer   *auth.Signer
-	pool     *Pool
-	httpSrv  *http.Server
-	rollouts rollout.Evaluator
+	automationMu           sync.Mutex
+	automationInteractions *automationInteractionBroker
+	// Serializes live instruction acceptance with graph completion. No model I/O waits.
+	orchestrationInputMu sync.Mutex
+	usageSyncMu          sync.Mutex
+	usageSyncRequested   map[string]time.Time
+	cfg                  *config.Config
+	store                *store.Store
+	signer               *auth.Signer
+	pool                 *Pool
+	httpSrv              *http.Server
+	rollouts             rollout.Evaluator
 
 	buffersMu sync.Mutex
 	buffers   map[string]string
@@ -78,17 +87,18 @@ type rateBucket struct {
 
 func NewServer(cfg *config.Config, st *store.Store, build BuildInfo) *Server {
 	s := &Server{
-		cfg:              cfg,
-		store:            st,
-		signer:           auth.NewSigner(cfg.Auth.JWTSecret, cfg.Auth.AccessTokenTTL.Duration),
-		rollouts:         rollout.New(cfg.Hub.FeatureRollouts),
-		pool:             NewPool(),
-		buffers:          make(map[string]string),
-		owners:           make(map[string]string),
-		leases:           make(map[string]*browserSessionLease),
-		rates:            make(map[string]rateBucket),
-		cliConfigPending: make(map[string]cliConfigPendingRequest),
-		turnstile:        cloudflareTurnstileVerifier{client: &http.Client{Timeout: 8 * time.Second}, url: turnstileVerifyURL},
+		automationInteractions: newAutomationInteractionBroker(),
+		cfg:                    cfg,
+		store:                  st,
+		signer:                 auth.NewSigner(cfg.Auth.JWTSecret, cfg.Auth.AccessTokenTTL.Duration),
+		rollouts:               rollout.New(cfg.Hub.FeatureRollouts),
+		pool:                   NewPool(),
+		buffers:                make(map[string]string),
+		owners:                 make(map[string]string),
+		leases:                 make(map[string]*browserSessionLease),
+		rates:                  make(map[string]rateBucket),
+		cliConfigPending:       make(map[string]cliConfigPendingRequest),
+		turnstile:              cloudflareTurnstileVerifier{client: &http.Client{Timeout: 8 * time.Second}, url: turnstileVerifyURL},
 	}
 
 	mux := http.NewServeMux()
@@ -109,6 +119,11 @@ func NewServer(cfg *config.Config, st *store.Store, build BuildInfo) *Server {
 	mux.HandleFunc("GET /api/agents", s.withAuth(s.handleAgents))
 	mux.HandleFunc("DELETE /api/agents/{agentID}", s.withAuth(s.handleDeleteAgent))
 	mux.HandleFunc("POST /api/agents/{agentID}/repair-token", s.withAuth(s.handleCreateAgentRepairToken))
+	mux.HandleFunc("GET /api/cli-config/presets", s.withAuth(s.handleListUserCLIConfigPresets))
+	mux.HandleFunc("POST /api/cli-config/test", s.withAuth(s.handleTestUserCLIConfig))
+	mux.HandleFunc("POST /api/cli-config/presets", s.withAuth(s.handleCreateUserCLIConfigPreset))
+	mux.HandleFunc("PUT /api/cli-config/presets/{presetID}", s.withAuth(s.handleUpdateUserCLIConfigPreset))
+	mux.HandleFunc("DELETE /api/cli-config/presets/{presetID}", s.withAuth(s.handleDeleteUserCLIConfigPreset))
 	mux.HandleFunc("GET /api/agents/{agentID}/cli-config/presets", s.withAuth(s.handleListCLIConfigPresets))
 	mux.HandleFunc("POST /api/agents/{agentID}/cli-config/test", s.withAuth(s.handleTestCLIConfig))
 	mux.HandleFunc("POST /api/agents/{agentID}/cli-config/presets", s.withAuth(s.handleCreateCLIConfigPreset))
@@ -116,9 +131,13 @@ func NewServer(cfg *config.Config, st *store.Store, build BuildInfo) *Server {
 	mux.HandleFunc("POST /api/agents/{agentID}/cli-config/presets/{presetID}/apply", s.withAuth(s.handleApplyCLIConfigPreset))
 	mux.HandleFunc("DELETE /api/agents/{agentID}/cli-config/presets/{presetID}", s.withAuth(s.handleDeleteCLIConfigPreset))
 	mux.HandleFunc("POST /api/agents/{agentID}/cli-config/official-reset", s.withAuth(s.handleResetCLIConfig))
+	mux.HandleFunc("GET /api/agents/{agentID}/cli-config/official-models", s.withAuth(s.handleOfficialCLIModels))
 	mux.HandleFunc("POST /api/bridge-tokens", s.withAuth(s.handleCreateBridgeToken))
 	mux.HandleFunc("GET /install.sh", s.handleInstallScript)
 	mux.HandleFunc("GET /downloads/codex-bridge-linux-amd64", s.handleBridgeBinaryDownload)
+	mux.HandleFunc("GET /downloads/codex-bridge-linux-arm64", s.handleBridgeBinaryDownload)
+	mux.HandleFunc("GET /downloads/codex-bridge-darwin-amd64", s.handleBridgeBinaryDownload)
+	mux.HandleFunc("GET /downloads/codex-bridge-darwin-arm64", s.handleBridgeBinaryDownload)
 	mux.HandleFunc("GET /api/sessions", s.withAuth(s.handleListSessions))
 	mux.HandleFunc("POST /api/sessions", s.withAuth(s.handleCreateSession))
 	mux.HandleFunc("PATCH /api/sessions/{sid}", s.withAuth(s.handleUpdateSession))
@@ -129,6 +148,7 @@ func NewServer(cfg *config.Config, st *store.Store, build BuildInfo) *Server {
 	mux.HandleFunc("GET /api/orchestrations", s.withAuth(s.handleListOrchestrations))
 	mux.HandleFunc("POST /api/orchestrations", s.withAuth(s.handleCreateOrchestration))
 	mux.HandleFunc("GET /api/orchestrations/{runID}", s.withAuth(s.handleGetOrchestration))
+	mux.HandleFunc("PATCH /api/orchestrations/{runID}", s.withAuth(s.handleUpdateOrchestration))
 	mux.HandleFunc("GET /api/orchestrations/{runID}/progress", s.withAuth(s.handleOrchestrationProgress))
 	mux.HandleFunc("DELETE /api/orchestrations/{runID}", s.withAuth(s.handleDeleteOrchestration))
 	mux.HandleFunc("GET /api/orchestrations/{runID}/stats", s.withAuth(s.handleOrchestrationStats))
@@ -138,6 +158,7 @@ func NewServer(cfg *config.Config, st *store.Store, build BuildInfo) *Server {
 	mux.HandleFunc("GET /api/admin/users/{userID}/conversations/{kind}/{conversationID}", s.withAdmin(s.handleAdminConversationContent))
 	mux.HandleFunc("POST /api/orchestrations/{runID}/usage-sync", s.withAuth(s.handleOrchestrationUsageSync))
 	mux.HandleFunc("GET /api/orchestrations/{runID}/events", s.withAuth(s.handleOrchestrationEvents))
+	mux.HandleFunc("GET /api/orchestrations/{runID}/prompts", s.withAuth(s.handleListOrchestrationMessages))
 	mux.HandleFunc("POST /api/orchestrations/{runID}/prompts", s.withAuth(s.handleContinueOrchestration))
 	mux.HandleFunc("POST /api/orchestrations/{runID}/cancel", s.withAuth(s.handleCancelOrchestration))
 	mux.HandleFunc("POST /api/orchestrations/{runID}/share", s.withAuth(s.handleShareOrchestration))
@@ -146,6 +167,29 @@ func NewServer(cfg *config.Config, st *store.Store, build BuildInfo) *Server {
 	mux.HandleFunc("GET /ws/orchestrations", s.withAuth(s.handleOrchestrationWS))
 	mux.HandleFunc("GET /ws/chat", s.withAuth(s.handleBrowserWS))
 	mux.HandleFunc("GET /api/agents/connect", s.handleBridgeWS)
+	mcpHandler := s.newAutomationMCPHandler()
+	for _, method := range []string{"GET", "POST", "DELETE"} {
+		mux.Handle(method+" /mcp", mcpHandler)
+	}
+	mux.HandleFunc("GET /api/automation/access", s.withAuth(s.handleAutomationAccess))
+	mux.HandleFunc("POST /api/automation/access/rotate", s.withAuth(s.handleRotateAutomationToken))
+	mux.HandleFunc("POST /api/automation/access/revoke", s.withAuth(s.handleRevokeAutomationToken))
+	mux.HandleFunc("GET /api/automation/preferences", s.withAuth(s.handleGetAutomationPreferences))
+	mux.HandleFunc("PUT /api/automation/preferences", s.withAuth(s.handlePutAutomationPreferences))
+	mux.HandleFunc("GET /api/automation/notifications", s.withAuth(s.handleAutomationNotifications))
+	mux.HandleFunc("POST /api/automation/mail/test", s.withAuth(s.handleAutomationMailTest))
+	mux.Handle("GET /skills/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.cfg.Automation.Enabled {
+			http.NotFound(w, r)
+			return
+		}
+		base, err := s.automationPublicURL()
+		if err != nil {
+			writeOperationError(w, err)
+			return
+		}
+		automationassets.Handler(base).ServeHTTP(w, r)
+	}))
 	mux.Handle("GET /", s.staticHandler())
 
 	addr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
@@ -159,6 +203,17 @@ func NewServer(cfg *config.Config, st *store.Store, build BuildInfo) *Server {
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	// Recover only persisted reservations from the previous Hub lifetime. This
+	// must run before requests or dispatchers can create current reservations.
+	if err := s.store.ReconcileAutomationSubmissions(ctx); err != nil {
+		return fmt.Errorf("recover automation submissions: %w", err)
+	}
+	catalogCtx, stopCatalog := context.WithCancel(ctx)
+	defer stopCatalog()
+	go s.runAutomationNotifications(catalogCtx)
+	cachePath := filepath.Join(filepath.Dir(s.cfg.Hub.DBPath), "model-catalog.json")
+	_ = modelcatalog.Default.Load(cachePath)
+	go modelcatalog.Default.Run(catalogCtx, cachePath)
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(quit)
@@ -223,6 +278,7 @@ func (s *Server) recoverInterruptedRuns(ctx context.Context) {
 			slog.Info("[hub] preserved active work for reconnected Bridge", "agent_id", agentID)
 			continue
 		}
+		_ = s.store.FailOrchestrationMessagesForAgent(sweepCtx, agentID, "Bridge unavailable after Hub recovery; instruction delivery uncertain, automatic retry disabled")
 		if n, err := s.store.RecoverTaskGraphsForAgent(sweepCtx, agentID); err != nil {
 			slog.Error("[hub] durable task graph recovery failed", "agent_id", agentID, "error", err)
 			continue
@@ -289,7 +345,9 @@ func (s *Server) staticHandler() http.Handler {
 			w.Header().Set("Cache-Control", "no-store")
 		}
 		if r.URL.Path != "/" && !strings.Contains(filepathBase(r.URL.Path), ".") {
-			if _, err := fs.Stat(sub, strings.TrimPrefix(r.URL.Path, "/")); err != nil {
+			// Public article assets can share a directory name with an SPA route.
+			// Existing directories must still render the app instead of a file listing.
+			if info, err := fs.Stat(sub, strings.TrimPrefix(r.URL.Path, "/")); err != nil || info.IsDir() {
 				r = r.Clone(r.Context())
 				r.URL.Path = "/"
 			}
@@ -453,11 +511,11 @@ func (s *Server) secureCookie(r *http.Request) bool {
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, uid string) {
 	user, err := s.store.UserByID(r.Context(), uid)
 	if err != nil {
-		serverutil.WriteError(w, http.StatusUnauthorized, "INVALID_TOKEN", "invalid token")
+		writeAuthUserReadError(w, r, err)
 		return
 	}
 	user = s.decorateUser(user)
-	serverutil.WriteJSON(w, http.StatusOK, map[string]any{"user": user})
+	serverutil.WriteJSON(w, http.StatusOK, map[string]any{"user": user, "nativeUserInputProtocolVersion": 3})
 }
 
 func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request, uid string) {
@@ -523,6 +581,7 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request, uid s
 func (s *Server) handleCreateBridgeToken(w http.ResponseWriter, r *http.Request, uid string) {
 	var req struct {
 		Label             string `json:"label"`
+		Name              string `json:"name"`
 		TTL               string `json:"ttl"`
 		PermissionProfile string `json:"permissionProfile"`
 	}
@@ -545,6 +604,10 @@ func (s *Server) handleCreateBridgeToken(w http.ResponseWriter, r *http.Request,
 	}
 	if runes := []rune(label); len(runes) > 80 {
 		label = string(runes[:80])
+	}
+	name := strings.TrimSpace(req.Name)
+	if runes := []rune(name); len(runes) > 80 {
+		name = string(runes[:80])
 	}
 	profile := normalizePermissionProfile(req.PermissionProfile)
 	if profile == "" {
@@ -571,6 +634,7 @@ func (s *Server) handleCreateBridgeToken(w http.ResponseWriter, r *http.Request,
 		Token:             value,
 		ExpiresAt:         expiresAt,
 		Label:             label,
+		Name:              name,
 		PermissionProfile: profile,
 		AllowStrict:       allowStrictWorkspace,
 	}))
@@ -649,6 +713,7 @@ type bridgeTokenResponseParams struct {
 	Token             string
 	ExpiresAt         time.Time
 	Label             string
+	Name              string
 	PermissionProfile string
 	Agent             *store.Agent
 	CWD               string
@@ -659,17 +724,15 @@ type bridgeTokenResponseParams struct {
 func (s *Server) bridgeTokenResponse(r *http.Request, params bridgeTokenResponseParams) map[string]any {
 	hubURL := s.publicBaseURL(r)
 	installCommand := s.bridgeInstallCommand(hubURL)
-	connectCommand := s.bridgeConnectCommand(hubURL, params.Token, params.PermissionProfile, bridgeConnectOptions{
+	opts := bridgeConnectOptions{
 		Agent:     params.Agent,
+		Name:      params.Name,
 		CWD:       params.CWD,
 		MachineID: params.MachineID,
-	})
+	}
+	connectCommand := s.bridgeConnectCommand(hubURL, params.Token, params.PermissionProfile, opts)
 	setupCommand := bridgeSetupCommand(installCommand, connectCommand)
-	profiles := s.bridgePermissionProfiles(hubURL, params.Token, installCommand, bridgeConnectOptions{
-		Agent:     params.Agent,
-		CWD:       params.CWD,
-		MachineID: params.MachineID,
-	}, params.AllowStrict)
+	profiles := s.bridgePermissionProfiles(hubURL, params.Token, installCommand, opts, params.AllowStrict)
 	out := map[string]any{
 		"token":              params.Token,
 		"expiresAt":          params.ExpiresAt.Unix(),
@@ -733,6 +796,7 @@ func bridgeSetupCommand(installCommand, connectCommand string) string {
 
 type bridgeConnectOptions struct {
 	Agent     *store.Agent
+	Name      string
 	CWD       string
 	MachineID string
 }
@@ -756,8 +820,12 @@ func bridgeConnectArgs(hubURL, token, permissionProfile string, opts bridgeConne
 	if strings.TrimSpace(opts.CWD) != "" {
 		args = append(args, "--cwd", shellQuote(strings.TrimSpace(opts.CWD)))
 	}
+	name := strings.TrimSpace(opts.Name)
 	if opts.Agent != nil && strings.TrimSpace(opts.Agent.Name) != "" {
-		args = append(args, "--name", shellQuote(strings.TrimSpace(opts.Agent.Name)))
+		name = strings.TrimSpace(opts.Agent.Name)
+	}
+	if name != "" {
+		args = append(args, "--name", shellQuote(name))
 	}
 	args = append(args, shellQuote(token))
 	return args
@@ -777,7 +845,18 @@ set -eu
 BIN_DIR="${HOME}/.local/bin"
 BIN="${BIN_DIR}/codex-bridge"
 TMP="${BIN}.tmp.$$"
-DOWNLOAD_URL=%s
+PLATFORM_OS=$(uname -s)
+PLATFORM_ARCH=$(uname -m)
+case "$PLATFORM_OS/$PLATFORM_ARCH" in
+  Linux/x86_64|Linux/amd64) DOWNLOAD_URL=%s ;;
+  Linux/aarch64|Linux/arm64) DOWNLOAD_URL=%s ;;
+  Darwin/x86_64|Darwin/amd64) DOWNLOAD_URL=%s ;;
+  Darwin/arm64|Darwin/aarch64) DOWNLOAD_URL=%s ;;
+  *)
+    echo "Unsupported platform: $PLATFORM_OS/$PLATFORM_ARCH. This installer supports Linux and macOS amd64 and arm64." >&2
+    exit 1
+    ;;
+esac
 
 mkdir -p "$BIN_DIR"
 cleanup() {
@@ -854,11 +933,17 @@ else
   exit 1
 fi
 chmod +x "$TMP"
+if ! "$TMP" help >/dev/null 2>&1; then
+  echo "Downloaded Bridge cannot run on $PLATFORM_OS/$PLATFORM_ARCH; existing installation was preserved." >&2
+  exit 1
+fi
 mv -f "$TMP" "$BIN"
 trap - EXIT HUP INT TERM
 echo "Download complete."
 echo "installed $BIN"
-`, shellQuote(downloadURL))
+`, shellQuote(downloadURL), shellQuote(s.bridgeDownloadURLForArch(r, "arm64")),
+		shellQuote(s.bridgeDownloadURLForPlatform(r, "darwin", "amd64")),
+		shellQuote(s.bridgeDownloadURLForPlatform(r, "darwin", "arm64")))
 }
 
 func (s *Server) handleBridgeBinaryDownload(w http.ResponseWriter, r *http.Request) {
@@ -867,17 +952,31 @@ func (s *Server) handleBridgeBinaryDownload(w http.ResponseWriter, r *http.Reque
 		serverutil.WriteError(w, http.StatusInternalServerError, "BINARY_NOT_FOUND", "failed to locate bridge binary")
 		return
 	}
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", `attachment; filename="codex-bridge-linux-amd64"`)
-	w.Header().Set("Cache-Control", "no-store")
-	http.ServeFile(w, r, exe)
+	platform, arch, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/downloads/codex-bridge-"), "-")
+	serveBridgePlatformBinary(w, r, exe, platform, arch)
 }
 
 func (s *Server) bridgeDownloadURL(r *http.Request) string {
+	return s.bridgeDownloadURLForArch(r, "amd64")
+}
+
+func (s *Server) bridgeDownloadURLForArch(r *http.Request, arch string) string {
+	return s.bridgeDownloadURLForPlatform(r, "linux", arch)
+}
+
+func (s *Server) bridgeDownloadURLForPlatform(r *http.Request, platform, arch string) string {
 	if downloadURL := strings.TrimSpace(s.cfg.Hub.BridgeDownloadURL); downloadURL != "" {
-		return downloadURL
+		if strings.Contains(downloadURL, "{os}") && strings.Contains(downloadURL, "{arch}") {
+			return strings.NewReplacer("{os}", platform, "{arch}", arch).Replace(downloadURL)
+		}
+		if platform == "linux" && !strings.Contains(downloadURL, "{os}") && strings.Contains(downloadURL, "{arch}") {
+			return strings.ReplaceAll(downloadURL, "{arch}", arch)
+		}
+		if platform == "linux" && arch == "amd64" && !strings.Contains(downloadURL, "{os}") {
+			return downloadURL
+		}
 	}
-	return s.publicBaseURL(r) + "/downloads/codex-bridge-linux-amd64"
+	return s.publicBaseURL(r) + "/downloads/codex-bridge-" + platform + "-" + arch
 }
 
 func (s *Server) publicBaseURL(r *http.Request) string {
@@ -1056,7 +1155,7 @@ func (s *Server) withAdmin(next func(http.ResponseWriter, *http.Request, string)
 	return s.withAuth(func(w http.ResponseWriter, r *http.Request, uid string) {
 		user, err := s.store.UserByID(r.Context(), uid)
 		if err != nil {
-			serverutil.WriteError(w, http.StatusUnauthorized, "INVALID_TOKEN", "invalid token")
+			writeAuthUserReadError(w, r, err)
 			return
 		}
 		if !s.isAdminUser(user) {
@@ -1067,12 +1166,34 @@ func (s *Server) withAdmin(next func(http.ResponseWriter, *http.Request, string)
 	})
 }
 
+// A valid token does not become invalid when the database is unavailable.
+func writeAuthUserReadError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, store.ErrNotFound) {
+		serverutil.WriteError(w, http.StatusUnauthorized, "INVALID_TOKEN", "invalid token")
+		return
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+		serverutil.WriteError(w, http.StatusGatewayTimeout, "AUTH_TIMEOUT", "session verification timed out; please retry")
+		return
+	}
+	serverutil.WriteError(w, http.StatusServiceUnavailable, "AUTH_UNAVAILABLE", "session verification temporarily unavailable; please retry")
+}
+
 func (s *Server) isAdminUser(user store.User) bool {
 	admin := strings.TrimSpace(s.cfg.Auth.BootstrapUsername)
 	if admin == "" {
 		admin = "admin"
 	}
-	return strings.EqualFold(user.Username, admin)
+	if strings.EqualFold(user.Username, admin) {
+		return true
+	}
+	for _, username := range s.cfg.Auth.AdminUsernames {
+		username = strings.TrimSpace(username)
+		if username != "" && strings.EqualFold(user.Username, username) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) featureEnabled(feature string, user store.User) bool {

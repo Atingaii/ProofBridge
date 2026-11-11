@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, Check, ChevronDown, Edit2, LogOut, Plus, RefreshCw, ServerCog, Trash2, Wrench, X } from 'lucide-react';
+import { AlertCircle, Check, ChevronDown, Edit2, Library, LogOut, Plus, RefreshCw, Trash2, Wrench, X } from 'lucide-react';
 import { api } from '../lib/api';
 import type { Agent, BridgeTokenResponse, PermissionProfileId, UserAccount } from '../lib/types';
 import type { Language, UIText } from '../lib/i18n';
@@ -7,7 +7,9 @@ import { cn, copyText, initials, orchestrationApprovalMode, orchestrationCapabil
 import { CapabilityMatrix } from './OrchestrationComponents';
 import { CommandBlock } from './chat/CommandBlock';
 import { CLIConfigSwitcher } from './CLIConfigSwitcher';
+import { AutomationSettings } from './AutomationSettings';
 import { Button, Input } from './ui';
+import { useDialogFocus } from './MobileSurface';
 
 export function SettingsModal({
   user,
@@ -40,6 +42,8 @@ export function SettingsModal({
   initialFocus: 'cli' | '';
   close: () => void;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(dialogRef);
   const [label, setLabel] = useState('');
   const [permissionProfile, setPermissionProfile] = useState<PermissionProfileId>('review-required');
   const [tokenInfo, setTokenInfo] = useState<BridgeTokenResponse | null>(null);
@@ -50,17 +54,15 @@ export function SettingsModal({
   const [repairingAgentId, setRepairingAgentId] = useState('');
   const [repairTokens, setRepairTokens] = useState<Record<string, BridgeTokenResponse>>({});
   const [repairErrorByAgent, setRepairErrorByAgent] = useState<Record<string, string>>({});
-  const [modelUpgradeAgentId, setModelUpgradeAgentId] = useState('');
   const [copiedCommand, setCopiedCommand] = useState('');
-  const [configAgent, setConfigAgent] = useState<Agent | null>(null);
-  const cliSectionRef = useRef<HTMLDivElement | null>(null);
+  const [modelLibraryOpen, setModelLibraryOpen] = useState(false);
   const generateToken = async () => {
     setGeneratingToken(true);
     setTokenError('');
     try {
       const data = await api<BridgeTokenResponse>('/api/bridge-tokens', {
         method: 'POST',
-        body: JSON.stringify({ label: label.trim() || 'wsl2-cli', permissionProfile }),
+        body: JSON.stringify({ label: label.trim() || 'wsl2-cli', name: label.trim(), permissionProfile }),
       });
       setTokenInfo(data);
       await onAgentsChanged();
@@ -72,7 +74,6 @@ export function SettingsModal({
   };
   const permissionOptions: Array<{ id: PermissionProfileId; title: string; description: string }> = [
     { id: 'review-required', title: t.reviewRequired, description: t.reviewRequiredDescription },
-    ...(user.features?.includes('strict-workspace') ? [{ id: 'strict-workspace' as const, title: t.strictWorkspace, description: t.strictWorkspaceDescription }] : []),
     { id: 'auto-execute', title: t.autoExecute, description: t.autoExecuteDescription },
   ];
   const profileCommand = (profileId: PermissionProfileId) =>
@@ -146,34 +147,23 @@ export function SettingsModal({
       setRepairingAgentId('');
     }
   };
-  const openModelConfiguration = (agent: Agent) => {
-    if (agent.capabilities?.configSwitcher) {
-      setConfigAgent(agent);
-      return;
-    }
-    setModelUpgradeAgentId(agent.id);
-    if (!repairTokens[agent.id] && repairingAgentId !== agent.id) {
-      generateRepairToken(agent).catch(() => undefined);
-    }
-  };
-
   useEffect(() => {
     if (initialFocus !== 'cli') return;
-    const id = window.setTimeout(() => cliSectionRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 0);
+    const id = window.setTimeout(() => setModelLibraryOpen(true), 0);
     return () => window.clearTimeout(id);
   }, [initialFocus]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-card w-full max-w-md rounded-xl border border-border shadow-lg flex flex-col overflow-hidden animate-in zoom-in-95">
+    <div className="phone-modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={t.settings} onKeyDown={(event) => { if (event.key === 'Escape' && event.target instanceof Element && event.target.closest('[role="dialog"]') === event.currentTarget) { event.stopPropagation(); close(); } }} className="phone-modal bg-card w-full max-w-md rounded-xl border border-border shadow-lg flex flex-col overflow-hidden animate-in zoom-in-95">
         <div className="px-4 py-3 border-b border-border flex items-center justify-between bg-muted/30">
           <h2 className="font-medium">{t.settings}</h2>
-          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md" onClick={close}>
+          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md" aria-label={t.cancel} onClick={close}>
             <X className="h-4 w-4" />
           </Button>
         </div>
 
-        <div className="p-4 space-y-6 overflow-y-auto max-h-[70vh] elegant-scrollbar">
+        <div className="phone-modal-body min-h-0 p-4 space-y-6 overflow-y-auto max-h-[70vh] elegant-scrollbar">
           <div className="space-y-3">
             <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.account}</h3>
             <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20">
@@ -192,6 +182,8 @@ export function SettingsModal({
               </Button>
             </div>
           </div>
+
+          <AutomationSettings key={user.id} userId={user.id} language={language} agents={agents} />
 
           <div className="space-y-3">
             <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.appearance}</h3>
@@ -235,6 +227,18 @@ export function SettingsModal({
 
           <div className="space-y-3">
             <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.agentsRuntime}</h3>
+            <div className="rounded-lg border border-border bg-muted/20 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">{t.modelLibrary}</div>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t.modelLibraryHint}</p>
+                </div>
+                <Button size="sm" variant="secondary" className="h-8 shrink-0 gap-1.5" onClick={() => setModelLibraryOpen(true)}>
+                  <Library className="h-3.5 w-3.5" />
+                  {t.modelLibrary}
+                </Button>
+              </div>
+            </div>
             <div className="space-y-2">
               {agents.length ? agents.map((agent) => {
                 const expanded = expandedAgentId === agent.id;
@@ -317,17 +321,6 @@ export function SettingsModal({
                               size="sm"
                               variant="secondary"
                               className="h-8 gap-1.5"
-                              onClick={() => openModelConfiguration(agent)}
-                              disabled={!agent.online}
-                              title={!agent.online ? t.modelConfigurationOffline : agent.capabilities?.configSwitcher ? t.modelConfigurationHint : t.bridgeUpgradeForModels}
-                            >
-                              <ServerCog className="h-3.5 w-3.5" />
-                              {t.modelConfiguration}
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              className="h-8 gap-1.5"
                               onClick={() => generateRepairToken(agent)}
                               disabled={repairingAgentId === agent.id}
                             >
@@ -348,12 +341,6 @@ export function SettingsModal({
                             {deletingAgentId === agent.id ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
                           </Button>
                         </div>
-                        {modelUpgradeAgentId === agent.id && !agent.capabilities?.configSwitcher && (
-                          <div className="flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                            <span>{t.bridgeUpgradeForModels}</span>
-                          </div>
-                        )}
                         {repairErrorByAgent[agent.id] && (
                           <div className="flex items-start gap-2 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -393,7 +380,7 @@ export function SettingsModal({
                 <div className="text-sm text-muted-foreground p-2.5 rounded-lg border border-border bg-muted/20">{t.noAgentsEnrolled}</div>
               )}
             </div>
-            <div ref={cliSectionRef} className="rounded-lg border border-border bg-muted/20 p-3 space-y-3">
+            <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="min-w-0">
                   <div className="text-sm font-medium">{t.addCliEndpoint}</div>
@@ -406,7 +393,8 @@ export function SettingsModal({
               </div>
               <label className="space-y-1.5 block">
                 <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.endpointLabel}</span>
-                <Input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="wsl2-cli" className="h-8 bg-background/60" />
+                <Input value={label} onChange={(event) => setLabel(event.target.value)} placeholder={t.endpointNamePlaceholder} className="h-8 bg-background/60" />
+                <span className="block text-xs text-muted-foreground">{t.endpointNameHint}</span>
               </label>
               <div className="space-y-2">
                 <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.permissionProfile}</span>
@@ -483,7 +471,7 @@ export function SettingsModal({
           <Button size="sm" onClick={close}>{t.savePreferences}</Button>
         </div>
       </div>
-		{configAgent && <CLIConfigSwitcher agent={configAgent} t={t} onPresetsChanged={onPresetsChanged} close={() => setConfigAgent(null)} />}
+		{modelLibraryOpen && <CLIConfigSwitcher agents={agents} preferredAgentId={selectedAgentId} t={t} onPresetsChanged={onPresetsChanged} close={() => setModelLibraryOpen(false)} />}
     </div>
   );
 }
@@ -506,6 +494,8 @@ export function RenameSessionModal({
   t: UIText;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const dialogRef = useRef<HTMLFormElement>(null);
+  useDialogFocus(dialogRef);
 
   useEffect(() => {
     const id = window.setTimeout(() => {
@@ -517,16 +507,23 @@ export function RenameSessionModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in"
+      className="phone-modal-overlay fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
       onKeyDown={(event) => {
-        if (event.key === 'Escape') onClose();
+        if (event.key === 'Escape') {
+          event.stopPropagation();
+          onClose();
+        }
       }}
     >
       <form
-        className="bg-card w-full max-w-sm rounded-xl border border-border shadow-lg flex flex-col overflow-hidden animate-in zoom-in-95"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={t.renameSession}
+        className="phone-modal bg-card w-full max-w-sm rounded-xl border border-border shadow-lg flex flex-col overflow-hidden animate-in zoom-in-95"
         onSubmit={(event) => {
           event.preventDefault();
           onSave();
@@ -539,12 +536,12 @@ export function RenameSessionModal({
             </div>
             <h2 className="font-medium">{t.renameSession}</h2>
           </div>
-          <Button variant="ghost" size="icon" type="button" className="h-7 w-7 rounded-md" onClick={onClose} disabled={saving}>
+          <Button variant="ghost" size="icon" type="button" className="h-7 w-7 rounded-md" onClick={onClose} disabled={saving} aria-label={t.cancel}>
             <X className="h-4 w-4" />
           </Button>
         </div>
 
-        <div className="p-4 space-y-3">
+        <div className="phone-modal-body min-h-0 overflow-y-auto p-4 space-y-3">
           <label className="space-y-1.5 block">
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t.sessionName}</span>
             <Input

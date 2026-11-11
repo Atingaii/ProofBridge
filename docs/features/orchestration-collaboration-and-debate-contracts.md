@@ -1,3 +1,7 @@
+> **DEPRECATED - Original serial-relay completion design superseded**
+>
+> Current design: [early completion and model accounting](early-completion-model-accounting.md) and [Agent Verifier continuation](agent-verifier-round-continuation.md). Historical only; do not implement from this doc.
+
 # Orchestration Collaboration And Debate Contracts
 
 ## Goals

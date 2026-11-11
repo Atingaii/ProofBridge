@@ -1,0 +1,24 @@
+# Loaded with APP_ENV=replica. Defaults supply other settings.
+app:
+  env: replica
+  debug: false
+gateway:
+  host: 127.0.0.1
+  port: 18089
+hub:
+  db_path: /opt/proofbridge/data/codex-bridge.db
+  cookie_secure: false
+  allowed_origins: []
+  feature_rollouts:
+    strict-workspace: all
+    orchestration-plan-workspace: all
+    native-user-input: all
+    official-codex-worker-models: all
+auth:
+  bootstrap_username: admin
+  registration:
+    enabled: false
+automation:
+  enabled: true
+  public_url: ""
+  mcp_url: ""

@@ -74,7 +74,9 @@ for manual recovery.
   and prints recent log lines.
 - Best-effort enables lingering with `loginctl enable-linger` so the user
   service can start after reboot without an interactive login.
-- Falls back to `nohup ... &` when user systemd is unavailable.
+- Falls back to `nohup ... &` when user systemd is unavailable, including
+  native macOS; this path does not restart after reboot. See
+  [macOS installation](macos-installation.md).
 - Prints the service name or background PID plus log path.
 - Does not install or require the historical CCB helper. Hub-managed
   orchestration uses direct `claude` and `codex` capabilities.

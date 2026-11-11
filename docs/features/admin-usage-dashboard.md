@@ -2,7 +2,7 @@
 
 ## Goals
 
-- Give the configured bootstrap administrator one read-only view of user
+- Give the bootstrap administrator and configured additional administrators one read-only view of user
   activity, connected Bridge endpoints, chat and orchestration workload, Token
   usage, and official-catalog cost estimates.
 - Keep time-range filtering based on the timestamp of each usage event and the
@@ -34,6 +34,12 @@
 
 ## Data And API Impact
 
+Administrator membership is controlled by `auth.bootstrap_username` plus the
+YAML-only `auth.admin_usernames` list. It uses the same predicate for API access,
+user metadata, and feature rollouts. See
+[ADR-018](../adr/018-additional-administrator-usernames.md) and the
+[configuration instructions](../dev-workflow.md#additional-administrators).
+
 `GET /api/admin/usage?days=7|30|90|0&timezoneOffset=<minutes>` is protected by
 `internal/hub/server.go:withAdmin`. It returns summary totals, a daily trend,
 and one aggregate row per user. Non-admin callers receive `403 ADMIN_ONLY`.
@@ -53,6 +59,16 @@ bodies, and timestamps. For `orchestration`, it contains the original prompt
 and ordered user-visible event text. It never returns workspace paths, native
 CLI identifiers, credentials, files, or writable conversation handles. A
 conversation that does not belong to the path's user returns `404 NOT_FOUND`.
+
+Content is paginated over source rows, with a default page of 200 and a maximum
+of 1000. `hasMoreBefore` signals earlier records. Orchestration uses `beforeSeq`
+and `nextBeforeSeq`; chat uses the stable pair `beforeCreatedAt` / `beforeId`
+and returns `nextBeforeCreatedAt` / `nextBeforeId`. A page containing only
+non-displayable events still advances its source cursor. Orchestration text
+is grouped within the bounded page, so a turn may appear in separate fragments.
+The drawer requests earlier pages only on an explicit load-more action and
+preserves already visible content if that request fails. See
+[loading performance](site-loading-performance.md#initial-history-and-manual-pagination).
 
 `internal/store/admin_analytics.go:AdminUsageSnapshot` performs read-only
 aggregation over existing Hub tables. Online state is added by
@@ -128,3 +144,7 @@ No. The feature reads Hub persistence and the Hub's live connection pool only.
 It keeps overview and user-list queries bounded, makes the sensitive read
 operation visible in routing and authorization tests, and avoids transferring
 every conversation body when the administrator needs only one.
+
+Long-history read performance and cancellable loading are specified in
+[site loading performance](site-loading-performance.md), with sparse-index
+migration and rollback in [ADR 027](../adr/027-sparse-orchestration-read-indexes.md).

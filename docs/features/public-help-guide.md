@@ -14,6 +14,10 @@
   the existing application.
 - Accept `/hlep` as a compatibility alias for the common typo in the requested
   URL.
+- Keep current workflow instructions and visible language controls accurate;
+  distinguish frontend build, live Hub version and historical release notes.
+  See [desktop audit fixes](desktop-audit-fixes.md) for the September 2026
+  recovery, history and documentation corrections.
 
 ## Non-Goals
 
@@ -96,3 +100,9 @@ regenerate the assets and rerun the browser guide check.
 Run `npm run help:screenshots` from `frontend/`. Playwright is pinned as a
 development dependency; its Chromium browser and ImageMagick's `convert`
 command must be installed on the capture machine.
+
+The September desktop audit retains the existing 17 illustrative captures and
+four examples. Updated text describes dynamic execution, queued/immediate
+follow-ups and capability-gated native questions; older capture controls are
+illustrative. This text/version correction does not claim that every screenshot
+was recaptured or that the mobile guide received a new accessibility audit.

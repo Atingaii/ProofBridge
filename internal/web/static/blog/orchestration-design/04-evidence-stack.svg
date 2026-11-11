@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="t d">
+<title id="t">设计机制的证据台阶</title>
+<desc id="d">小黑把标有反馈、顺序、交付物、审查和停止条件的木板逐级搭成台阶。</desc>
+<rect width="1600" height="900" fill="#fff"/>
+<g fill="none" stroke="#151515" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M347 660 L590 660 L590 582 L806 582 L806 500 L1002 500 L1002 416 L1168 416"/>
+  <path d="M347 682 C565 694 864 689 1187 668"/><path d="M570 580 L584 660"/><path d="M786 500 L799 582"/><path d="M982 416 L994 500"/><path d="M1149 350 L1164 416"/>
+  <path d="M316 694 C356 673 389 660 427 649"/><path d="M512 530 C547 548 571 563 589 584"/>
+</g>
+<g fill="#101010">
+  <path d="M487 459 C460 437 465 396 491 374 C518 353 559 361 578 389 C596 416 580 450 556 468 C536 482 505 476 487 459Z"/>
+  <circle cx="512" cy="402" r="7" fill="#fff"/><circle cx="542" cy="404" r="7" fill="#fff"/>
+</g>
+<g fill="none" stroke="#151515" stroke-width="5" stroke-linecap="round"><path d="M512 469 L501 542 M549 470 L563 535"/><path d="M502 507 L465 540 M560 505 L603 529"/><path d="M465 540 L430 576"/></g>
+<g fill="none" stroke="#e76732" stroke-width="6" stroke-linecap="round"><path d="M376 642 C570 617 821 585 1126 445"/></g>
+<g fill="#e76732"><path d="M1115 435 l27 3 -17 22 z"/></g>
+<g font-family="Arial,'PingFang SC','Microsoft YaHei',sans-serif" font-size="25" font-weight="600">
+  <text x="401" y="636" fill="#151515">反馈</text><text x="634" y="558" fill="#2466d1">顺序</text><text x="835" y="475" fill="#151515">交付物</text><text x="1023" y="392" fill="#e76732">审查</text>
+  <text x="1117" y="323" fill="#2466d1" transform="rotate(2 1117 323)">停止条件</text><text x="313" y="758" fill="#777" font-size="23" transform="rotate(-2 313 758)">机制有依据，名字不是结论</text>
+</g>
+</svg>

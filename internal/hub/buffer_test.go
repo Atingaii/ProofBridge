@@ -76,7 +76,7 @@ func TestSecurityHeaders(t *testing.T) {
 func TestStaticHandlerSPAFallbackRoutes(t *testing.T) {
 	s := &Server{}
 
-	for _, path := range []string{"/conversation-snapshot", "/share/shr_example"} {
+	for _, path := range []string{"/conversation-snapshot", "/share/shr_example", "/blog/orchestration-design", "/blog/orchestration-design/"} {
 		rr := httptest.NewRecorder()
 		s.staticHandler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
 
@@ -89,6 +89,15 @@ func TestStaticHandlerSPAFallbackRoutes(t *testing.T) {
 				t.Fatalf("%s route did not return SPA index, missing %q", path, needle)
 			}
 		}
+	}
+}
+
+func TestStaticHandlerArticleAssetsStayFiles(t *testing.T) {
+	s := &Server{}
+	rr := httptest.NewRecorder()
+	s.staticHandler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/blog/orchestration-design/01-closed-cycle.svg", nil))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Header().Get("Content-Type"), "image/svg+xml") || !strings.Contains(rr.Body.String(), "<svg") {
+		t.Fatal("article SVG must remain a real static asset beside its SPA route")
 	}
 }
 

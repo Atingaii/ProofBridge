@@ -17,6 +17,9 @@
 - Do not make one machine's active native configuration a user-wide default.
 - Do not require all of a user's Bridges to be online merely to list preset
   metadata.
+- Do not expose a native apply action in the account model library; task pages
+  choose a saved preset for their own target Bridge. Keep official-login reset
+  as an explicitly machine-scoped maintenance action.
 - Do not interrupt active chat or orchestration processes.
 
 ## Data And Protocol Impact
@@ -32,9 +35,15 @@
   Bridge decrypts the browser envelope and encrypts the key to Hub's vault
   receiver. Hub then encrypts the vault plaintext at rest and wraps it to a
   target Bridge only while resolving a user preset.
+- Account-oriented HTTP paths test, create, update, and delete presets without
+  an `agentID`. Hub receives an API key over the authenticated TLS request,
+  probes the provider itself, and seals the key into the user vault.
 - Existing agent-oriented HTTP paths remain stable. Their `agentID` identifies
-  the Bridge used to test, apply, edit, or materialize a credential, while list
-  and ownership checks operate at user scope.
+  the Bridge used to apply or materialize a credential, while list and ownership
+  checks operate at user scope.
+- `GET /api/cli-config/presets` lists the account-owned model library without a
+  Bridge. The settings UI can also test, save, edit, and delete without any
+  Bridge, so users do not select a machine.
 
 ## Implementation Steps
 
@@ -44,13 +53,25 @@
    credential availability against the selected agent.
 3. Add Bridge-to-Hub vault migration. Prefer an online, owner-matched source
    whose advertised key ID matches its stored legacy envelope.
-4. Lazily materialize a target credential when applying, editing with a blank
-   API key, testing an existing preset, or binding orchestration workers.
-5. Show the same user preset list on every eligible machine and explain when a
-   credential must be re-entered because no source Bridge can rewrap it.
+4. Lazily materialize a target credential only when applying or binding
+   orchestration workers. A blank API key during account-level editing retains
+   the vault value.
+5. Show one account-level model library in Settings. Hub probes providers and
+   writes the vault directly, including before a user has enrolled any machine;
+   task pages retain endpoint-specific availability checks.
 
 ## Exit Gates
 
+- Automatic Base URL discovery must validate the inference response body, not
+  merely HTTP success. HTML fallbacks, empty bodies, JSON error envelopes, and
+  unrelated JSON must never select or overwrite a preset URL. Both Hub and
+  Bridge use `internal/providerprobe.ValidateInferenceResponse` for this check.
+- A failed versioned endpoint followed by an HTTP 200 website fallback remains
+  a failed test; a valid versioned endpoint can still be discovered from a root
+  URL. Probe errors retain the attempted endpoint and HTTP status without
+  exposing response bodies or credentials. No schema or wire changes are needed.
+- This lightweight, non-streaming probe checks the API response shape; it does
+  not guarantee a subsequent long-running CLI stream will remain connected.
 - A preset created on machine A appears for machine B owned by the same user.
 - Machine B can apply or bind a vault-backed preset even while machine A is
   offline; the API key is never returned to browser responses.
@@ -60,6 +81,11 @@
 - Deleting an agent does not delete user presets.
 - Existing preset rows migrate without loss and remain usable on their original
   machines.
+- The model library can be browsed, tested, saved, edited, and deleted before
+  a user has enrolled a Bridge or while every Bridge is offline.
+- Hub provider probing accepts public HTTPS endpoints in production, validates
+  DNS answers before dialing, blocks loopback/private/link-local/metadata
+  ranges, disables redirects, bounds response sizes, and uses a timeout.
 - Focused store, Hub, Bridge, frontend, and full Go tests pass.
 
 ## Reviewer Q&A
@@ -83,3 +109,13 @@ to the vault; newly saved presets are vault-backed immediately.
 Activation edits native files under that machine's CLI home. Making it global
 would falsely imply that all machines changed together and could overwrite
 different local login choices.
+
+**Why does API-key testing not ask me to select a machine?**
+
+The account-level library sends the key only over the authenticated HTTPS
+connection to Hub. Hub probes the public provider and encrypts the key at rest
+in its user vault; it never serializes the value back to the browser. Task
+pages still select the saved preset for their own target Bridge, and Hub wraps
+the vault value to that Bridge only then. An explicit machine choice is retained
+only for official-login reset because that operation changes local CLI files on
+that machine.

@@ -1,8 +1,11 @@
-sparkapi.tech {
-	reverse_proxy 127.0.0.1:8088
+# Set these in the Caddy process environment, not in the Hub environment file.
+# Example: PROOFBRIDGE_SITE_ADDRESS=https://bridge.example.com:8088
+{$PROOFBRIDGE_SITE_ADDRESS:localhost} {
+	reverse_proxy {$PROOFBRIDGE_UPSTREAM:127.0.0.1:8088} {
+		flush_interval -1
+	}
 	encode zstd gzip
 	header {
-		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
 	}

@@ -655,6 +655,8 @@ func TestOrchestrationApprovalResponseRoutesToBridge(t *testing.T) {
 
 	ws := dialOrchestrationWS(t, client, cfg.Bridge.HubURL, run.ID)
 	defer ws.Close()
+	// The HTTP upgrade may finish before the Hub registers its subscription.
+	waitOrchestrationWSConnected(t, ws, run.ID)
 	req := protocol.ApprovalRequestPayload{RequestID: "apr_orc_1", Kind: "claude.permission_prompt", RunID: run.ID, TurnID: "turn_1", Command: "rm -rf build"}
 	if err := fakeBridge.WriteJSON(protocol.MustEnvelope(protocol.TypeApprovalRequest, "", req)); err != nil {
 		t.Fatal(err)
@@ -839,7 +841,10 @@ func TestOrchestrationEndToEndWithFakeCLIs(t *testing.T) {
 	cfg.Bridge.Token = store.NewToken("enr")
 	cfg.Bridge.Name = "orchestration-bridge"
 	cfg.Bridge.MachineIDFile = tmp + "/machine_id"
-	cfg.Bridge.CWD = tmp
+	cfg.Bridge.CWD = filepath.Join(tmp, "workspace")
+	if err := os.MkdirAll(cfg.Bridge.CWD, 0700); err != nil {
+		t.Fatal(err)
+	}
 	cfg.Bridge.Runner = "echo"
 	cfg.Bridge.CodexPath = codexPath
 	cfg.Bridge.ClaudePath = claudePath
@@ -887,18 +892,36 @@ func TestOrchestrationEndToEndWithFakeCLIs(t *testing.T) {
 	waitOrchestrationStatus(t, client, cfg.Bridge.HubURL, runID, "completed")
 	eventsBody := getJSON(t, client, cfg.Bridge.HubURL+"/api/orchestrations/"+url.PathEscape(runID)+"/events", http.StatusOK)
 	events := eventsBody["events"].([]any)
-	var sawClaude, sawCodex bool
+	var sawClaude, sawCodex, sawVerifiedCompletion, sawEarlyCandidate bool
 	for _, raw := range events {
 		event := raw.(map[string]any)
+		if task, ok := event["task"].(map[string]any); ok && event["kind"] == "run.end" && (task["role"] == "worker" || task["role"] == "integrator") {
+			end, _ := event["runEnd"].(map[string]any)
+			if end == nil {
+				end, _ = event["runEndData"].(map[string]any)
+			}
+			sawEarlyCandidate = sawEarlyCandidate || end["terminalReason"] == "verified-early"
+		}
 		if event["cli"] == "claude" && strings.Contains(fmt.Sprint(event["content"]), "fake claude") {
 			sawClaude = true
 		}
 		if event["cli"] == "codex" && strings.Contains(fmt.Sprint(event["content"]), "fake codex") {
 			sawCodex = true
 		}
+		if event["kind"] == "run.end" && event["task"] == nil {
+			end, _ := event["runEnd"].(map[string]any)
+			if end == nil {
+				end, _ = event["runEndData"].(map[string]any)
+			}
+			verdict, _ := end["verifierVerdict"].(map[string]any)
+			sawVerifiedCompletion = end["terminalReason"] == "verified-early" && verdict["status"] == "pass" && end["completionObservation"] == nil
+		}
 	}
 	if !sawClaude || !sawCodex {
 		t.Fatalf("missing fake CLI events: sawClaude=%v sawCodex=%v events=%#v", sawClaude, sawCodex, events)
+	}
+	if !sawVerifiedCompletion || !sawEarlyCandidate {
+		t.Fatalf("early execution verification did not survive Bridge/WebSocket/Hub persistence or incorrectly counted a reviewer round: terminal=%v candidate=%v", sawVerifiedCompletion, sawEarlyCandidate)
 	}
 }
 
@@ -1682,7 +1705,12 @@ func TestTerminationFrameworkOrchestrationFullSnapshotFlow(t *testing.T) {
 	cfg.Bridge.Token = store.NewToken("enr")
 	cfg.Bridge.Name = "termination-framework-bridge"
 	cfg.Bridge.MachineIDFile = tmp + "/machine_id"
-	cfg.Bridge.CWD = tmp
+	// Hub persistence is external to the private proof workspace in production.
+	// Its event writes must not masquerade as edits to the files under review.
+	cfg.Bridge.CWD = filepath.Join(tmp, "workspace")
+	if err := os.MkdirAll(cfg.Bridge.CWD, 0700); err != nil {
+		t.Fatal(err)
+	}
 	cfg.Bridge.Runner = "echo"
 	cfg.Bridge.CodexPath = codexPath
 	cfg.Bridge.ClaudePath = claudePath
@@ -1720,7 +1748,7 @@ func TestTerminationFrameworkOrchestrationFullSnapshotFlow(t *testing.T) {
 		"mode":     "collaboration",
 		"title":    "termination_framework",
 		"prompt":   terminationFrameworkPrompt(),
-		"cwd":      tmp,
+		"cwd":      cfg.Bridge.CWD,
 		"maxTurns": 2,
 		"files": []map[string]any{
 			{"name": "Model.thy", "mimeType": "text/plain", "size": 17, "data": "dGhlb3J5IE1vZGVsCg=="},
@@ -2124,7 +2152,7 @@ func waitRunStatus(t *testing.T, client *http.Client, baseURL, sid, runID, want 
 
 func waitOrchestrationStatus(t *testing.T, client *http.Client, baseURL, runID, want string) {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(25 * time.Second)
 	var lastRun map[string]any
 	for time.Now().Before(deadline) {
 		body := getJSON(t, client, baseURL+"/api/orchestrations/"+url.PathEscape(runID), http.StatusOK)
@@ -2614,6 +2642,13 @@ def text_for_turn(index):
         return texts[index]
     return texts[-1]
 
+if any("PROOFBRIDGE_AGENT_VERIFIER_V1" in arg for arg in sys.argv):
+    verdict = {"status":"pass","reason":"independent workspace inspection is complete","checks":[{"name":"task","status":"pass","reason":"task satisfied"},{"name":"workspace","status":"pass","reason":"workspace checked"},{"name":"verification","status":"pass","reason":"verification passed"}]}
+    rendered = json.dumps(verdict, separators=(",", ":"))
+    emit({"type":"assistant","message":{"content":[{"type":"text","text":rendered}]}})
+    emit({"type":"result","result":rendered})
+    raise SystemExit(0)
+
 for idx, line in enumerate(sys.stdin, start=0):
     if not line.strip():
         continue
@@ -2675,6 +2710,15 @@ def text_for_turn(index):
     if index < len(texts):
         return texts[index]
     return texts[-1]
+
+if len(sys.argv) >= 2 and sys.argv[1] == "exec":
+    prompt = sys.stdin.read()
+    if "PROOFBRIDGE_AGENT_VERIFIER_V1" in prompt:
+        verdict = {"status":"pass","reason":"independent workspace inspection is complete","checks":[{"name":"task","status":"pass","reason":"task satisfied"},{"name":"workspace","status":"pass","reason":"workspace checked"},{"name":"verification","status":"pass","reason":"verification passed"}]}
+        emit({"type":"item.agent_message.delta","delta":json.dumps(verdict, separators=(",", ":"))})
+        raise SystemExit(0)
+    print("unexpected exec prompt", file=sys.stderr)
+    raise SystemExit(1)
 
 if len(sys.argv) < 2 or sys.argv[1] != "app-server":
     print("unexpected command: " + " ".join(sys.argv[1:]), file=sys.stderr)

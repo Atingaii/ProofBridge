@@ -20,6 +20,7 @@ type orchestrationWorkerRuntime struct {
 	model           string
 	presetName      string
 	reasoningEffort string
+	officialLogin   bool
 }
 
 func workerProfileContains(values []string, want string) bool {
@@ -68,20 +69,47 @@ func (r orchestrationWorkerRuntime) codexHome() string {
 
 func workerProfileBinding(payload protocol.OrchestrationStartPayload, slot, cli string) (protocol.WorkerProfileBinding, bool) {
 	binding, ok := payload.WorkerProfiles[slot]
-	if !ok || binding.CLI != cli || strings.TrimSpace(binding.PresetID) == "" {
+	if !ok || binding.CLI != cli || (!binding.OfficialLogin && strings.TrimSpace(binding.PresetID) == "") {
 		return protocol.WorkerProfileBinding{}, false
 	}
 	return binding, true
 }
 
 func workerProfileFingerprint(binding protocol.WorkerProfileBinding) string {
-	return strings.Join([]string{binding.PresetID, binding.CLI, binding.BaseURL, binding.Model, binding.ReasoningEffort, fmt.Sprint(binding.ClaudeContextWindow), fmt.Sprint(binding.ClaudeDisableUnknownModelWindowEnforcement), binding.Secret.Ciphertext}, "\x00")
+	return strings.Join([]string{fmt.Sprint(binding.OfficialLogin), binding.PresetID, binding.CLI, binding.BaseURL, binding.Model, binding.ReasoningEffort, fmt.Sprint(binding.ClaudeContextWindow), fmt.Sprint(binding.ClaudeDisableUnknownModelWindowEnforcement), binding.Secret.Ciphertext}, "\x00")
 }
 
 func (m *OrchestrationManager) workerRuntime(payload protocol.OrchestrationStartPayload, slot, cli string, session *orchestrationNativeSession) (orchestrationWorkerRuntime, error) {
 	binding, bound := workerProfileBinding(payload, slot, cli)
 	if !bound {
 		return orchestrationWorkerRuntime{}, nil
+	}
+	if binding.OfficialLogin {
+		if cli != "codex" {
+			return orchestrationWorkerRuntime{}, nil
+		}
+		if effort := strings.TrimSpace(binding.ReasoningEffort); effort != "" && !workerProfileContains(binding.ReasoningLevels, effort) {
+			return orchestrationWorkerRuntime{}, fmt.Errorf("%s official model selects unsupported reasoning effort", slot)
+		}
+		// Reuse the operator's official identity. These overrides never create
+		// an authentication home or mutate shared native configuration.
+		runtime := orchestrationWorkerRuntime{
+			officialLogin:   true,
+			fingerprint:     workerProfileFingerprint(binding),
+			model:           strings.TrimSpace(binding.Model),
+			reasoningEffort: strings.TrimSpace(binding.ReasoningEffort),
+		}
+		if session != nil {
+			session.mu.Lock()
+			old := session.profileRuntime[slot]
+			if session.profileRuntime == nil {
+				session.profileRuntime = make(map[string]orchestrationWorkerRuntime)
+			}
+			session.profileRuntime[slot] = runtime
+			session.mu.Unlock()
+			old.remove()
+		}
+		return runtime, nil
 	}
 	if m.cliConfig == nil {
 		return orchestrationWorkerRuntime{}, fmt.Errorf("encrypted worker profile requires the Bridge configuration switcher")
@@ -176,6 +204,13 @@ func (m *OrchestrationManager) codexModelForPayload(payload protocol.Orchestrati
 		return binding.Model
 	}
 	return codexBridgeModel(m.cfg)
+}
+
+func (m *OrchestrationManager) codexEffortForPayload(payload protocol.OrchestrationStartPayload, slot string) string {
+	if binding, ok := workerProfileBinding(payload, normalizeCodexWorkerSlot(slot), "codex"); ok {
+		return strings.TrimSpace(binding.ReasoningEffort)
+	}
+	return ""
 }
 
 func (m *OrchestrationManager) workerModelForPayload(payload protocol.OrchestrationStartPayload, slot, cli string) string {

@@ -10,11 +10,15 @@ import (
 const (
 	FeatureStrictWorkspace            = "strict-workspace"
 	FeatureOrchestrationPlanWorkspace = "orchestration-plan-workspace"
+	FeatureNativeUserInput            = "native-user-input"
+	FeatureOfficialCodexWorkerModels  = "official-codex-worker-models"
 )
 
 var registeredFeatures = []string{
 	FeatureStrictWorkspace,
 	FeatureOrchestrationPlanWorkspace,
+	FeatureNativeUserInput,
+	FeatureOfficialCodexWorkerModels,
 }
 
 // RegisteredFeatures returns the user-visible capabilities that may be exposed

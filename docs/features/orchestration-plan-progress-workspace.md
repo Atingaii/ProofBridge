@@ -1,3 +1,5 @@
+> Completion-policy update: [independent early run completion](independent-early-run-completion.md) supersedes the reviewer-only barrier and incomplete stagnation result described below. Completion decisions ignore planning; all automatic early closures show completed while retaining factual checks. Other feature behavior remains applicable.
+
 # Orchestration Plan And Progress Workspace
 
 ## Goals
@@ -48,8 +50,10 @@ summary. Its primary map is a proof-task dependency graph whose nodes show
    dependency-blocked, and completed proof obligations with rationale and
    evidence.
 3. The six durable Agent nodes remain visible as a compact secondary execution
-   chain. They explain where the orchestration runtime is, but do not masquerade
-   as proof completion. The compact chain can be opened in a large dialog with
+   chain. Planning and plan review are labelled as pre-collaboration stages;
+   only candidate, integration, and review work carries a collaboration round
+   number. They explain where the orchestration runtime is, but do not
+   masquerade as proof completion. The compact chain can be opened in a large dialog with
    pan, wheel/pinch zoom, zoom controls, and fit-to-view.
 4. Continuing the same run creates another task segment without losing native
    conversation context. A task selector groups durable graph generations by
@@ -75,13 +79,20 @@ layout.
 - Add the optional `planWorkspace` field to
   `internal/protocol.OrchestrationStartPayload`. JSON omission preserves old
   Hub and Bridge compatibility.
-- The durable task graph payload persists the flag. New enabled runs use:
+- The durable task graph payload persists the flag. Only round one of each new
+  user task includes planning; later internal rounds carry the reviewed plan
+  and valid updates in context. Plans guide work but cannot replace the original
+  task's acceptance conditions or block a verified completion. Planning consumes
+  tokens and elapsed time; its usage may appear in the first round's chart bucket
+  but is excluded from the completion detector's reviewer-only output samples.
+  See [completion-verification-and-stagnation.md](completion-verification-and-stagnation.md).
+  The first graph uses:
 
   ```text
   plan -> plan-review -> candidate-a -> candidate-b -> integrate -> review
   ```
 
-  Existing and non-enabled runs keep:
+  Subsequent internal rounds and non-enabled runs use:
 
   ```text
   candidate-a -> candidate-b -> integrate -> review
@@ -214,3 +225,7 @@ to node-level progress rather than failing execution.
 
 No. Creation still produces one run id and follow-ups still use
 `POST /api/orchestrations/{runID}/prompts`.
+
+Long-history read performance and cancellable loading are specified in
+[site loading performance](site-loading-performance.md), with sparse-index
+migration and rollback in [ADR 027](../adr/027-sparse-orchestration-read-indexes.md).

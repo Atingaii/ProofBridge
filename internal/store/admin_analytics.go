@@ -72,11 +72,15 @@ type AdminConversationUsageEvent struct {
 }
 
 type AdminConversationContent struct {
-	ID     string
-	Kind   string
-	Title  string
-	Prompt string
-	Items  []AdminConversationContentItem
+	ID                  string
+	Kind                string
+	Title               string
+	Prompt              string
+	Items               []AdminConversationContentItem
+	HasMoreBefore       bool
+	NextBeforeSeq       int64
+	NextBeforeCreatedAt int64
+	NextBeforeID        string
 }
 
 type AdminConversationContentItem struct {
@@ -117,68 +121,6 @@ func (s *Store) AdminUserDetailSnapshot(ctx context.Context, userID string, cuto
 		return AdminUserDetailSnapshot{}, err
 	}
 	return AdminUserDetailSnapshot{User: user, Conversations: conversations, UsageEvents: events}, nil
-}
-
-// AdminConversationContent returns the narrow, read-only content projection
-// exposed by the administrator API. Ownership is checked in the same query
-// that loads the conversation, and operational/native metadata is never read.
-func (s *Store) AdminConversationContent(ctx context.Context, userID, kind, conversationID string) (AdminConversationContent, error) {
-	content := AdminConversationContent{ID: conversationID, Kind: kind}
-	switch kind {
-	case "chat":
-		if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(title,'') FROM sessions WHERE id = ? AND user_id = ?`, conversationID, userID).Scan(&content.Title); err != nil {
-			return AdminConversationContent{}, storeError(err)
-		}
-		rows, err := s.db.QueryContext(ctx, `
-			SELECT role, content, created_at FROM messages
-			WHERE session_id = ? ORDER BY created_at, id`, conversationID)
-		if err != nil {
-			return AdminConversationContent{}, err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var item AdminConversationContentItem
-			if err := rows.Scan(&item.Role, &item.Content, &item.CreatedAt); err != nil {
-				return AdminConversationContent{}, err
-			}
-			item.Kind = "message"
-			content.Items = append(content.Items, item)
-		}
-		return content, rows.Err()
-	case "orchestration":
-		if err := s.db.QueryRowContext(ctx, `
-			SELECT title, prompt FROM orchestration_runs WHERE id = ? AND user_id = ?`, conversationID, userID,
-		).Scan(&content.Title, &content.Prompt); err != nil {
-			return AdminConversationContent{}, storeError(err)
-		}
-		rows, err := s.db.QueryContext(ctx, `
-			SELECT role, source, kind, GROUP_CONCAT(content, ''), MIN(created_at)
-			FROM (
-				SELECT id, seq, COALESCE(role,'') AS role, COALESCE(source,'') AS source,
-					kind, COALESCE(turn_id,'') AS turn_id, content, created_at
-				FROM orchestration_events
-				WHERE run_id = ? AND content IS NOT NULL AND content != ''
-					AND kind IN ('user.message', 'turn.delta', 'run.error', 'run.conclusion')
-				ORDER BY seq
-			)
-			GROUP BY CASE WHEN kind = 'turn.delta' AND turn_id != ''
-				THEN 'turn:' || turn_id || ':' || role || ':' || source ELSE id END
-			ORDER BY MIN(seq)`, conversationID)
-		if err != nil {
-			return AdminConversationContent{}, err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var item AdminConversationContentItem
-			if err := rows.Scan(&item.Role, &item.Source, &item.Kind, &item.Content, &item.CreatedAt); err != nil {
-				return AdminConversationContent{}, err
-			}
-			content.Items = append(content.Items, item)
-		}
-		return content, rows.Err()
-	default:
-		return AdminConversationContent{}, ErrNotFound
-	}
 }
 
 func storeError(err error) error {
@@ -234,6 +176,10 @@ func (s *Store) adminUserConversationUsage(ctx context.Context, userID string, c
 		}
 		events = append(events, event)
 	}
+	if err := chatRows.Err(); err != nil {
+		chatRows.Close()
+		return nil, err
+	}
 	if err := chatRows.Close(); err != nil {
 		return nil, err
 	}
@@ -255,6 +201,10 @@ func (s *Store) adminUserConversationUsage(ctx context.Context, userID string, c
 		}
 		events = append(events, event)
 	}
+	if err := ledgerRows.Err(); err != nil {
+		ledgerRows.Close()
+		return nil, err
+	}
 	if err := ledgerRows.Close(); err != nil {
 		return nil, err
 	}
@@ -275,6 +225,10 @@ func (s *Store) adminUserConversationUsage(ctx context.Context, userID string, c
 			return nil, err
 		}
 		events = append(events, event)
+	}
+	if err := legacyRows.Err(); err != nil {
+		legacyRows.Close()
+		return nil, err
 	}
 	if err := legacyRows.Close(); err != nil {
 		return nil, err
@@ -365,6 +319,10 @@ func (s *Store) adminUsageEvents(ctx context.Context, cutoff int64, timezoneOffs
 		event.CallCount = 1
 		events = append(events, event)
 	}
+	if err := chatRows.Err(); err != nil {
+		chatRows.Close()
+		return nil, err
+	}
 	if err := chatRows.Close(); err != nil {
 		return nil, err
 	}
@@ -390,6 +348,10 @@ func (s *Store) adminUsageEvents(ctx context.Context, cutoff int64, timezoneOffs
 		}
 		events = append(events, event)
 	}
+	if err := ledgerRows.Err(); err != nil {
+		ledgerRows.Close()
+		return nil, err
+	}
 	if err := ledgerRows.Close(); err != nil {
 		return nil, err
 	}
@@ -411,6 +373,10 @@ func (s *Store) adminUsageEvents(ctx context.Context, cutoff int64, timezoneOffs
 		}
 		event.CallCount = 1
 		events = append(events, event)
+	}
+	if err := legacyRows.Err(); err != nil {
+		legacyRows.Close()
+		return nil, err
 	}
 	if err := legacyRows.Close(); err != nil {
 		return nil, err

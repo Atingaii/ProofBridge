@@ -19,9 +19,9 @@ hub:
   browser_lease_ttl: 5m
   allowed_origins:
     - https://sparkapi.tech
-  # Empty means /install.sh downloads the currently running Hub binary from
-  # /downloads/codex-bridge-linux-amd64. Set this to a release asset URL only
-  # when you publish external binaries.
+  # Empty uses the Hub's Linux/macOS platform downloads. Other-platform artifacts
+  # live in downloads/ beside the Hub binary. External URLs may use {os} and
+  # {arch}; legacy {arch}-only URLs remain Linux-only, literals Linux amd64-only.
   bridge_download_url: ""
   max_bridge_send_queue: 128
   max_browser_send_queue: 128
@@ -32,6 +32,8 @@ hub:
   feature_rollouts:
     strict-workspace: all
     orchestration-plan-workspace: all
+    native-user-input: all
+    official-codex-worker-models: all
 
 bridge:
   hub_url: http://127.0.0.1:8088
@@ -82,6 +84,8 @@ auth:
   jwt_secret: dev-only-change-me-32-byte-minimum-secret
   access_token_ttl: 24h
   bootstrap_username: admin
+  # Additional existing administrator accounts; restart the Hub after editing.
+  admin_usernames: []
   bootstrap_password: ""
   registration:
     enabled: false
@@ -95,3 +99,22 @@ auth:
 observability:
   log_level: info
   log_format: console
+
+# MCP stays inside the Hub's existing network boundary. Use your VPN-reachable
+# HTTPS address so generated MCP templates and email links are immediately usable.
+automation:
+  enabled: true
+  public_url: ""
+  # Optional client-facing MCP base; empty inherits public_url.
+  mcp_url: ""
+  smtp:
+    delivery_mode: smtp # Set preview for a local sink that does not forward mail.
+    host: ""
+    port: 587
+    username: ""
+    password: "" # Prefer SMTP_PASSWORD in the Hub environment.
+    from: ""
+    starttls: true
+    tls: false # Set tls=true and starttls=false for implicit TLS (usually 465).
+    allow_insecure: false # Explicit plain SMTP, for isolated local test servers.
+    timeout: 15s

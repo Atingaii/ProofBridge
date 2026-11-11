@@ -40,6 +40,32 @@ func containsTestString(values []string, want string) bool {
 	return false
 }
 
+func TestOrchestrationRejectsUnsupportedVerificationBeforeWorkspaceChanges(t *testing.T) {
+	t.Parallel()
+	cfg := config.Default()
+	cfg.Bridge.CWD = t.TempDir()
+	manager := NewOrchestrationManager(&cfg)
+	out := make(chan protocol.Envelope, 8)
+	manager.AttachOut(out)
+	manager.run(context.Background(), protocol.OrchestrationStartPayload{
+		RunID: "unsupported-mode", Profile: "formal-proof", VerificationMode: "retired-verifier",
+		Prompt: "verify the project", CWD: cfg.Bridge.CWD,
+	})
+	events := drainOrchestrationEvents(t, out)
+	if !orchestrationEventsContain(events, "run.error", "", "unsupported verification mode") {
+		t.Fatalf("unsupported authority events = %#v", events)
+	}
+	for _, event := range events {
+		if (event.Kind != "run.error" && event.Kind != "run.conclusion") || event.Status != store.OrchestrationFailed {
+			t.Fatalf("unsupported authority started execution: %#v", events)
+		}
+	}
+	entries, err := os.ReadDir(cfg.Bridge.CWD)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("unsupported mode modified workspace: %#v, %v", entries, err)
+	}
+}
+
 func TestOrchestrationClaudeStreamInputArgsKeepSessionAndOmitPromptArg(t *testing.T) {
 	cfg := config.Default()
 	cfg.Bridge.Sandbox = "danger-full-access"
@@ -786,7 +812,7 @@ func TestOrchestrationNativeContextCompactionAfterTurn(t *testing.T) {
 		t.Fatalf("maintenance output leaked into final content: %q", finalContent)
 	}
 
-	codexRecords := waitForJSONLineEvent(t, codexLogPath, "thread_compact")
+	codexRecords := waitForJSONLineEventCountWithin(t, codexLogPath, "thread_compact", 1, 5*time.Second)
 	var codexBusinessTurns, codexMaintenanceTurns int
 	for _, record := range codexRecords {
 		switch record["event"] {
@@ -877,7 +903,8 @@ func TestOrchestrationFinalTurnEndAndRunEndDoNotWaitForVisibleCompaction(t *test
 	t.Setenv("HOME", home)
 	codexPath := filepath.Join(tmp, "codex")
 	codexLogPath := filepath.Join(tmp, "codex_log.jsonl")
-	if err := os.WriteFile(codexPath, []byte(fakeCodexInteractiveRelayScriptWithHangingCompact(codexLogPath)), 0o755); err != nil {
+	releaseCompactPath := filepath.Join(tmp, "release_compact")
+	if err := os.WriteFile(codexPath, []byte(fakeCodexInteractiveRelayScriptWithHangingCompact(codexLogPath, releaseCompactPath)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
@@ -889,6 +916,7 @@ func TestOrchestrationFinalTurnEndAndRunEndDoNotWaitForVisibleCompaction(t *test
 	out := make(chan protocol.Envelope, 128)
 	manager.AttachOut(out)
 	defer manager.CloseAll()
+	defer func() { _ = os.WriteFile(releaseCompactPath, []byte("release"), 0o600) }()
 
 	done := make(chan struct{})
 	go func() {
@@ -903,9 +931,12 @@ func TestOrchestrationFinalTurnEndAndRunEndDoNotWaitForVisibleCompaction(t *test
 		})
 		close(done)
 	}()
+	// Wait for the fake CLI to enter compaction before checking that run.end
+	// returns. The compaction itself remains blocked until this test releases it.
+	codexRecords := waitForJSONLineEvent(t, codexLogPath, "thread_compact")
 	select {
 	case <-done:
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 		t.Fatal("manager.run waited for final native maintenance before returning")
 	}
 
@@ -922,7 +953,6 @@ func TestOrchestrationFinalTurnEndAndRunEndDoNotWaitForVisibleCompaction(t *test
 		}
 	}
 
-	codexRecords := waitForJSONLineEvent(t, codexLogPath, "thread_compact")
 	var codexBusinessTurns, codexMaintenanceTurns int
 	for _, record := range codexRecords {
 		switch record["event"] {
@@ -934,6 +964,9 @@ func TestOrchestrationFinalTurnEndAndRunEndDoNotWaitForVisibleCompaction(t *test
 	}
 	if codexBusinessTurns != 1 || codexMaintenanceTurns != 1 {
 		t.Fatalf("codex business=%d maintenance=%d records=%#v", codexBusinessTurns, codexMaintenanceTurns, codexRecords)
+	}
+	if err := os.WriteFile(releaseCompactPath, []byte("release"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1683,14 +1716,14 @@ func TestDurableTaskTerminalReleasesCodexWriterBeforeDelivery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if event.Kind == "run.error" {
+			if event.Kind == "run.end" || event.Kind == "run.error" {
 				terminal, ok = event, true
 			}
 		case <-deadline:
-			t.Fatal("timed out waiting for durable reviewer failure")
+			t.Fatal("timed out waiting for durable reviewer completion")
 		}
 	}
-	if !ok || terminal.Task == nil || terminal.Task.AttemptID != "ota_writer" {
+	if !ok || terminal.Kind != "run.end" || terminal.Task == nil || terminal.Task.AttemptID != "ota_writer" {
 		t.Fatalf("durable terminal event = %#v", terminal)
 	}
 	manager.mu.Lock()
@@ -1759,6 +1792,45 @@ func TestDurableClaudeAttemptsCreateTheirOwnSessions(t *testing.T) {
 	secondID, _ := starts[1]["sessionId"].(string)
 	if firstID == "" || secondID == "" || firstID == secondID {
 		t.Fatalf("durable Claude session ids = %q, %q", firstID, secondID)
+	}
+}
+
+func TestDurableClaudeClaudeTaskInitializesEmptySlotSessionIDs(t *testing.T) {
+	tmp := t.TempDir()
+	claudePath := filepath.Join(tmp, "claude")
+	logPath := filepath.Join(tmp, "claude-claude-log.jsonl")
+	if err := os.WriteFile(claudePath, []byte(fakeClaudeInteractiveRelayScript(logPath)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Bridge.ClaudePath = claudePath
+	cfg.Bridge.CWD = tmp
+	manager := NewOrchestrationManager(&cfg)
+	defer manager.CloseAll()
+	out := make(chan protocol.Envelope, 64)
+	manager.AttachOut(out)
+
+	// Durable graph dispatch deliberately clears native session IDs before the
+	// first worker starts. Claude+Claude must recreate both slot IDs from that
+	// empty payload without crashing the Bridge.
+	manager.run(context.Background(), protocol.OrchestrationStartPayload{
+		RunID: "orc_durable_claude_pair:ota_first", Mode: "collaboration", WorkerPair: protocol.WorkerPairClaudeClaude,
+		Prompt: "complete the first Claude pair node", MaxTurns: 1, CWD: tmp,
+		TaskGraph: &protocol.TaskGraphPayload{ID: "otg_claude_pair", Generation: 1, Round: 1, MaxRounds: 1, Tasks: []protocol.TaskPayload{{
+			ID: "otk_claude_pair", AttemptID: "ota_first", Role: store.TaskRolePlanner, WorkerSlot: orchestrationClaudeSlotA, PayloadDigest: "digest",
+		}}},
+	})
+
+	events := drainOrchestrationEvents(t, out)
+	var runStart protocol.OrchestrationEventPayload
+	for _, event := range events {
+		if event.Kind == "run.start" {
+			runStart = event
+			break
+		}
+	}
+	if runStart.RunStartData == nil || runStart.RunStartData.WorkerPair != protocol.WorkerPairClaudeClaude {
+		t.Fatalf("durable Claude+Claude run did not start: %#v", events)
 	}
 }
 
@@ -2514,7 +2586,7 @@ func TestOrchestrationCancelKillsCodexProcessGroup(t *testing.T) {
 	codexPath := filepath.Join(tmp, "codex")
 	script := "#!/usr/bin/env bash\n" +
 		"if [ \"${1:-}\" = exec ]; then shift; fi\n" +
-		"(trap 'exit 0' TERM INT; echo $BASHPID > " + shellQuote(marker) + "; while true; do sleep 1; done) &\n" +
+		"/bin/sh -c " + shellQuote("trap 'exit 0' TERM INT; echo $$ > \"$1\"; while true; do sleep 1; done") + " sh " + shellQuote(marker) + " &\n" +
 		"wait\n"
 	if err := os.WriteFile(codexPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -2526,8 +2598,10 @@ func TestOrchestrationCancelKillsCodexProcessGroup(t *testing.T) {
 	cfg.Bridge.Sandbox = "danger-full-access"
 	cfg.Bridge.ApprovalPolicy = "never"
 	manager := NewOrchestrationManager(&cfg)
+	defer manager.CloseAll()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
 		_, _, err := manager.runCodex(ctx, protocol.OrchestrationStartPayload{RunID: "orc_cancel", CWD: tmp}, "turn_cancel", "reviewer", "stop")
@@ -2726,10 +2800,30 @@ func TestFormalProofModeContractsUseProofStateAndReproducibleEvidence(t *testing
 	}
 
 	finalPrompt := composeRelayPromptWithFirstCLI("debate", "claude", "formal-proof", "prove theorem target in Lean", "", false, "critic", "codex", 4, 4, nil)
-	for _, want := range []string{"final formal-proof turn", "adversarial proof adjudication", "unchanged target statement", "dependency/trust audit", "remaining goals is not a completed proof", "Do not hand work"} {
+	for _, want := range []string{"final formal-proof turn", "adversarial proof adjudication", "unchanged target statement", "dependency/trust audit", "remaining goals is not a completed proof", "next=none and risks=none", "optional future re-audits", "Do not hand work"} {
 		if !strings.Contains(finalPrompt, want) {
 			t.Fatalf("formal-proof final prompt missing %q:\n%s", want, finalPrompt)
 		}
+	}
+}
+
+func TestFormalProofVerifierTreatsCompletedAuditScopeAsNonBlocking(t *testing.T) {
+	exit := 0
+	reviewer := newOrchestrationTurnRecordWithSlot(
+		"review", store.TaskRoleReviewer, "codex", orchestrationCodexDefaultSlot,
+		"最终结论：主定理已证明。\nMsg: to=user; intent=final; need=none\nHandoff: status=resolved; changed=Main.v; verified=coqc Main.v; next=none; risks=none",
+		[]RunnerToolEvent{{Command: "coqc Main.v", Status: "completed", ExitCode: &exit}},
+	)
+	prompt := composeAgentVerifierPrompt(
+		protocol.OrchestrationStartPayload{Prompt: "complete the Coq proof"},
+	)
+	for _, want := range []string{"current project workspace", "original task", "Do not rely on Worker messages"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("formal-proof verifier prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, reviewer.Content) || strings.Contains(prompt, "coqc Main.v") {
+		t.Fatal("verifier prompt leaked worker history or command evidence")
 	}
 }
 
@@ -2869,10 +2963,10 @@ func TestDurableTaskPromptUsesOuterRoundAndActiveRole(t *testing.T) {
 			notWant: []string{"final configured round's independent review"},
 		},
 		{
-			name:    "intermediate reviewer hands to peer",
+			name:    "intermediate reviewer may report completion",
 			scope:   durableTaskPromptScope{Name: "review", Role: store.TaskRoleReviewer, Round: 3, MaxRounds: 4},
-			want:    []string{"Independent Reviewer duty", "directly fix safe in-scope defects", "to=<peer>"},
-			notWant: []string{"final formal-proof turn", "to=<user>"},
+			want:    []string{"Independent Reviewer duty", "directly fix safe in-scope defects", "to=<user or peer>", "decide whether to end early", "to=peer/intent=continue when task gaps remain"},
+			notWant: []string{"final formal-proof turn", "Do not write a user-final conclusion"},
 		},
 		{
 			name:    "only final reviewer synthesizes",
@@ -3195,6 +3289,44 @@ func TestFormalProofWorkspaceResumeReusesRunCWDAndAppendsNotes(t *testing.T) {
 	}
 	if !strings.Contains(resumed.Prompt, "same project directory") {
 		t.Fatalf("resumed prompt missing same-run instruction:\n%s", resumed.Prompt)
+	}
+}
+
+func TestFormalProofDurableFollowupAppliesWithoutResumeExactlyOnce(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := config.Default()
+	if _, err := prepareFormalProofHarness(&cfg, protocol.OrchestrationStartPayload{
+		RunID: "orc_durable_followup", Prompt: "initial node", TaskPrompt: "初始 Coq 任务", Profile: "formal-proof", PromptSeq: 10,
+	}, tmp); err != nil {
+		t.Fatal(err)
+	}
+	fileRaw := []byte("follow-up evidence")
+	payload := protocol.OrchestrationStartPayload{
+		RunID: "orc_durable_followup", Prompt: "继续证明\n\nDurable task node:\nworker A", TaskPrompt: "继续证明", Profile: "formal-proof", PromptSeq: 20,
+		Files: []protocol.AttachmentPayload{{Name: "evidence.txt", Size: int64(len(fileRaw)), Data: base64.StdEncoding.EncodeToString(fileRaw)}},
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := prepareFormalProofHarness(&cfg, payload, tmp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	payload.Files = nil
+	payload.Prompt = "继续证明\n\nDurable task node:\nreviewer"
+	if _, err := prepareFormalProofHarness(&cfg, payload, tmp); err != nil {
+		t.Fatal(err)
+	}
+	notes, err := os.ReadFile(filepath.Join(tmp, ".codex-bridge", "proof-notes", "orc_durable_followup.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(notes), "### 请求 20") != 1 || strings.Contains(string(notes), "Durable task node") {
+		t.Fatalf("follow-up was duplicated or node instruction leaked:\n%s", notes)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "evidence.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "evidence-2.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("attachment was duplicated: %v", err)
 	}
 }
 
@@ -4010,7 +4142,7 @@ func TestClaudeWorkerProfileUnknownModelUsesNativeContextDefault(t *testing.T) {
 	manager.closeNativeSession(payload.RunID)
 }
 
-func TestVerifierQuorumRequiresEveryChecker(t *testing.T) {
+func TestRecordedVerifierFactsCaptureEveryMissingRequirement(t *testing.T) {
 	exit := 0
 	base := orchestrationTurn{
 		Role: "reviewer", CLI: "codex", WorkerSlot: "codex", Tools: []RunnerToolEvent{{Status: "completed", ExitCode: &exit}},
@@ -4028,25 +4160,28 @@ func TestVerifierQuorumRequiresEveryChecker(t *testing.T) {
 			if len(history) > 1 {
 				history[len(history)-1] = turn
 			}
-			verdict := evaluateOrchestrationVerdict("collaboration", "default", false, history)
-			if verdict.Status != verifierVerdictContinue || len(verdict.Checkers) != 3 {
-				t.Fatalf("%s checker incorrectly allowed early completion: %#v", name, verdict)
+			facts := collectOrchestrationVerifierFacts("collaboration", "default", false, history)
+			if facts.Status != verifierVerdictContinue || len(facts.Checkers) != 3 {
+				t.Fatalf("%s missing fact was not recorded: %#v", name, facts)
 			}
 		})
 	}
-	verdict := evaluateOrchestrationVerdict("collaboration", "default", false, []orchestrationTurn{{Role: "implementer", CLI: "claude", WorkerSlot: "claude"}, base})
-	if verdict.Status != verifierVerdictPass || len(verdict.Checkers) != 3 {
-		t.Fatalf("unanimous checker quorum = %#v", verdict)
+	facts := collectOrchestrationVerifierFacts("collaboration", "default", false, []orchestrationTurn{{Role: "implementer", CLI: "claude", WorkerSlot: "claude"}, base})
+	if facts.Status != verifierVerdictPass || len(facts.Checkers) != 3 {
+		t.Fatalf("complete recorded facts = %#v", facts)
 	}
 }
 
 func TestAgentVerifierResponseValidation(t *testing.T) {
-	valid := `before {"status":"pass","reason":"complete","checks":[{"name":"handoff","status":"pass","reason":"resolved"},{"name":"evidence","status":"pass","reason":"commands passed"},{"name":"independence","status":"pass","reason":"reviewed"}]} after`
+	valid := `before {"status":"pass","reason":"complete","checks":[{"name":"task","status":"pass","reason":"satisfied"},{"name":"workspace","status":"pass","reason":"present"},{"name":"verification","status":"pass","reason":"checked"}]} after`
 	response, err := parseAgentVerifierResponse(valid)
 	if err != nil || response.Status != verifierVerdictPass {
 		t.Fatalf("valid verifier response = %#v, %v", response, err)
 	}
-	downgraded := `{"status":"pass","reason":"complete","checks":[{"name":"handoff","status":"pass","reason":"resolved"},{"name":"evidence","status":"continue","reason":"missing command"},{"name":"independence","status":"pass","reason":"reviewed"}]}`
+	downgraded := `{"status":"pass","reason":"complete","checks":[{"name":"task","status":"pass","reason":"satisfied"},{"name":"workspace","status":"continue","reason":"missing"},{"name":"verification","status":"pass","reason":"checked"}]}`
+	if _, err := parseAgentVerifierResponse(valid + "\nCorrection: " + downgraded); err == nil {
+		t.Fatal("ambiguous verdicts accepted the earlier pass")
+	}
 	response, err = parseAgentVerifierResponse(downgraded)
 	if err != nil || response.Status != verifierVerdictContinue {
 		t.Fatalf("mixed verifier response was not downgraded: %#v, %v", response, err)
@@ -4054,53 +4189,40 @@ func TestAgentVerifierResponseValidation(t *testing.T) {
 	if _, err := parseAgentVerifierResponse(`{"status":"pass","reason":"complete","checks":[]}`); err == nil {
 		t.Fatal("incomplete verifier response was accepted")
 	}
-	if _, err := parseAgentVerifierResponse(`{"status":"pass","reason":"stale","checks":[{"name":"handoff","status":"pass","reason":"resolved"},{"name":"evidence","status":"pass","reason":"passed"},{"name":"independence","status":"pass","reason":"reviewed"}],"broken":} {"status":"pass"}`); err == nil {
+	if _, err := parseAgentVerifierResponse(`{"status":"pass","reason":"stale","checks":[{"name":"task","status":"pass","reason":"satisfied"},{"name":"workspace","status":"pass","reason":"passed"},{"name":"verification","status":"pass","reason":"checked"}],"broken":} {"status":"pass"}`); err == nil {
 		t.Fatal("fields from invalid JSON leaked into a later partial object")
 	}
 }
 
-func TestAgentVerifierQuorumRequiresTwoAgentsAndLocalGate(t *testing.T) {
+func TestAgentVerifierQuorumStopsOnAnyPassingAgentWithoutLocalFacts(t *testing.T) {
 	passChecks := []protocol.VerifierCheck{
-		{Name: "handoff", Status: verifierVerdictPass, Reason: "resolved"},
-		{Name: "evidence", Status: verifierVerdictPass, Reason: "commands passed"},
-		{Name: "independence", Status: verifierVerdictPass, Reason: "reviewed"},
+		{Name: "task", Status: verifierVerdictPass, Reason: "satisfied"},
+		{Name: "workspace", Status: verifierVerdictPass, Reason: "present"},
+		{Name: "verification", Status: verifierVerdictPass, Reason: "checked"},
 	}
-	local := verifierQuorum("local pass", passChecks)
 	passingAgent := func(name string) agentVerifierResult {
 		return agentVerifierResult{Agent: name, Slot: name, CLI: "codex", Model: "model", Status: verifierVerdictPass, Reason: "pass", Checks: append([]protocol.VerifierCheck(nil), passChecks...)}
 	}
-	if verdict := aggregateAgentVerifierQuorum(local, []agentVerifierResult{passingAgent("agent-1"), passingAgent("agent-2")}); verdict.Status != verifierVerdictPass {
-		t.Fatalf("unanimous quorum = %#v", verdict)
+	if verdict := aggregateAgentVerifierQuorum([]agentVerifierResult{passingAgent("agent-1"), passingAgent("agent-2")}); verdict.Status != verifierVerdictPass {
+		t.Fatalf("two passing agents = %#v", verdict)
 	}
 	disagreement := passingAgent("agent-2")
 	disagreement.Status = verifierVerdictContinue
-	disagreement.Checks[1] = verifierCheckContinue("evidence", "insufficient")
-	if verdict := aggregateAgentVerifierQuorum(local, []agentVerifierResult{passingAgent("agent-1"), disagreement}); verdict.Status != verifierVerdictContinue {
-		t.Fatalf("disagreement incorrectly passed: %#v", verdict)
+	disagreement.Checks[1] = verifierCheckContinue("workspace", "insufficient")
+	if verdict := aggregateAgentVerifierQuorum([]agentVerifierResult{passingAgent("agent-1"), disagreement}); verdict.Status != verifierVerdictPass {
+		t.Fatalf("one passing agent did not stop: %#v", verdict)
 	}
-	if verdict := aggregateAgentVerifierQuorum(local, []agentVerifierResult{passingAgent("agent-1")}); verdict.Status != verifierVerdictContinue {
+	if verdict := aggregateAgentVerifierQuorum([]agentVerifierResult{disagreement, passingAgent("agent-2")}); verdict.Status != verifierVerdictPass {
+		t.Fatalf("second passing agent did not stop: %#v", verdict)
+	}
+	if verdict := aggregateAgentVerifierQuorum([]agentVerifierResult{passingAgent("agent-1")}); verdict.Status != verifierVerdictContinue {
 		t.Fatalf("single verifier incorrectly passed: %#v", verdict)
 	}
-	blockedLocal := local
-	blockedLocal.Status = verifierVerdictContinue
-	blockedLocal.Checkers[1] = verifierCheckContinue("evidence", "missing hard evidence")
-	if verdict := aggregateAgentVerifierQuorum(blockedLocal, []agentVerifierResult{passingAgent("agent-1"), passingAgent("agent-2")}); verdict.Status != verifierVerdictContinue {
-		t.Fatalf("agents overrode local hard gate: %#v", verdict)
+	if verdict := aggregateAgentVerifierQuorum([]agentVerifierResult{disagreement, disagreement}); verdict.Status != verifierVerdictContinue {
+		t.Fatalf("two continuing agents incorrectly passed: %#v", verdict)
 	}
-}
-
-func TestLocalVerifierContinuationDefersAgentReview(t *testing.T) {
-	local := verifierQuorum("missing evidence", []protocol.VerifierCheck{
-		{Name: "handoff", Status: verifierVerdictPass, Reason: "resolved"},
-		verifierCheckContinue("evidence", "missing command"),
-		{Name: "independence", Status: verifierVerdictPass, Reason: "reviewed"},
-	})
-	verdict := localVerifierContinuation(local)
-	if verdict.Status != verifierVerdictContinue || verdict.Reason != "local hard evidence gates require continuation before Agent Verifier review" {
-		t.Fatalf("local continuation = %#v", verdict)
-	}
-	if len(verdict.Checkers) != 3 || verdict.Checkers[1].Name != "local/evidence" {
-		t.Fatalf("local checks were not source-qualified: %#v", verdict.Checkers)
+	if verdict := aggregateAgentVerifierQuorum([]agentVerifierResult{passingAgent("agent-1"), passingAgent("agent-2")}); verdict.Status != verifierVerdictPass {
+		t.Fatalf("verifier pass unexpectedly depended on local facts: %#v", verdict)
 	}
 }
 
@@ -4579,7 +4701,12 @@ func waitForJSONLineEvent(t *testing.T, path, eventName string) []map[string]any
 
 func waitForJSONLineEventCount(t *testing.T, path, eventName string, want int) []map[string]any {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	return waitForJSONLineEventCountWithin(t, path, eventName, want, time.Second)
+}
+
+func waitForJSONLineEventCountWithin(t *testing.T, path, eventName string, want int, timeout time.Duration) []map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
 	var last []map[string]any
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(path); err == nil {
@@ -4637,7 +4764,7 @@ import json
 import sys
 
 text = ` + string(raw) + `
-verdict = {"status":"pass","reason":"independent evidence is complete","checks":[{"name":"handoff","status":"pass","reason":"resolved final handoff"},{"name":"evidence","status":"pass","reason":"successful command recorded"},{"name":"independence","status":"pass","reason":"independent reviewer present"}]}
+verdict = {"status":"pass","reason":"independent workspace inspection is complete","checks":[{"name":"task","status":"pass","reason":"task satisfied"},{"name":"workspace","status":"pass","reason":"workspace checked"},{"name":"verification","status":"pass","reason":"verification passed"}]}
 if any("PROOFBRIDGE_AGENT_VERIFIER_V1" in arg for arg in sys.argv):
     rendered = json.dumps(verdict, separators=(",", ":"))
     print(json.dumps({"type":"assistant","message":{"content":[{"type":"text","text":rendered}]}}), flush=True)
@@ -4928,7 +5055,7 @@ prompt_path = ` + string(promptPathRaw) + `
 argv_path = ` + string(argvPathRaw) + `
 text = ` + string(textRaw) + `
 if any("PROOFBRIDGE_AGENT_VERIFIER_V1" in arg for arg in sys.argv):
-    verdict = {"status":"pass","reason":"independent evidence is complete","checks":[{"name":"handoff","status":"pass","reason":"resolved final handoff"},{"name":"evidence","status":"pass","reason":"successful command recorded"},{"name":"independence","status":"pass","reason":"independent reviewer present"}]}
+    verdict = {"status":"pass","reason":"independent workspace inspection is complete","checks":[{"name":"task","status":"pass","reason":"task satisfied"},{"name":"workspace","status":"pass","reason":"workspace checked"},{"name":"verification","status":"pass","reason":"verification passed"}]}
     rendered = json.dumps(verdict, separators=(",", ":"))
     print(json.dumps({"type":"assistant","message":{"content":[{"type":"text","text":rendered}]}}), flush=True)
     print(json.dumps({"type":"result","result":rendered}), flush=True)
@@ -5021,7 +5148,7 @@ if len(sys.argv) < 2 or sys.argv[1] != "exec":
     sys.exit(1)
 prompt = sys.stdin.read()
 if "PROOFBRIDGE_AGENT_VERIFIER_V1" in prompt:
-    verdict = {"status":"pass","reason":"independent evidence is complete","checks":[{"name":"handoff","status":"pass","reason":"resolved final handoff"},{"name":"evidence","status":"pass","reason":"successful command recorded"},{"name":"independence","status":"pass","reason":"independent reviewer present"}]}
+    verdict = {"status":"pass","reason":"independent workspace inspection is complete","checks":[{"name":"task","status":"pass","reason":"task satisfied"},{"name":"workspace","status":"pass","reason":"workspace checked"},{"name":"verification","status":"pass","reason":"verification passed"}]}
     print(json.dumps({"type":"item.agent_message.delta","delta":json.dumps(verdict, separators=(",", ":"))}), flush=True)
     raise SystemExit(0)
 print(json.dumps({"type":"item.agent_message.delta","delta":text}), flush=True)
@@ -5059,7 +5186,7 @@ if len(sys.argv) >= 2 and sys.argv[1] == "app-server":
     raise SystemExit(0)
 prompt = sys.stdin.read()
 if "PROOFBRIDGE_AGENT_VERIFIER_V1" in prompt:
-    verdict = {"status":"pass","reason":"independent evidence is complete","checks":[{"name":"handoff","status":"pass","reason":"resolved final handoff"},{"name":"evidence","status":"pass","reason":"successful command recorded"},{"name":"independence","status":"pass","reason":"independent reviewer present"}]}
+    verdict = {"status":"pass","reason":"independent workspace inspection is complete","checks":[{"name":"task","status":"pass","reason":"task satisfied"},{"name":"workspace","status":"pass","reason":"workspace checked"},{"name":"verification","status":"pass","reason":"verification passed"}]}
     print(json.dumps({"type":"item.agent_message.delta","delta":json.dumps(verdict, separators=(",", ":"))}), flush=True)
     raise SystemExit(0)
 print(json.dumps({"type":"item.agent_message.delta","delta":text}), flush=True)
@@ -5110,7 +5237,7 @@ if len(sys.argv) < 2 or sys.argv[1] != "exec":
     sys.exit(1)
 prompt = sys.stdin.read()
 if "PROOFBRIDGE_AGENT_VERIFIER_V1" in prompt:
-    verdict = {"status":"pass","reason":"independent evidence is complete","checks":[{"name":"handoff","status":"pass","reason":"resolved final handoff"},{"name":"evidence","status":"pass","reason":"successful command recorded"},{"name":"independence","status":"pass","reason":"independent reviewer present"}]}
+    verdict = {"status":"pass","reason":"independent workspace inspection is complete","checks":[{"name":"task","status":"pass","reason":"task satisfied"},{"name":"workspace","status":"pass","reason":"workspace checked"},{"name":"verification","status":"pass","reason":"verification passed"}]}
     print(json.dumps({"type":"item.agent_message.delta","delta":json.dumps(verdict, separators=(",", ":"))}), flush=True)
     raise SystemExit(0)
 with open(prompt_path, "w", encoding="utf-8") as f:
@@ -5304,14 +5431,17 @@ for line in sys.stdin:
 	`
 }
 
-func fakeCodexInteractiveRelayScriptWithHangingCompact(logPath string) string {
+func fakeCodexInteractiveRelayScriptWithHangingCompact(logPath, releasePath string) string {
 	logPathRaw, _ := json.Marshal(logPath)
+	releasePathRaw, _ := json.Marshal(releasePath)
 	return `#!/usr/bin/env python3
 import json
+import os
 import sys
 import time
 
 log_path = ` + string(logPathRaw) + `
+release_path = ` + string(releasePathRaw) + `
 thread_id = "thr_native"
 
 def log(obj):
@@ -5343,7 +5473,8 @@ for line in sys.stdin:
     elif method == "thread/compact/start":
         log({"event": "thread_compact", "threadId": params.get("threadId")})
         emit({"id": msg["id"], "result": {}})
-        time.sleep(0.35)
+        while not os.path.exists(release_path):
+            time.sleep(0.01)
         emit({"method": "thread/compacted", "params": {"threadId": params.get("threadId"), "turnId": "compact_1"}})
     elif method == "turn/start":
         log({"event": "turn_start", "threadId": params.get("threadId"), "params": params})

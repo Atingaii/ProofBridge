@@ -1,6 +1,7 @@
 package config
 
 type Config struct {
+	Automation    AutomationConfig    `yaml:"automation"`
 	App           AppConfig           `yaml:"app"`
 	Gateway       GatewayConfig       `yaml:"gateway"`
 	Hub           HubConfig           `yaml:"hub"`
@@ -13,6 +14,28 @@ type AppConfig struct {
 	Name  string `yaml:"name"`
 	Env   string `yaml:"env"`
 	Debug bool   `yaml:"debug"`
+}
+
+// Automation exposes the authenticated MCP entry and optional task email.
+type AutomationConfig struct {
+	Enabled   bool       `yaml:"enabled"`
+	PublicURL string     `yaml:"public_url"`
+	MCPURL    string     `yaml:"mcp_url"`
+	SMTP      SMTPConfig `yaml:"smtp"`
+}
+
+type SMTPConfig struct {
+	DeliveryMode string `yaml:"delivery_mode"`
+	Host         string `yaml:"host"`
+	Port         int    `yaml:"port"`
+	Username     string `yaml:"username"`
+	Password     string `yaml:"password"`
+	From         string `yaml:"from"`
+	StartTLS     bool   `yaml:"starttls"`
+	TLS          bool   `yaml:"tls"`
+	// AllowInsecure permits explicitly configured plain SMTP, never invalid TLS certificates.
+	AllowInsecure bool     `yaml:"allow_insecure"`
+	Timeout       Duration `yaml:"timeout"`
 }
 
 type GatewayConfig struct {
@@ -97,6 +120,7 @@ type AuthConfig struct {
 	JWTSecret         string             `yaml:"jwt_secret"`
 	AccessTokenTTL    Duration           `yaml:"access_token_ttl"`
 	BootstrapUsername string             `yaml:"bootstrap_username"`
+	AdminUsernames    []string           `yaml:"admin_usernames"`
 	BootstrapPassword string             `yaml:"bootstrap_password"`
 	Registration      RegistrationConfig `yaml:"registration"`
 }
@@ -116,6 +140,7 @@ type ObservabilityConfig struct {
 
 func Default() Config {
 	return Config{
+		Automation: AutomationConfig{Enabled: true, SMTP: SMTPConfig{DeliveryMode: "smtp", Port: 587, StartTLS: true, Timeout: Duration{Duration: 15_000_000_000}}},
 		App: AppConfig{
 			Name:  "codex-bridge",
 			Env:   "dev",
@@ -144,6 +169,8 @@ func Default() Config {
 			FeatureRollouts: map[string]string{
 				"strict-workspace":             "all",
 				"orchestration-plan-workspace": "all",
+				"native-user-input":            "all",
+				"official-codex-worker-models": "all",
 			},
 		},
 		Bridge: BridgeConfig{

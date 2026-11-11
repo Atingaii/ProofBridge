@@ -1,3 +1,7 @@
+> **DEPRECATED - compiled-only model metadata is replaced by a refreshable catalog**
+>
+> Current design: [ADR-021](021-refreshable-model-catalog.md) and [participant usage](../features/orchestration-worker-usage.md). Historical only; do not implement from this doc.
+
 # ADR-014: Measured Model Effort Values Across CLIs
 
 ## Status

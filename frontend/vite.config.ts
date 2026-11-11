@@ -60,6 +60,9 @@ function retainPreviousEntryAssets() {
 
 export default defineConfig({
   base: '/',
+  define: {
+    __PROOFBRIDGE_FRONTEND_BUILD__: JSON.stringify({ builtAt: new Date().toISOString() }),
+  },
   plugins: [
     figmaAssetResolver(),
     retainPreviousEntryAssets(),

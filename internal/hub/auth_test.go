@@ -56,14 +56,18 @@ func TestAuthResponsesExposeEnabledFeatures(t *testing.T) {
 	}
 
 	adminLogin := login(t, s, map[string]string{"username": "admin", "password": "secret12345"}, http.StatusOK)
-	assertUserFeatures(t, adminLogin, "strict-workspace", "orchestration-plan-workspace")
+	assertUserFeatures(t, adminLogin, "strict-workspace", "orchestration-plan-workspace", "native-user-input", "official-codex-worker-models")
 	adminCookie := loginCookie(t, s, map[string]string{"username": "admin", "password": "secret12345"})
-	assertUserFeatures(t, authRequestWithCookie(t, s, http.MethodGet, "/api/me", adminCookie, http.StatusOK), "strict-workspace", "orchestration-plan-workspace")
+	adminMe := authRequestWithCookie(t, s, http.MethodGet, "/api/me", adminCookie, http.StatusOK)
+	assertUserFeatures(t, adminMe, "strict-workspace", "orchestration-plan-workspace", "native-user-input", "official-codex-worker-models")
+	if adminMe["nativeUserInputProtocolVersion"] != float64(3) {
+		t.Fatalf("native input protocol version = %#v", adminMe["nativeUserInputProtocolVersion"])
+	}
 
 	workerLogin := login(t, s, map[string]string{"username": "worker", "password": "abc1234567"}, http.StatusOK)
-	assertUserFeatures(t, workerLogin, "strict-workspace", "orchestration-plan-workspace")
+	assertUserFeatures(t, workerLogin, "strict-workspace", "orchestration-plan-workspace", "native-user-input", "official-codex-worker-models")
 	workerCookie := loginCookie(t, s, map[string]string{"username": "worker", "password": "abc1234567"})
-	assertUserFeatures(t, authRequestWithCookie(t, s, http.MethodGet, "/api/me", workerCookie, http.StatusOK), "strict-workspace", "orchestration-plan-workspace")
+	assertUserFeatures(t, authRequestWithCookie(t, s, http.MethodGet, "/api/me", workerCookie, http.StatusOK), "strict-workspace", "orchestration-plan-workspace", "native-user-input", "official-codex-worker-models")
 }
 
 func assertUserFeatures(t *testing.T, body map[string]any, want ...string) {
@@ -457,13 +461,14 @@ while [ "$#" -gt 0 ]; do
   if [ "$1" = '-O' ]; then out=$2; shift 2; continue; fi
   shift
 done
-cp /bin/true "$out"
+cp `+shellQuote(installerTrueExecutable(t))+` "$out"
 `)
 	scriptPath := filepath.Join(tmp, "install.sh")
 	if err := os.WriteFile(scriptPath, rr.Body.Bytes(), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("/bin/sh", scriptPath)
+	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+binDir+":/usr/bin:/bin")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -582,10 +587,9 @@ func TestInstallScriptLeavesExistingNohupBridgeRunning(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	oldBinary, err := os.ReadFile("/bin/sleep")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// A copied macOS system executable can be killed before the installer runs.
+	// Keep the process alive with the installed script, without copying that binary.
+	oldBinary := []byte("#!/bin/sh\nexec sleep \"$@\"\n")
 	if err := os.WriteFile(installedBin, oldBinary, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -613,13 +617,14 @@ while [ "$#" -gt 0 ]; do
   if [ "$1" = '-o' ]; then out=$2; shift 2; continue; fi
   shift
 done
-cp /bin/true "$out"
+cp `+shellQuote(installerTrueExecutable(t))+` "$out"
 `)
 	scriptPath := filepath.Join(tmp, "install.sh")
 	if err := os.WriteFile(scriptPath, rr.Body.Bytes(), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("sh", scriptPath)
+	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+binDir+":/usr/bin:/bin")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("execute install script: %v\n%s", err, output)

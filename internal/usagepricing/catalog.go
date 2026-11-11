@@ -1,13 +1,16 @@
 package usagepricing
 
-import "strings"
-
-const (
-	SourceOfficialCatalog = "official-catalog"
-	DefaultCodexModel     = "gpt-5.6-sol"
+import (
+	"github.com/tencent/codex-bridge/internal/modelcatalog"
+	"strings"
 )
 
+const SourceOfficialCatalog = "official-catalog"
+
 type Rates struct {
+	Source               string
+	MissingCacheRead     bool
+	MissingCacheWrite    bool
 	Model                string
 	InputPerMillion      float64
 	CachedPerMillion     float64
@@ -22,15 +25,14 @@ type Quote struct {
 	Source       string
 }
 
-// Estimate applies the standard public API price for a known model. Codex
-// "default" is anchored to the Bridge host's supported default model so usage
-// events remain priceable without pretending the CLI reported a model name.
+// Estimate applies the standard public API price for an explicitly known model.
+// Unresolved aliases retain token counts without inventing a billing model.
 func Estimate(cli, model string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int64) (Quote, bool) {
-	rates, ok := Resolve(cli, model)
+	rates, ok := resolveForUsage(cli, model, inputTokens, cacheReadTokens, false)
 	if !ok || inputTokens+outputTokens+cacheReadTokens+cacheWriteTokens <= 0 {
 		return Quote{}, false
 	}
-	if cacheWriteTokens > 0 && rates.CacheWritePerMillion == 0 {
+	if cacheReadTokens > 0 && rates.MissingCacheRead || cacheWriteTokens > 0 && (rates.MissingCacheWrite || rates.Source == "" && rates.CacheWritePerMillion == 0) {
 		return Quote{}, false
 	}
 	billableInput := inputTokens
@@ -48,17 +50,20 @@ func Estimate(cli, model string, inputTokens, outputTokens, cacheReadTokens, cac
 	if strings.HasPrefix(rates.Model, "gpt-") {
 		source = SourceOfficialCatalog
 	}
+	if rates.Source != "" {
+		source = rates.Source
+	}
 	return Quote{PricingModel: rates.Model, CostUSD: cost, Source: source}, true
 }
 
 // EstimateNormalized prices a ledger event whose inputTokens already excludes
 // cache reads. This avoids subtracting cached input a second time.
 func EstimateNormalized(cli, model string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int64) (Quote, bool) {
-	rates, ok := Resolve(cli, model)
+	rates, ok := resolveForUsage(cli, model, inputTokens, cacheReadTokens, true)
 	if !ok || inputTokens+outputTokens+cacheReadTokens+cacheWriteTokens <= 0 {
 		return Quote{}, false
 	}
-	if cacheWriteTokens > 0 && rates.CacheWritePerMillion == 0 {
+	if cacheReadTokens > 0 && rates.MissingCacheRead || cacheWriteTokens > 0 && (rates.MissingCacheWrite || rates.Source == "" && rates.CacheWritePerMillion == 0) {
 		return Quote{}, false
 	}
 	cost := float64(inputTokens)*rates.InputPerMillion/1e6 + float64(cacheReadTokens)*rates.CachedPerMillion/1e6 + float64(cacheWriteTokens)*rates.CacheWritePerMillion/1e6 + float64(outputTokens)*rates.OutputPerMillion/1e6
@@ -66,15 +71,22 @@ func EstimateNormalized(cli, model string, inputTokens, outputTokens, cacheReadT
 	if strings.HasPrefix(rates.Model, "gpt-") {
 		source = SourceOfficialCatalog
 	}
+	if rates.Source != "" {
+		source = rates.Source
+	}
 	return Quote{PricingModel: rates.Model, CostUSD: cost, Source: source}, true
 }
 
 func Resolve(cli, model string) (Rates, bool) {
 	cli = strings.ToLower(strings.TrimSpace(cli))
 	model = strings.ToLower(strings.TrimSpace(model))
-	if cli == "codex" && (model == "" || model == "default" || model == "codex") {
-		model = DefaultCodexModel
+	if model == "" || model == "default" || model == "codex" {
+		return Rates{}, false
 	}
+	if m, ok := modelcatalog.Default.Lookup(model); ok {
+		return dynamicRates(cli, m.ID, m.Cost)
+	}
+
 	switch {
 	case strings.Contains(model, "gpt-5.6-sol"):
 		return openAI(model, "gpt-5.6-sol", 5, 0.5, 6.25, 30), true
@@ -114,12 +126,18 @@ func Resolve(cli, model string) (Rates, bool) {
 		return openAI(model, "gpt-4o-mini", 0.15, 0.075, 0, 0.6), true
 	case model == "gpt-4o" || strings.HasPrefix(model, "gpt-4o-2024"):
 		return openAI(model, "gpt-4o", 2.5, 1.25, 0, 10), true
-	case strings.Contains(model, "claude-opus"):
-		return Rates{Model: normalizedModel(model, "claude-opus"), InputPerMillion: 15, CachedPerMillion: 1.5, CacheWritePerMillion: 18.75, OutputPerMillion: 75}, true
-	case strings.Contains(model, "claude-sonnet"):
-		return Rates{Model: normalizedModel(model, "claude-sonnet"), InputPerMillion: 3, CachedPerMillion: 0.3, CacheWritePerMillion: 3.75, OutputPerMillion: 15}, true
-	case strings.Contains(model, "claude-haiku"):
-		return Rates{Model: normalizedModel(model, "claude-haiku"), InputPerMillion: 0.8, CachedPerMillion: 0.08, CacheWritePerMillion: 1, OutputPerMillion: 4}, true
+	case claudeVersion(model, "opus", "4-5", "4-6", "4-7", "4-8", "5"):
+		return claudeRates(model, 5, 25), true
+	case claudeVersion(model, "opus", "4", "4-1"):
+		return claudeRates(model, 15, 75), true
+	case claudeVersion(model, "sonnet", "5"):
+		return claudeRates(model, 2, 10), true
+	case claudeVersion(model, "sonnet", "4", "4-5", "4-6"):
+		return claudeRates(model, 3, 15), true
+	case claudeVersion(model, "haiku", "4-5"):
+		return claudeRates(model, 1, 5), true
+	case claudeVersion(model, "haiku", "3-5") || strings.HasPrefix(model, "claude-3-5-haiku-"):
+		return claudeRates(model, 0.8, 4), true
 	default:
 		return Rates{}, false
 	}
@@ -141,4 +159,60 @@ func normalizedModel(model, fallback string) string {
 		return fallback
 	}
 	return model
+}
+
+// Match an exact published version or dated snapshot. Do not price an unknown
+// future Opus/Haiku release using a legacy family-wide rate.
+func claudeVersion(model, family string, versions ...string) bool {
+	model = strings.ReplaceAll(model, ".", "-")
+	for _, version := range versions {
+		base := "claude-" + family + "-" + version
+		if model == base {
+			return true
+		}
+		suffix := strings.TrimPrefix(model, base+"-")
+		if suffix == model || len(suffix) != 8 {
+			continue
+		}
+		digits := true
+		for _, char := range suffix {
+			if char < '0' || char > '9' {
+				digits = false
+			}
+		}
+		if digits {
+			return true
+		}
+	}
+	return false
+}
+
+// Standard five-minute cache write pricing; provider amounts take precedence.
+// Source: https://platform.claude.com/docs/en/about-claude/pricing (2026-09-08).
+func claudeRates(model string, input, output float64) Rates {
+	return Rates{Model: model, InputPerMillion: input, CachedPerMillion: input * .1, CacheWritePerMillion: input * 1.25, OutputPerMillion: output}
+}
+
+func dynamicRates(cli, id string, cost modelcatalog.Cost) (Rates, bool) {
+	if cost.Input == nil || cost.Output == nil {
+		return Rates{}, false
+	}
+	rates := Rates{Model: id, Source: "models.dev", InputPerMillion: *cost.Input, OutputPerMillion: *cost.Output, CachedIncludedInput: strings.EqualFold(cli, "codex"), MissingCacheRead: cost.CacheRead == nil, MissingCacheWrite: cost.CacheWrite == nil}
+	if cost.CacheRead != nil {
+		rates.CachedPerMillion = *cost.CacheRead
+	}
+	if cost.CacheWrite != nil {
+		rates.CacheWritePerMillion = *cost.CacheWrite
+	}
+	return rates, true
+}
+func resolveForUsage(cli, model string, input, cached int64, normalized bool) (Rates, bool) {
+	if m, ok := modelcatalog.Default.Lookup(model); ok {
+		context := input
+		if normalized || !strings.EqualFold(cli, "codex") {
+			context += cached
+		}
+		return dynamicRates(cli, m.ID, m.CostForContext(context))
+	}
+	return Resolve(cli, model)
 }

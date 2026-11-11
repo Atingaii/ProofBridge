@@ -34,12 +34,14 @@ type publicMessageResponse struct {
 }
 
 type publicOrchestrationRunResponse struct {
+	ExecutionMode           string                    `json:"executionMode"`
 	ID                      string                    `json:"id"`
 	Title                   string                    `json:"title"`
 	Mode                    string                    `json:"mode"`
 	WorkerPair              string                    `json:"workerPair,omitempty"`
 	FirstCLI                string                    `json:"firstCli,omitempty"`
 	Profile                 string                    `json:"profile,omitempty"`
+	VerificationMode        string                    `json:"verificationMode,omitempty"`
 	NativeContextCompaction string                    `json:"nativeContextCompaction,omitempty"`
 	Prompt                  string                    `json:"prompt"`
 	CWD                     string                    `json:"cwd,omitempty"`
@@ -213,12 +215,14 @@ func publicSession(session store.Session) publicSessionResponse {
 
 func publicOrchestrationRun(run store.OrchestrationRun) publicOrchestrationRunResponse {
 	return publicOrchestrationRunResponse{
+		ExecutionMode:           run.ExecutionMode,
 		ID:                      run.ID,
 		Title:                   run.Title,
 		Mode:                    run.Mode,
 		WorkerPair:              run.WorkerPair,
 		FirstCLI:                run.FirstCLI,
 		Profile:                 run.Profile,
+		VerificationMode:        run.VerificationMode,
 		NativeContextCompaction: run.NativeContextCompaction,
 		Prompt:                  run.Prompt,
 		CWD:                     "",

@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import ts from 'typescript';
+import vm from 'node:vm';
+import { createRequire } from 'node:module';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 const utilsSource = readFileSync(new URL('./src/app/lib/utils.ts', import.meta.url), 'utf8');
 const orchestrationComponentsSource = readFileSync(new URL('./src/app/components/OrchestrationComponents.tsx', import.meta.url), 'utf8');
@@ -9,6 +14,38 @@ const indexSource = readFileSync(new URL('./index.html', import.meta.url), 'utf8
 const recoverySource = readFileSync(new URL('./public/app-recovery.js', import.meta.url), 'utf8');
 const legacyBundleSource = readFileSync(new URL('./public/assets/index-BWIkJOjq.js', import.meta.url), 'utf8');
 const source = `${utilsSource}\n${orchestrationComponentsSource}\n${orchestrationWorkspaceSource}`;
+
+// Render the actual result component: automatic closure has one result label,
+// while failed verification details remain visible and are never called proved.
+const conclusionSource = orchestrationComponentsSource.slice(
+  orchestrationComponentsSource.indexOf('export function RunConclusionCard'),
+  orchestrationComponentsSource.indexOf('export function CapabilityMatrix'),
+).replace('export function', 'function');
+const conclusionContext = {
+  React, cn: (...classes) => classes.join(' '),
+  CircleCheckBig: () => null, CircleX: () => null,
+  MessageContent: ({ content }) => React.createElement('div', null, content),
+};
+vm.runInNewContext(ts.transpileModule(`${conclusionSource}\nglobalThis.Card = RunConclusionCard;`, {
+  compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2020 },
+}).outputText, conclusionContext);
+const conclusionText = { runConclusion: '运行结果', executionCompleted: '已完成', verificationRecords: '检查记录', unmetObligations: '未完成义务' };
+for (const outcome of ['completed', 'satisfied']) {
+  const html = renderToStaticMarkup(React.createElement(conclusionContext.Card, {
+    conclusion: { outcome, summary: '本次运行已结束', verificationStatus: 'continue', unmetObligations: ['sort_correct 未证明'] }, t: conclusionText,
+  }));
+  assert.match(html, /已完成/);
+  assert.match(html, /检查记录/);
+  assert.match(html, /sort_correct 未证明/);
+  assert.doesNotMatch(html, /未完成义务|>satisfied<|>completed</);
+}
+
+// Verification notes use the ordinary verifier rendering, while supported
+// configuration remains explicit and historical modes require confirmation.
+assert.match(utilsSource, /event\.kind === 'bridge\.note' && event\.role === 'verifier'/);
+assert.match(orchestrationWorkspaceSource, /useState<VerificationMode>\('agent'\)/);
+assert.match(orchestrationWorkspaceSource, /verificationMode: profile === 'formal-proof' \? verificationMode : 'agent'/);
+assert.match(orchestrationWorkspaceSource, /setVerificationModeConfirmed\(!run\.verificationMode \|\| run\.verificationMode === 'agent'\)/);
 
 assert.match(source, /function orchestrationStatusContent\(event: OrchestrationEvent\)/);
 assert.match(source, /if \(\(event\.kind === 'run\.end' \|\| event\.kind === 'run\.error'\) && content\) return content;/);
@@ -463,3 +500,23 @@ const failedTurnEnd = visibleEventKindsAndContent([
 assert.equal(failedTurnEnd.length, 2);
 assert.equal(failedTurnEnd[1].type, 'status');
 assert.ok(failedTurnEnd[1].content.includes('without a follow-up response'));
+
+// Exercise the real reducer, rather than a copied display implementation.
+const requireModule = createRequire(import.meta.url);
+const compiledUtils = ts.transpileModule(utilsSource, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+const reducerContext = { exports: {}, require: name => name === './i18n' ? { uiText: {} } : requireModule(name) };
+vm.runInNewContext(compiledUtils, reducerContext);
+const renderHistory = events => reducerContext.exports.visibleOrchestrationEvents(events, 'boundary');
+const boundary = [
+  { runId: 'boundary', turnId: 'turn', kind: 'turn.delta', cli: 'codex', seq: 10, content: 'Only the tail.' },
+  { runId: 'boundary', turnId: 'turn', kind: 'turn.end', cli: 'codex', seq: 11, content: 'Full answer. Only the tail.' },
+];
+assert.equal(renderHistory(boundary).filter(event => event.type === 'message').map(event => event.content).join('|'), 'Full answer. Only the tail.');
+assert.equal(renderHistory(boundary.slice(0, 1)).find(event => event.type === 'message').content, 'Only the tail.', 'unfinished boundary remains visible');
+const complete = [{ runId: 'boundary', turnId: 'turn', kind: 'turn.start', cli: 'codex', seq: 1 },
+  { runId: 'boundary', turnId: 'turn', kind: 'turn.delta', cli: 'codex', seq: 2, content: 'Full answer. ' }, ...boundary];
+assert.equal(renderHistory(complete).filter(event => event.type === 'message').map(event => event.content).join('|'), 'Full answer. Only the tail.', 'prepending turn start restores ordinary delta display without duplication');
+console.log('Latest-page boundary answers and unfinished fragments passed.');
+
+assert.equal(renderHistory(boundary).find(event => event.type === 'message').kind, 'turn.end');
+assert.equal(renderHistory(complete).find(event => event.type === 'message').kind, 'turn.delta');
