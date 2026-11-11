@@ -490,3 +490,5 @@ and `internal/protocol/usage_recovery.go:RecoveryMarkerID`. The stats API expose
 `modelRecoveryStatus`; zero-usage markers reuse existing session-sync persistence.
 Round totals and original call costs are projected by
 `frontend/src/app/lib/roundModelUsage.ts:roundModelUsage`.
+
+独立部署模板：`deploy/systemd-hub-8088.service`、`deploy/Caddyfile` 与 `configs/replica.yaml.example`；步骤见[8088 部署](deployment-8088.md)。

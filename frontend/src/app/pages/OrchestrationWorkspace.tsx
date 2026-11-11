@@ -90,6 +90,7 @@ import {
   canCancelOrchestrationStatus,
   compareOrchestrationEvents,
   cn,
+  newUUID,
   copyText,
   isNearBottom,
   isOrchestrationRun,
@@ -847,7 +848,7 @@ export function OrchestrationWorkspace({
       const current = userInputsRef.current;
       const pending = current.pendingSubmissions.filter((entry) => entry.runId === runId && entry.instanceId === current.instanceId);
       queriedPending = pending.length > 0;
-      const syncId = crypto.randomUUID();
+      const syncId = newUUID();
       userInputSyncRef.current = syncId;
       queryAttempts += 1;
       queryInFlight = true;
@@ -1076,7 +1077,7 @@ export function OrchestrationWorkspace({
     if (!item.request.instanceId) return;
     const pending: UserInputPendingSubmission = { userId: user.id, runId: item.request.runId, requestId,
       executionId: item.request.executionId, instanceId: item.request.instanceId,
-      submissionId: crypto.randomUUID(), createdAt: Date.now() };
+      submissionId: newUUID(), createdAt: Date.now() };
     try {
       const stored = loadUserInputStorage(sessionStorage, user.id);
       // Never send an answer without a durable identity for this tab.

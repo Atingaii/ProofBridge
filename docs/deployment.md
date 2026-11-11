@@ -278,7 +278,7 @@ Notes:
 
 ## Option E — Production (systemd + Caddy)
 
-This mirrors the `sparkapi.tech` setup using the assets in `deploy/`.
+This uses the standard Hub layout with the assets in `deploy/`. Set the Caddy site address to your own domain.
 
 ```bash
 # 1. Install the binary
@@ -289,9 +289,12 @@ sudo make install                       # -> /usr/local/bin/codex-bridge
 sudo mkdir -p /opt/codex-bridge/configs /opt/codex-bridge/data
 sudo cp configs/dev.yaml.example /opt/codex-bridge/configs/prod.yaml
 
-# 3. Reverse proxy (edit the domain in deploy/Caddyfile first)
+# 3. Reverse proxy: systemctl edit caddy, add [Service] and
+# Environment=PROOFBRIDGE_SITE_ADDRESS=https://your-domain.example
+# Default upstream is 127.0.0.1:8088; set PROOFBRIDGE_UPSTREAM for another port.
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
-sudo systemctl reload caddy
+sudo systemctl daemon-reload
+sudo systemctl restart caddy
 
 # 4. systemd units (edit BRIDGE_HUB_URL / domain as needed)
 sudo cp deploy/systemd-hub.service /etc/systemd/system/codex-bridge-hub.service
@@ -578,3 +581,6 @@ Hub after changing the selected environment file, then test the saved personal
 mailbox and check actual receipt separately. See
 [SMTP setup](dev-workflow.md#smtp-setup-and-a-personal-delivery-test) and
 [delivery status](features/mail-delivery-status.md).
+
+
+复现源机 8088 动态版本：[部署手册](deployment-8088.md)与[AI 提示词](deploy-8088-ai-prompt.md)。

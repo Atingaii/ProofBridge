@@ -719,3 +719,11 @@ unverified; APK bytes and Java heap do not prove runtime-memory compliance.
 MCP entrypoint. Set `PROOFBRIDGE_MCP_TOKEN` in the client environment; it is a
 client-side credential, not a Hub configuration field. Pass a stable request-key
 manifest and the copied URL. See the [batch example](features/mcp-skill-task-notifications.md#batch-example).
+
+
+复现源机 8088 动态版本：[部署手册](deployment-8088.md)与[AI 提示词](deploy-8088-ai-prompt.md)。
+
+Caddy 入口变量（仅代理进程读取）：PROOFBRIDGE_SITE_ADDRESS 为外部站点地址，
+默认 localhost；PROOFBRIDGE_UPSTREAM 为 Hub 回环上游，默认 127.0.0.1:8088。
+独立 8088 部署必须显式设置上述两个变量，将上游改为 127.0.0.1:18089。
+VITE_LEADING 与 VITE_OFFICIAL_CODEX_MODELS 是前端构建开关，make frontend-8088 固定二者为 true。

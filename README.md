@@ -319,3 +319,6 @@ Follow the repository's [commit message contract](AGENTS.md#r6-commit-message-co
 
 This repository does not currently include a project `LICENSE` file.
 Third-party components retain their own licenses.
+
+
+复现源机 8088 动态版本：[部署手册](docs/deployment-8088.md)与[AI 提示词](docs/deploy-8088-ai-prompt.md)。

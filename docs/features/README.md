@@ -41,3 +41,5 @@ Compact completion email: [result card, Token/cost snapshot and multipart contra
 Mail status: [outbound SMTP and local preview](mail-delivery-status.md).
 
 Skill installation without Hub downloads: [fixed GitHub release and TLS boundaries](github-skill-distribution.md).
+
+- [可复现的 8088 部署](reproducible-8088-deployment.md)

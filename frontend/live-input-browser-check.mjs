@@ -134,6 +134,8 @@ try {
     }
     await page.locator('aside').getByText('继续当前任务', { exact: true }).waitFor();
     await page.getByRole('button', { name: '前往输入', exact: true }).click();
+    // Navigation focuses after React opens the panel and the next animation frame.
+    await page.waitForFunction(() => document.getElementById('orchestration-live-input') === document.activeElement);
     assert.equal(await input.evaluate(el => el === document.activeElement), true);
     assert.equal(await input.inputValue(), 'Keep this draft when stopping');
     assert.equal(await page.locator('textarea:visible').count(), 1, 'one composer after cancellation');

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, Check, ChevronDown, Clock3, MessageSquare, RefreshCw, Send, Zap } from 'lucide-react';
 import { api } from '../lib/api';
-import { cn } from '../lib/utils';
+import { cn, newUUID } from '../lib/utils';
 import type { OrchestrationPromptMessage } from '../lib/types';
 import { Button } from './ui';
 
@@ -79,7 +79,7 @@ export function OrchestrationLiveInput({ runId, running, refreshRevision, suppor
     // Reuse the ID when retrying an ambiguous HTTP outcome. Never silently resend with a new ID.
     const previous = pending.current;
     const body = previous?.prompt === text && previous.deliveryMode === deliveryMode ? previous
-      : { messageId: crypto.randomUUID(), deliveryMode, prompt: text };
+      : { messageId: newUUID(), deliveryMode, prompt: text };
     pending.current = body;
     try {
       await api(endpoint, { method: 'POST', body: JSON.stringify(body) });

@@ -5,7 +5,7 @@ DOWNLOAD_DIR ?= bin/downloads
 VERSION ?= dev
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
-.PHONY: help tidy frontend build build-all bridge-downloads portable-package test benchmark-formal-proof doc-lint run-hub run-bridge install clean docker
+.PHONY: help tidy frontend frontend-8088 build build-all bridge-downloads portable-package test benchmark-formal-proof doc-lint run-hub run-bridge install clean docker
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -16,6 +16,9 @@ tidy: ## Sync go.mod / go.sum
 
 frontend: ## Build the web UI into internal/web/static (requires Node 20+)
 	cd frontend && npm ci && npm run build
+
+frontend-8088: ## Build the reproducible dynamic 8088 UI (requires installed frontend dependencies)
+	cd frontend && VITE_LEADING=true VITE_OFFICIAL_CODEX_MODELS=true npm run build
 
 build: ## Build the Go binary (assumes frontend is already built)
 	CGO_ENABLED=0 $(GO) build -ldflags "-s -w" -o $(BINARY) .

@@ -286,3 +286,6 @@ Trellis 是可选开发工具，配置见[开发工作流](docs/dev-workflow.md#
 ## 许可证
 
 仓库目前没有项目级 `LICENSE` 文件。第三方组件仍适用各自的许可证。
+
+
+复现源机 8088 动态版本：[部署手册](docs/deployment-8088.md)与[AI 提示词](docs/deploy-8088-ai-prompt.md)。
