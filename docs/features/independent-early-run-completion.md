@@ -1,3 +1,5 @@
+> Audit-policy update: [audit timeout and final evidence](audit-timeout-and-final-evidence.md) adds audit-only timeout retries and direct reuse of a current independent reviewer final audit. Other completion rules remain applicable.
+
 # Independent early run completion
 
 ## Goals

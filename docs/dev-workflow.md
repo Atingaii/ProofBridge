@@ -732,3 +732,20 @@ VITE_LEADING 与 VITE_OFFICIAL_CODEX_MODELS 是前端构建开关，make fronten
 实验室代理环境模板为 configs/caddy-lab.env.example，systemd drop-in 为 deploy/systemd-caddy-lab.conf；
 两者与 Hub 私有环境分离，见[命令行部署](deployment-8088.md)。VPN 只提供网络路由；
 客户端回环 MCP 需要同机执行或 SSH 本地转发，个人提示词会按回环配置提醒这一条件。
+
+
+## Independent audit timeout and reuse
+
+Bridge retries timed-out independent audits with increasing deadlines, from ten
+minutes up to 24 hours per invocation. These retries stay within the audit phase;
+exhaustion is a verification-timeout error, never a reason to open a new editing
+round. Cancellation remains immediate, and usage includes interrupted attempts.
+A current independent reviewer final audit can finish verification directly when
+its successful native command, final handoff and source freshness agree. Fresh
+workspace logs redirected by that command are reused without another build.
+Historical logs require independent provenance, source and scope inspection.
+See [audit policy](features/audit-timeout-and-final-evidence.md).
+
+This policy executes on Bridge. Installing only a Hub does not change an already
+running remote Bridge. Update idle endpoints using their existing repair/update
+installation flow and restart the endpoint service after its current work ends.

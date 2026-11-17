@@ -283,7 +283,10 @@ projects, and materializes the same Claude-written transcript so Claude Code's
 interactive `/resume` picker can show it from the run cwd. It does not add
 model-driven proof strategy or remediation turns. After every round's
 durable reviewer, or a resolved worker/integrator completion candidate, Bridge
-starts two fresh Agent Verifier calls using role 1 and
+first reuses a current independent reviewer final audit when a resolved final
+handoff, native successful command/log evidence and source freshness establish
+completion. This publishes a pass immediately, without another workspace audit.
+Otherwise it consults up to two fresh Agent Verifier calls using role 1 and
 role 2's bound presets, executed serially to bound machine load. Each receives
 the full original `TaskPrompt`, excluding durable-node instructions, and runs in
 the real project workspace under the endpoint's configured execution permissions,
@@ -295,11 +298,15 @@ workspace reports remain read-only. This prompt contract lives in
 not broaden the exclusions in
 `internal/bridge/orchestration_completion.go:completionSourceDigest` or change
 execution permissions or verifier quorum. Bridge
-waits for both results before emitting a visible `verifier.verdict`; any
+stops at the first valid independent pass, preserving concrete conflicts already
+observed, and emits a visible `verifier.verdict`; any
 passing Agent Verifier without a concrete evidence conflict ends unused rounds
 with `verified-early`, while the Hub
 dispatches the next configured round when both verifiers continue and budget
-remains. Final rounds still verify; budget exhaustion is `max-turns` with a
+remains. Audit invocation timeouts retry only that audit with doubled deadlines capped at
+24 hours; exhaustion emits a terminal verification-timeout error rather than
+advancing the source-editing round. See [ADR-032](adr/032-audit-timeout-and-reuse.md).
+Final rounds still verify; budget exhaustion is `max-turns` with a
 blocked conclusion unless independently verified. Bounded source/usage/blocker
 observations persist in graph JSON across internal rounds, reset on a new user
 prompt, and are stripped from public shares. Low native reviewer output is

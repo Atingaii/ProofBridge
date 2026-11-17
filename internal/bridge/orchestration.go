@@ -59,6 +59,7 @@ type OrchestrationManager struct {
 	// a stream failure while requesting a conclusion must not consume the
 	// conclusion budget itself.
 	cliTransportRetryWaits []time.Duration
+	verifierTimeouts       []time.Duration // Per-manager override for deterministic deadline tests.
 	// codexThreadBusyRetryWaits handles a resumed native thread whose previous
 	// turn still owns Codex's writer lease. The rejected prompt is unchanged.
 	codexThreadBusyRetryWaits []time.Duration
@@ -1160,7 +1161,11 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 			var verdict protocol.VerifierVerdict
 			var verifierAgents []agentVerifierResult
 			verdictRecord := record
-			verdict, verifierAgents = m.evaluateAgentVerifierQuorum(ctx, payload, mode, profile, workerPair, firstCLI, history)
+			if auditVerdict, ok := reviewerFinalAuditVerdict(ctx, payload, record); ok {
+				verdict = auditVerdict
+			} else {
+				verdict, verifierAgents = m.evaluateAgentVerifierQuorum(ctx, payload, mode, profile, workerPair, firstCLI, history)
+			}
 			sourceAfter := completionSourceDigest(ctx, runCWD)
 			if sourceBefore != "" && sourceAfter != "" && sourceBefore != sourceAfter {
 				verdict = protocol.VerifierVerdict{Status: verifierVerdictContinue, Reason: "source changed during independent verification; rerun verification on the final source", Checkers: []protocol.VerifierCheck{verifierCheckContinue("source-integrity", "source changed during verification")}}
@@ -1183,6 +1188,15 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 			}
 			if ctx.Err() != nil {
 				m.emit(payload.RunID, protocol.OrchestrationEventPayload{Kind: "run.cancelled", Status: store.OrchestrationCanceled, Error: "canceled"})
+				return
+			}
+			if verdict.Status != verifierVerdictPass && verifierTimeoutExhausted(verifierAgents) {
+				m.emit(payload.RunID, protocol.OrchestrationEventPayload{
+					Kind: "run.error", Status: store.OrchestrationFailed,
+					Error:         "Independent audit timeout exhausted; verification is incomplete. No source-editing round was started.",
+					RunEndData:    &protocol.RunEndData{TerminalReason: "verification-timeout", VerifierVerdict: &verdict},
+					RunConclusion: verifiedRunConclusion(content, history, &verdict),
+				})
 				return
 			}
 			if reviewerBoundary && verdict.Status != verifierVerdictPass && completionStalled(payload.CompletionHistory, sample) {

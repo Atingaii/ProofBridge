@@ -60,6 +60,7 @@ allowlist across authorization, user metadata, and rollout evaluation.
 | SQLite schema and CRUD | `internal/store/store.go`, `internal/store/id.go` |
 | Long-history read performance | `internal/store/store.go:ListOrchestrationPlanEvents`, `internal/store/admin_analytics.go:AdminUsageSnapshot`, `internal/hub/task_graph.go:handleOrchestrationProgress`; [design](features/site-loading-performance.md) |
 | Wire protocol | `internal/protocol/envelope.go` |
+| Audit timeout retry and independent reviewer final-audit reuse | `internal/bridge/orchestration_audit.go:runAgentVerifier`, `internal/bridge/orchestration_audit.go:reviewerFinalAuditVerdict`, `internal/bridge/orchestration_completion.go:completionSourceDigestBefore`, `docs/features/audit-timeout-and-final-evidence.md` |
 | Independent Agent verification and historical mode compatibility | `internal/store/store.go:OrchestrationRun`, `internal/hub/orchestration.go:normalizeOrchestrationStart`, `internal/protocol/envelope.go:NormalizeVerificationMode`, `internal/bridge/orchestration.go:run`, `internal/bridge/orchestration_verifier.go:evaluateAgentVerifierQuorum`, `frontend/src/app/pages/OrchestrationWorkspace.tsx`, `docs/adr/030-agent-only-verification.md` |
 | Frontend source | `frontend/src/app/App.tsx`, `frontend/src/app/pages/`, `frontend/src/app/components/`, `frontend/src/app/lib/`, `frontend/src/styles/` |
 | Public help guide | `frontend/src/app/pages/HelpPage.tsx`, `frontend/public/help/`, `frontend/scripts/generate-help-screenshots.cjs`, `docs/features/public-help-guide.md` |

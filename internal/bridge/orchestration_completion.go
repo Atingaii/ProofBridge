@@ -19,6 +19,11 @@ import (
 // A bounded content fingerprint is a progress signal, not a proof checker.
 // Missing, symlinked, unreadable or oversized trees cannot establish stagnation.
 func completionSourceDigest(ctx context.Context, root string) string {
+	return completionSourceDigestBefore(ctx, root, time.Time{})
+}
+
+// A live audit receipt cannot cover source writes after the native command ended.
+func completionSourceDigestBefore(ctx context.Context, root string, notAfter time.Time) string {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	h := sha256.New()
@@ -50,6 +55,9 @@ func completionSourceDigest(ctx context.Context, root string) string {
 		info, err := entry.Info()
 		if err != nil {
 			return err
+		}
+		if !notAfter.IsZero() && info.ModTime().After(notAfter) {
+			return fmt.Errorf("source changed after audit")
 		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("non-regular source")

@@ -16,3 +16,8 @@
 `source=hub, phase=route, status=rejected, revision=0` 查询拒绝，前端单独校验，
 不能解除未决提交。具体字段、错误矩阵与回归门禁统一见
 [查询恢复契约](../../../docs/features/native-structured-user-input.md#查询故障与送达提示修复2026-10-03)。
+
+审核超时与证明缺陷必须分开处理：超时仅重试审核、递增时限，到上限仍未完成
+则终结为审核未完成，不能让成功节点事件触发下一轮源码修改。已通过的独立
+终审按[审核复用规则](../../../docs/features/audit-timeout-and-final-evidence.md)
+直接收敛，保留来源、源码时效与退出状态约束。

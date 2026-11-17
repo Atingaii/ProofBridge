@@ -1,3 +1,5 @@
+> Audit-policy update: [audit timeout and final evidence](../features/audit-timeout-and-final-evidence.md) adds audit-only timeout retries and direct reuse of a current independent reviewer final audit. Other completion rules remain applicable.
+
 # ADR-020: Independent early run completion
 
 Status: accepted, implemented and validated.

@@ -1,3 +1,5 @@
+> Audit-policy update: [audit timeout and final evidence](audit-timeout-and-final-evidence.md) adds audit-only timeout retries and direct reuse of a current independent reviewer final audit. Other completion rules remain applicable.
+
 > Completion-policy update: [independent early run completion](independent-early-run-completion.md) supersedes the reviewer-only barrier and incomplete stagnation result described below. Completion decisions ignore planning; all automatic early closures show completed while retaining factual checks. Other feature behavior remains applicable.
 
 # Agent-Verifier Round Continuation

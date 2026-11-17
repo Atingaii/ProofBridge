@@ -4215,8 +4215,8 @@ func TestAgentVerifierQuorumStopsOnAnyPassingAgentWithoutLocalFacts(t *testing.T
 	if verdict := aggregateAgentVerifierQuorum([]agentVerifierResult{disagreement, passingAgent("agent-2")}); verdict.Status != verifierVerdictPass {
 		t.Fatalf("second passing agent did not stop: %#v", verdict)
 	}
-	if verdict := aggregateAgentVerifierQuorum([]agentVerifierResult{passingAgent("agent-1")}); verdict.Status != verifierVerdictContinue {
-		t.Fatalf("single verifier incorrectly passed: %#v", verdict)
+	if verdict := aggregateAgentVerifierQuorum([]agentVerifierResult{passingAgent("agent-1")}); verdict.Status != verifierVerdictPass {
+		t.Fatalf("independent pass did not stop verification: %#v", verdict)
 	}
 	if verdict := aggregateAgentVerifierQuorum([]agentVerifierResult{disagreement, disagreement}); verdict.Status != verifierVerdictContinue {
 		t.Fatalf("two continuing agents incorrectly passed: %#v", verdict)

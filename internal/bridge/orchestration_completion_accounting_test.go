@@ -95,7 +95,11 @@ func TestIntermediateCompletionAndVerifierUsageBothModes(t *testing.T) {
 				if verdict == "pass" && (end.RunConclusion == nil || end.RunConclusion.Outcome != "satisfied" || len(end.RunConclusion.UnmetObligations) > 0) {
 					t.Fatalf("passed verdict displayed blocked: %#v", end)
 				}
-				if verifiers != 2 || verifierTokens != 30 || !verifierSlots["codex-a"] || !verifierSlots["codex-b"] {
+				wantVerifiers := 2
+				if verdict == "pass" {
+					wantVerifiers = 1
+				}
+				if verifiers != wantVerifiers || verifierTokens != int64(wantVerifiers*15) || !verifierSlots["codex-a"] || (wantVerifiers == 2 && !verifierSlots["codex-b"]) {
 					t.Fatalf("lost verifier usage: %d events %d tokens", verifiers, verifierTokens)
 				}
 			})

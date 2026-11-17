@@ -771,3 +771,56 @@ func TestSparseProgressPreservesReviewBoundaryAndPlan(t *testing.T) {
 		}
 	}
 }
+
+func TestAuditTimeoutStopsDurableGraphWithoutAnotherEditingRound(t *testing.T) {
+	s, st, userID, agentID := newOrchestrationTestServer(t)
+	ctx := context.Background()
+	run := createOrchestrationRun(t, st, userID, agentID)
+	payload := protocol.OrchestrationStartPayload{RunID: run.ID, Mode: "collaboration", WorkerPair: protocol.WorkerPairCodexCodex, Prompt: "verify", Round: 1, MaxRounds: 4, MaxTurnsRequested: 4, MaxTurns: 1, CWD: t.TempDir()}
+	raw, _ := json.Marshal(payload)
+	digest := taskPayloadDigest(string(raw))
+	graph, err := st.CreateOrchestrationTaskGraph(ctx, run.ID, string(raw), digest, orchestrationTaskSpecs(digest, payload.WorkerPair, payload.Mode))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := testBridgeConn(agentID, 8)
+	s.pool.RegisterAgent(conn)
+	defer s.pool.UnregisterAgent(agentID, conn)
+	if err := s.dispatchReadyTaskGraph(ctx, run, graph); err != nil {
+		t.Fatal(err)
+	}
+	var ref protocol.TaskAttemptRef
+	for i := 0; i < 4; i++ {
+		ref = decodeTaskDispatch(t, <-conn.send)
+		if ref.Role == store.TaskRoleReviewer {
+			break
+		}
+		sendTaskLifecycle(s, run.ID, ref, nil)
+	}
+	if ref.Role != store.TaskRoleReviewer {
+		t.Fatal("reviewer not reached")
+	}
+	s.handleOrchestrationEvent(ctx, protocol.MustEnvelope(protocol.TypeOrchestrationEvent, "", protocol.OrchestrationEventPayload{RunID: run.ID, Task: &ref, Kind: "run.error", Status: store.OrchestrationFailed, Error: "independent audit timeout exhausted", RunEndData: &protocol.RunEndData{TerminalReason: "verification-timeout", VerifierVerdict: &protocol.VerifierVerdict{Status: "continue", Reason: "audit timed out"}}}))
+	loaded, err := st.OrchestrationRunByID(ctx, run.ID, userID)
+	if err != nil || loaded.Status != store.OrchestrationFailed {
+		t.Fatalf("timeout outcome: %#v %v", loaded, err)
+	}
+	select {
+	case next := <-conn.send:
+		t.Fatalf("timeout dispatched another round: %#v", next)
+	default:
+	}
+	events, err := st.ListOrchestrationEvents(ctx, run.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range events {
+		if e.Kind == "run.error" && e.RunEndData != nil && e.RunEndData.TerminalReason == "verification-timeout" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("timeout cause was not persisted")
+	}
+}
