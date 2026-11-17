@@ -283,9 +283,11 @@ projects, and materializes the same Claude-written transcript so Claude Code's
 interactive `/resume` picker can show it from the run cwd. It does not add
 model-driven proof strategy or remediation turns. After every round's
 durable reviewer, or a resolved worker/integrator completion candidate, Bridge
-first reuses a current independent reviewer final audit when a resolved final
-handoff, native successful command/log evidence and source freshness establish
-completion. This publishes a pass immediately, without another workspace audit.
+first reuses a current independent reviewer final audit when native successful
+command/log evidence and source freshness establish
+completion. Handoff formatting and later successful read-only commands do not
+block reuse; explicit remaining work or risks do. This publishes a pass immediately,
+without another workspace audit.
 Otherwise it consults up to two fresh Agent Verifier calls using role 1 and
 role 2's bound presets, executed serially to bound machine load. Each receives
 the full original `TaskPrompt`, excluding durable-node instructions, and runs in
@@ -303,8 +305,8 @@ observed, and emits a visible `verifier.verdict`; any
 passing Agent Verifier without a concrete evidence conflict ends unused rounds
 with `verified-early`, while the Hub
 dispatches the next configured round when both verifiers continue and budget
-remains. Audit invocation timeouts retry only that audit with doubled deadlines capped at
-24 hours; exhaustion emits a terminal verification-timeout error rather than
+remains. Audits start with a 24-hour deadline and allow one audit-only retry at
+the same cap; exhaustion emits a terminal verification-timeout error rather than
 advancing the source-editing round. See [ADR-032](adr/032-audit-timeout-and-reuse.md).
 Final rounds still verify; budget exhaustion is `max-turns` with a
 blocked conclusion unless independently verified. Bounded source/usage/blocker

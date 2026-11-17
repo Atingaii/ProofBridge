@@ -147,7 +147,7 @@ func TestFinalAuditRejectsUnboundOrSupersededEvidence(t *testing.T) {
 
 func TestAuditLimitsAndRealBlockers(t *testing.T) {
 	limits := defaultVerifierTimeouts()
-	if limits[0] != 10*time.Minute || limits[len(limits)-1] != 24*time.Hour {
+	if len(limits) != 2 || limits[0] != 24*time.Hour || limits[1] != 24*time.Hour {
 		t.Fatal(limits)
 	}
 	for i := 1; i < len(limits); i++ {
@@ -176,5 +176,115 @@ func TestReviewerReusesFreshRedirectedIndependentLog(t *testing.T) {
 	r.Tools[0].StartedAt = time.Now().Add(time.Minute)
 	if _, ok := reviewerFinalAuditVerdict(context.Background(), auditTestPayload(cwd), r); ok {
 		t.Fatal("old redirected log was accepted")
+	}
+}
+
+func TestFinalAuditAllowsPeerHandoffAndReadOnlyFollowups(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "ReviewerFinalAudit.log"), []byte("FINAL AUDIT PASSED\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	zero, one := 0, 1
+	audit := RunnerToolEvent{ID: "audit", Status: "completed", Command: "make -j1 final-audit", ExitCode: &zero, Output: "FINAL AUDIT PASSED\n", CompletedAt: time.Now().Add(time.Second)}
+	base := orchestrationTurn{Role: store.TaskRoleReviewer, Relay: orchestrationRelayPacket{Structured: true, Status: "resolved", To: "peer", Intent: "continue", Next: "none", Risks: "none"}, Tools: []RunnerToolEvent{audit}}
+	for _, command := range []string{"", "cat ReviewerFinalAudit.log", "tail -n 20 ReviewerFinalAudit.log", "head -n 10 ReviewerFinalAudit.log", "pwd", "git status --short", "Read ReviewerFinalAudit.log"} {
+		t.Run(command, func(t *testing.T) {
+			r := base
+			r.Tools = append([]RunnerToolEvent(nil), base.Tools...)
+			if command != "" {
+				r.Tools = append(r.Tools, RunnerToolEvent{ID: "read", Status: "completed", Command: command, ExitCode: &zero, CompletedAt: time.Now().Add(time.Second)})
+			}
+			if _, ok := reviewerFinalAuditVerdict(context.Background(), auditTestPayload(cwd), r); !ok {
+				t.Fatal("read-only follow-up or peer handoff forced another audit")
+			}
+		})
+	}
+	r := base
+	r.Relay = orchestrationRelayPacket{}
+	if _, ok := reviewerFinalAuditVerdict(context.Background(), auditTestPayload(cwd), r); !ok {
+		t.Fatal("plain-language handoff forced another audit")
+	}
+	for _, command := range []string{"cat ReviewerFinalAudit.log; touch Proof.v", "sed -i edit Proof.v", "tail -f ReviewerFinalAudit.log", "make check"} {
+		r := base
+		r.Tools = append(append([]RunnerToolEvent(nil), base.Tools...), RunnerToolEvent{ID: "later", Status: "completed", Command: command, ExitCode: &zero})
+		if _, ok := reviewerFinalAuditVerdict(context.Background(), auditTestPayload(cwd), r); ok {
+			t.Fatalf("unsafe follow-up accepted: %s", command)
+		}
+	}
+	r = base
+	r.Tools = append(append([]RunnerToolEvent(nil), base.Tools...), RunnerToolEvent{ID: "failed", Status: "completed", Command: "cat ReviewerFinalAudit.log", ExitCode: &one})
+	if _, ok := reviewerFinalAuditVerdict(context.Background(), auditTestPayload(cwd), r); ok {
+		t.Fatal("failed follow-up was ignored")
+	}
+}
+
+func TestIndependentLogReuseIsBoundToCurrentSources(t *testing.T) {
+	cwd := t.TempDir()
+	proof := filepath.Join(cwd, "Proof.v")
+	log := filepath.Join(cwd, "ReviewerIndependentFinalAudit.log")
+	cutoff := time.Now().Add(-time.Minute)
+	if err := os.WriteFile(proof, []byte("proof"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(proof, cutoff.Add(-time.Minute), cutoff.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(log, []byte("FINAL AUDIT PASSED (--submission).\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(log, cutoff, cutoff); err != nil {
+		t.Fatal(err)
+	}
+	zero := 0
+	r := orchestrationTurn{Role: store.TaskRoleReviewer, Tools: []RunnerToolEvent{{ID: "read", Status: "completed", Command: "cat ReviewerIndependentFinalAudit.log", ExitCode: &zero, CompletedAt: time.Now()}}}
+	if _, ok := reviewerFinalAuditVerdict(context.Background(), auditTestPayload(cwd), r); !ok {
+		t.Fatal("current independent log was not reused")
+	}
+	if err := os.Chtimes(proof, time.Now(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reviewerFinalAuditVerdict(context.Background(), auditTestPayload(cwd), r); ok {
+		t.Fatal("stale audit passed after sources changed")
+	}
+}
+
+func TestReviewerIndependentLogEndsRunWithoutExtraVerifier(t *testing.T) {
+	text := "交接总结：原始目标均已通过独立终审。\nMsg: to=peer; intent=continue; need=none\nHandoff: status=resolved; changed=none; verified=ReviewerIndependentFinalAudit.log; next=none; risks=none"
+	script := fakeCodexExecScriptWithSuccessfulCommand(text)
+	script = strings.ReplaceAll(script, "go test ./...", "cat ReviewerIndependentFinalAudit.log")
+	script = strings.Replace(script, "import sys\n", "import sys\nfrom pathlib import Path\nPath('ReviewerIndependentFinalAudit.log').write_text('FINAL AUDIT PASSED (--submission).\\n')\n", 1)
+	script = strings.Replace(script, `if "PROOFBRIDGE_AGENT_VERIFIER_V1" in prompt:`, `if "PROOFBRIDGE_AGENT_VERIFIER_V1" in prompt:
+    raise RuntimeError("duplicate audit must never start")`, 1)
+	m, cwd, out := auditTestManager(t, script)
+	m.run(context.Background(), auditTestPayload(cwd))
+	passed := false
+	for _, event := range drainOrchestrationEvents(t, out) {
+		if event.Kind == "turn.usage" && event.Role == "verifier" {
+			t.Fatal("duplicate verifier started after independent log pass")
+		}
+		if event.Kind == "run.end" && event.RunEndData != nil && event.RunEndData.TerminalReason == "verified-early" {
+			passed = true
+		}
+	}
+	if !passed {
+		t.Fatal("independent log did not terminate the run")
+	}
+}
+
+func TestFinalAuditSupportsNativeShellWrappers(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "Proof.v"), []byte("proof"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	zero := 0
+	for _, command := range []string{"/bin/bash -lc make -j1 final-audit", `/bin/bash -lc 'make -j1 final-audit'`, `bash -lc "timeout --kill-after=10s 24h make -j1 final-audit"`} {
+		r := orchestrationTurn{Role: store.TaskRoleReviewer, Tools: []RunnerToolEvent{{Status: "completed", Command: command, ExitCode: &zero, Output: "FINAL AUDIT PASSED\n", CompletedAt: time.Now().Add(time.Second)}}}
+		if _, ok := reviewerFinalAuditVerdict(context.Background(), auditTestPayload(cwd), r); !ok {
+			t.Fatalf("native wrapper forced another audit: %s", command)
+		}
+	}
+	r := orchestrationTurn{Role: store.TaskRoleReviewer, Tools: []RunnerToolEvent{{Status: "completed", Command: `bash -lc "echo FINAL AUDIT PASSED; make check"`, ExitCode: &zero, Output: "FINAL AUDIT PASSED\n", CompletedAt: time.Now().Add(time.Second)}}}
+	if _, ok := reviewerFinalAuditVerdict(context.Background(), auditTestPayload(cwd), r); ok {
+		t.Fatal("wrapper converted echo into valid audit evidence")
 	}
 }

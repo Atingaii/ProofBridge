@@ -3,8 +3,8 @@
 ## Goals
 
 A timed-out audit is incomplete infrastructure work, not a proof defect. Retry
-only the independent audit with a doubled time allowance, from 10 minutes up to
-24 hours. An exhausted audit stops with an explicit error; it must never dispatch
+only the independent audit with a 24-hour allowance from its first attempt,
+with one automatic audit-only retry at the same 24-hour cap. An exhausted audit stops with an explicit error; it must never dispatch
 another source-editing round. Cancellation always wins.
 
 A successful final audit performed by the current independent reviewer can finish
@@ -21,16 +21,25 @@ a failed command, a partial probe, or an old unbound log cannot prove completion
 
 Use existing verdict, bridge note, usage, run.error and run.end events. Keep retry
 usage, and expose timeout attempts in verifier result metadata. An audit receipt
-is local to the current successful reviewer turn: a resolved final handoff with
-no outstanding work, plus native successful final-audit command output. A later
-tool execution invalidates immediate reuse. Existing logs may be inspected by
+belongs to the current independent reviewer: successful final-audit output, or
+a successful read of an independent final-audit log whose timestamp covers the
+current sources. A fixed final handoff format is not required. Explicit remaining
+work, risks and blocked handoffs still prevent direct closure. Later successful
+read-only commands preserve the result; writes and failed commands invalidate it. Existing logs may be inspected by
 independent verifiers; their provenance, current sources, full task scope and
 successful exit must be confirmed before accepting them without a rerun.
+Standalone log reuse recognizes a successful `cat` or native `Read` of a regular
+workspace `.log` whose basename contains `final`, `audit`, and one of `review`,
+`independent`, or `verifier`, such as `ReviewerIndependentFinalAudit.log`.
+Conventional native `bash -lc` / `sh -c` wrappers are normalized before these
+checks. The file must contain the pass marker, predate the read completion, and be at
+least as new as every source file in the existing bounded source scan.
 
 ## Implementation
 
 1. Separate deadline failures and model-reported audit timeouts from concrete
-   verification failures; retry the same read-only audit, preserving usage.
+   verification failures; retry the same read-only audit, preserving usage. Start
+   with 24 hours instead of repeatedly interrupting long audits at shorter limits.
 2. Keep the host serialization gate while retrying; release it on cancellation.
 3. Stop orchestration with run.error on timeout exhaustion, before round dispatch
    or stagnation accounting.
@@ -44,7 +53,8 @@ successful exit must be confirmed before accepting them without a rerun.
 
 Deterministic CLI tests: timeout then success, capped repeated timeout with no new
 worker round, cancellation, retry usage, successful reviewer final audit with zero
-extra verifier invocations, and rejected prose/echo/failed/later-command evidence.
+extra verifier invocations, relaxed handoff formats, safe read follow-ups, fresh independent log reads, and
+rejected prose/echo/failed/source-write/stale-log evidence.
 Run Go suite, documentation lint, and build. Deploy the 8088 shared Hub and affected
 local Bridge only after checking active work; verify service health and versions.
 
@@ -57,6 +67,8 @@ though the audit has produced no evidence against it.
 source and original task. Live independent reviewer command evidence provides a
 bounded direct path; historical logs need independent provenance inspection.
 
-**Why is a final handoff also required?** The marker certifies an audit command,
-while the independent reviewer confirms coverage of the original task and reports
-remaining obligations. A partial successful probe cannot close the whole task.
+**Does handoff formatting block a successful audit?** No. Native independent
+final-audit evidence is sufficient when source freshness is established and no
+explicit remaining work or risks contradict it. A partial probe cannot close
+the whole task. Existing independent logs must be read successfully from the
+workspace, contain the final pass marker, and be at least as new as the sources.

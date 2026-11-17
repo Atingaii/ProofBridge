@@ -736,12 +736,13 @@ VITE_LEADING 与 VITE_OFFICIAL_CODEX_MODELS 是前端构建开关，make fronten
 
 ## Independent audit timeout and reuse
 
-Bridge retries timed-out independent audits with increasing deadlines, from ten
-minutes up to 24 hours per invocation. These retries stay within the audit phase;
+Bridge gives independent audits 24 hours from their first invocation and permits
+one audit-only retry at the same cap. These retries stay within the audit phase;
 exhaustion is a verification-timeout error, never a reason to open a new editing
 round. Cancellation remains immediate, and usage includes interrupted attempts.
 A current independent reviewer final audit can finish verification directly when
-its successful native command, final handoff and source freshness agree. Fresh
+its successful native command/log and source freshness agree. Fixed final handoff
+formatting is optional; successful read-only follow-ups preserve the pass. Fresh
 workspace logs redirected by that command are reused without another build.
 Historical logs require independent provenance, source and scope inspection.
 See [audit policy](features/audit-timeout-and-final-evidence.md).
