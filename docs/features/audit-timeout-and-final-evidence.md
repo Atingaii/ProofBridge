@@ -64,6 +64,27 @@ of the independent execution, bound to the same scope and proof inputs.
 Source changes, changes to the evaluator, or a conflicting reviewer handoff
 invalidate the previous decision.
 
+### An implementer's submission audit
+
+A work-node `make final-audit` can supply the evaluator result later inspected by
+the independent reviewer. Bridge stores this native observation separately per
+worker slot, with the command, source digest and original evaluator identity.
+Worker and integrator actions never grant an independent decision. Only the
+assigned reviewer in a different slot may explicitly adopt such an observation
+after checking the other original requirements. A resolved handoff alone may
+reuse a previous independent decision, but cannot promote a candidate.
+An independent failed evaluation takes precedence until an independent
+evaluation passes on these inputs.
+
+The worker receives the absolute project-bound evaluator command. On reviewer
+dispatch, Bridge offers adoption only if it can resolve matching native evidence
+right now. Otherwise the prompt specifies the direct designated audit. A stale
+or missing adoption emits a Bridge note and has no verification effect. Native
+Codex absolute paths and local file URIs bind the same workspace. Foreign file
+authorities and ambiguous encodings are ineligible. A shell that enables
+`pipefail`, saves the pipeline status, prints a localized status and exits with
+that saved status carries the evaluator's exit reliably.
+
 ## Implementation
 
 1. Separate deadline failures and model-reported audit timeouts from concrete

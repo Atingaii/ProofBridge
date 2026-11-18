@@ -868,6 +868,7 @@ func (r *CodexAppServerRunner) readEvents(ctx context.Context, client *appServer
 			case "item/started":
 				item, _ := appServerNestedMap(msg.Params, "item")
 				if tool := appServerToolEvent(item); tool != nil {
+					markNativeCommandStarted(tool)
 					clearPostReconnectTerminal()
 					postReconnectAssistantReady = false
 					activeTools[tool.ID] = struct{}{}

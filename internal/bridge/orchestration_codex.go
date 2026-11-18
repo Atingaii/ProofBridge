@@ -780,7 +780,11 @@ func (m *OrchestrationManager) scanCodexJSONLResult(stdout io.Reader, runID, tur
 			item, _ := msg["item"].(map[string]any)
 			itemType, _ := item["type"].(string)
 			if itemType == "command_execution" || itemType == "commandExecution" {
-				emitCodexTool(commandExecutionEvent(item))
+				tool := commandExecutionEvent(item)
+				if typ == "item.started" {
+					markNativeCommandStarted(tool)
+				}
+				emitCodexTool(tool)
 			}
 		case "turn.completed":
 			if rawUsage, ok := msg["usage"]; ok {

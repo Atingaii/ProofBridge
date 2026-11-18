@@ -216,7 +216,7 @@ func (m *OrchestrationManager) emitTool(runID, turnID, role, cli string, tool *R
 		m.flushCommandProgressKey(key, nil)
 	}
 	m.emit(runID, event)
-	if !tool.Progress && role == store.TaskRoleReviewer {
+	if !tool.Progress && (role == store.TaskRoleReviewer || role == store.TaskRoleWorker || role == store.TaskRoleIntegrator) {
 		m.mu.Lock()
 		reviewer := m.leanReviewers[turnID]
 		m.mu.Unlock()

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,10 +31,13 @@ type leanInputs struct {
 }
 
 type leanReceipt struct {
-	Digest   string
-	Command  string
-	Output   string
-	Reviewer string
+	Digest        string
+	Command       string
+	Output        string
+	Reviewer      string
+	EvaluatorTurn string
+	EvaluatorSlot string
+	ReviewFailed  bool
 }
 
 type leanAuditScope struct {
@@ -265,25 +269,52 @@ func (s *leanAuditScope) current(ctx context.Context, cutoff time.Time) (leanInp
 	return in, err == nil && in.Frozen == s.original.Frozen
 }
 
+// Codex can identify a native command's cwd with a local file URI. No
+// network authority, query, fragment, hidden separator or missing path is a
+// workspace identity. A plain absolute path also works for older native CLIs.
+func leanNativeWorkspace(value string) (string, error) {
+	const bad = "native audit cwd is not a local absolute path"
+	if strings.HasPrefix(value, "file:") {
+		u, err := url.Parse(value)
+		if err != nil || u.Scheme != "file" || !strings.HasPrefix(value, "file://") || (u.Host != "" && !strings.EqualFold(u.Host, "localhost")) || u.User != nil || strings.ContainsAny(value, "?#") {
+			return "", errors.New(bad)
+		}
+		escaped := strings.ToLower(u.EscapedPath())
+		if strings.Contains(escaped, "%2f") || strings.Contains(escaped, "%5c") || strings.Contains(escaped, "%00") {
+			return "", errors.New(bad)
+		}
+		value = u.Path
+	}
+	if !filepath.IsAbs(value) || strings.HasPrefix(value, "//") || strings.ContainsAny(value, "\x00\\") {
+		return "", errors.New(bad)
+	}
+	return canonicalWorkspace(value)
+}
+
 type leanAuditStart struct {
 	at     time.Time
 	digest string
 }
 
 type leanReviewTurn struct {
-	mu            sync.Mutex
-	scope         *leanAuditScope
-	ctx           context.Context
-	cancel        context.CancelCauseFunc
-	turnStart     time.Time
-	initial       string
-	started       map[string]leanAuditStart
-	active        map[string]bool
-	receipt       leanReceipt
-	accepted      bool
-	pending       bool
-	failure       *protocol.VerifierCheck
-	failureDigest string
+	mu                  sync.Mutex
+	scope               *leanAuditScope
+	ctx                 context.Context
+	cancel              context.CancelCauseFunc
+	turnStart           time.Time
+	initial             string
+	started             map[string]leanAuditStart
+	active              map[string]bool
+	receipt             leanReceipt
+	accepted            bool
+	pending             bool
+	pendingReviewer     string
+	slot                string
+	workNode            bool
+	adoptionUnavailable bool
+	onMissing           func()
+	failure             *protocol.VerifierCheck
+	failureDigest       string
 }
 
 func (r *leanReviewTurn) observe(t RunnerToolEvent, reviewer string) {
@@ -320,19 +351,26 @@ func (r *leanReviewTurn) observe(t RunnerToolEvent, reviewer string) {
 	r.pending = false
 	directory := firstNonEmpty(c.directory, t.CWD)
 	if !c.adopt || directory != "" {
-		actual, err := canonicalWorkspace(directory)
+		actual, err := leanNativeWorkspace(directory)
 		if err != nil || actual != r.scope.root {
 			return
 		}
 	}
 	if c.adopt {
-		if !c.passed(t) {
+		if r.workNode || !c.passed(t) {
 			return
 		}
 		in, ok := r.scope.current(r.ctx, time.Time{})
-		if !ok || !r.loadReceipt(in.Digest) {
+		receipt, available := r.scope.availableReceipt(in.Digest, r.slot, r.slot != "")
+		if !ok || !available {
+			r.adoptionUnavailable = true
+			if r.onMissing != nil {
+				r.onMissing()
+			}
 			return
 		}
+		r.receipt = receipt
+		r.adoptionUnavailable = false
 	} else {
 		if start.at.IsZero() {
 			start = leanAuditStart{at: r.turnStart, digest: r.initial}
@@ -345,9 +383,15 @@ func (r *leanReviewTurn) observe(t RunnerToolEvent, reviewer string) {
 			// Clear any previous result when the approved evaluator is observed
 			// failing again on this checkout. Missing exit/progress cannot pass.
 			r.receipt = leanReceipt{}
-			if r.scope.path != "" {
-				_ = os.Remove(filepath.Join(r.scope.path, "receipt.json"))
+			if r.workNode {
+				// An author's failed new attempt may invalidate only that
+				// author's observation, never an independent reviewer decision.
+				_ = os.Remove(r.scope.candidatePath(r.slot))
+				return
 			}
+			// Remember an observed independent failure across node restarts.
+			// A candidate on the same inputs cannot overrule that evidence.
+			_ = writeLeanAuditState(filepath.Join(r.scope.path, "receipt.json"), leanReceipt{Digest: in.Digest, Reviewer: reviewer, ReviewFailed: true}, false)
 			if check := leanProofHole(t.Output); check != nil {
 				r.failure = check
 				r.failureDigest = in.Digest
@@ -355,14 +399,21 @@ func (r *leanReviewTurn) observe(t RunnerToolEvent, reviewer string) {
 			return
 		}
 		r.failure = nil
+		r.adoptionUnavailable = false
 		output := strings.TrimSpace(t.Output)
 		if len(output) > 2300 {
 			output = output[len(output)-2300:]
 		}
-		r.receipt = leanReceipt{Digest: in.Digest, Command: t.Command, Output: output, Reviewer: reviewer}
+		r.receipt = leanReceipt{Digest: in.Digest, Command: t.Command, Output: output, EvaluatorTurn: reviewer, EvaluatorSlot: r.slot}
+		if r.workNode {
+			_ = writeLeanAuditState(r.scope.candidatePath(r.slot), r.receipt, false)
+			return
+		}
+		r.receipt.Reviewer = reviewer
 		_ = writeLeanAuditState(filepath.Join(r.scope.path, "receipt.json"), r.receipt, false)
 	}
 	if c.final {
+		r.pendingReviewer = reviewer
 		r.pending = true
 		r.settle()
 	}
@@ -380,6 +431,13 @@ func (r *leanReviewTurn) settle() {
 	if !ok || in.Digest != r.receipt.Digest {
 		return
 	}
+	if r.receipt.Reviewer == "" {
+		if r.workNode || r.slot == "" || r.slot == r.receipt.EvaluatorSlot || r.pendingReviewer == "" || r.pendingReviewer == r.receipt.EvaluatorTurn {
+			return
+		}
+		r.receipt.Reviewer = r.pendingReviewer
+		_ = writeLeanAuditState(filepath.Join(r.scope.path, "receipt.json"), r.receipt, false)
+	}
 	r.accepted = true
 	r.cancel(errLeanAuditAccepted)
 }
@@ -395,28 +453,48 @@ func leanProofHole(output string) *protocol.VerifierCheck {
 	return nil
 }
 
-func (r *leanReviewTurn) loadReceipt(digest string) bool {
-	if digest == "" || r.scope.path == "" {
-		return false
+func (s *leanAuditScope) candidatePath(slot string) string {
+	sum := sha256.Sum256([]byte(slot))
+	return filepath.Join(s.path, fmt.Sprintf("candidate-%x.json", sum[:8]))
+}
+
+func (s *leanAuditScope) availableReceipt(digest, slot string, includeCandidates bool) (leanReceipt, bool) {
+	if digest == "" || s == nil || s.path == "" {
+		return leanReceipt{}, false
 	}
 	var receipt leanReceipt
-	if !readLeanAuditState(filepath.Join(r.scope.path, "receipt.json"), &receipt) || receipt.Digest != digest || receipt.Reviewer == "" {
-		return false
+	if readLeanAuditState(filepath.Join(s.path, "receipt.json"), &receipt) && receipt.Digest == digest {
+		if receipt.ReviewFailed {
+			return leanReceipt{}, false
+		}
+		if receipt.Reviewer != "" {
+			return receipt, true
+		}
 	}
-	r.receipt = receipt
-	return true
+	if includeCandidates {
+		for _, other := range []string{orchestrationCodexSlotA, orchestrationCodexSlotB, orchestrationCodexDefaultSlot, orchestrationClaudeSlotA, orchestrationClaudeSlotB, orchestrationClaudeDefaultSlot} {
+			if slot == other {
+				continue
+			}
+			var candidate leanReceipt
+			if readLeanAuditState(s.candidatePath(other), &candidate) && candidate.Digest == digest && candidate.EvaluatorSlot == other && candidate.EvaluatorTurn != "" && candidate.Reviewer == "" && !candidate.ReviewFailed {
+				return candidate, true
+			}
+		}
+	}
+	return leanReceipt{}, false
 }
 
 func (s *leanAuditScope) verdict(ctx context.Context, r leanReceipt) (protocol.VerifierVerdict, bool) {
 	in, ok := s.current(ctx, time.Time{})
-	if !ok || in.Digest != r.Digest {
+	if !ok || in.Digest != r.Digest || r.Reviewer == "" || r.ReviewFailed {
 		return protocol.VerifierVerdict{}, false
 	}
 	checks := make([]protocol.VerifierCheck, 0, len(verifierCheckNames))
 	for _, name := range verifierCheckNames {
 		checks = append(checks, protocol.VerifierCheck{Name: name, Status: verifierVerdictPass, Reason: "independent reviewer confirmed the current submission", Evidence: r.Command + "\n" + leanSubmissionMarker})
 	}
-	return protocol.VerifierVerdict{Status: verifierVerdictPass, Reason: "independent Lean submission audit passed for the current sources", Evidence: []string{r.Command, "make final-audit exit 0", leanSubmissionMarker, "source sha256 " + in.Digest, "reviewer " + r.Reviewer}, Checkers: checks}, true
+	return protocol.VerifierVerdict{Status: verifierVerdictPass, Reason: "independent Lean submission audit passed for the current sources", Evidence: []string{r.Command, "make final-audit exit 0", leanSubmissionMarker, "source sha256 " + in.Digest, "reviewer " + r.Reviewer, "evaluator " + firstNonEmpty(r.EvaluatorTurn, r.Reviewer)}, Checkers: checks}, true
 }
 
 func (s *leanAuditScope) summary(ctx context.Context, r leanReceipt) string {
@@ -439,18 +517,52 @@ func (s *leanAuditScope) summary(ctx context.Context, r leanReceipt) string {
 	if len(changed) > 0 {
 		files = strings.Join(changed, ", ")
 	}
-	return fmt.Sprintf("独立审核员已确认其余任务要求，提交终审通过。\n命令：%s\n评测器退出码：0\n变更的 Lean 源文件：%s\n审核输出：\n%s\n剩余证明义务：无。", r.Command, files, r.Output)
+	evaluator := "独立审核员执行了提交终审。"
+	if r.EvaluatorTurn != "" && r.EvaluatorTurn != r.Reviewer {
+		evaluator = fmt.Sprintf("独立审核员已复核并采纳 %s 对相同源码执行的原生提交终审。", r.EvaluatorSlot)
+	}
+	return fmt.Sprintf("独立审核员已确认其余任务要求，提交终审通过。\n%s\n命令：%s\n评测器退出码：0\n变更的 Lean 源文件：%s\n审核输出：\n%s\n剩余证明义务：无。", evaluator, r.Command, files, r.Output)
+
 }
 
-const leanReviewerGuidance = "\nIndependent Lean reviewer: finish the original task's semantic, frozen-source, architecture and trust checks first. When only the final evaluator remains and its success settles the whole task, run exactly `cd %s && env PROOFBRIDGE_FINAL_REVIEW=1 timeout --kill-after=10s 24h make -j1 final-audit` from the current project as a single foreground command. Bridge captures its output, so no tee, redirect or repeated build is needed. If you already ran an authoritative current submission audit and have now confirmed the other requirements, run `: PROOFBRIDGE_FINAL_REVIEW` to adopt the recorded evidence. Use a normal final handoff if no receipt is available. A failed command never completes the task.\n"
+func (s *leanAuditScope) turnGuidance(ctx context.Context, role, slot string) string {
+	if s == nil {
+		return ""
+	}
+	quoted := "'" + strings.ReplaceAll(s.root, "'", "'\"'\"'") + "'"
+	if role == store.TaskRoleWorker || role == store.TaskRoleIntegrator {
+		if in, ok := s.current(ctx, time.Time{}); ok {
+			if ev, found := s.availableReceipt(in.Digest, "", true); found {
+				return "\nBridge has already observed a native submission PASS for the current source SHA-256 " + in.Digest + " from " + firstNonEmpty(ev.EvaluatorTurn, ev.Reviewer) + ". Continue your assigned checks and hand off this evidence. Repeat the full evaluator only if its proof inputs change. The independent reviewer owns the final decision.\n"
+			}
+		}
+		return "\nFor a required Lean submission evaluator run, use the single foreground command `cd " + quoted + " && timeout --kill-after=10s 24h make -j1 final-audit`. Bridge can record its actual exit and output for the independent review. The work node cannot complete verification.\n"
+	}
+	if role != store.TaskRoleReviewer {
+		return ""
+	}
+	direct := "`cd " + quoted + " && env PROOFBRIDGE_FINAL_REVIEW=1 timeout --kill-after=10s 24h make -j1 final-audit`"
+	checks := "\nIndependent Lean reviewer: first check all original semantic, frozen-source, architecture and trust requirements. "
+	if in, ok := s.current(ctx, time.Time{}); ok {
+		if evidence, found := s.availableReceipt(in.Digest, slot, slot != ""); found {
+			return checks + "Bridge already holds a current native submission PASS on source SHA-256 " + in.Digest + " from " + firstNonEmpty(evidence.EvaluatorTurn, evidence.Reviewer) + ". When your independent review confirms it covers the remaining task, run `: PROOFBRIDGE_FINAL_REVIEW` to adopt that evidence immediately. If the inputs change, use the single foreground command " + direct + ". Report any concrete blocker instead of adopting.\n"
+		}
+	}
+	return checks + "Bridge has no eligible current evaluator record for you to adopt. When only the submission evaluator remains, use exactly the single foreground command " + direct + ". Bridge records the evaluator stdout and exit status. A pasted or quoted log cannot finish the review.\n"
+}
 
 func (m *OrchestrationManager) reviewedRelayTurn(ctx context.Context, s *leanAuditScope, p protocol.OrchestrationStartPayload, turnID, role, cli, slot, prompt string, state *orchestrationSessionState, root string) (orchestrationTurn, string, error) {
-	if s == nil || role != store.TaskRoleReviewer || !shouldRunAgentVerifier(p) {
+	isReviewer := role == store.TaskRoleReviewer && shouldRunAgentVerifier(p)
+	workNode := role == store.TaskRoleWorker || role == store.TaskRoleIntegrator
+	if s == nil || (!isReviewer && !workNode) {
 		return m.runRelayTurnWithContinuations(ctx, p, turnID, role, cli, slot, prompt, state, root)
 	}
 	turnCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	r := &leanReviewTurn{scope: s, ctx: turnCtx, cancel: cancel, turnStart: time.Now(), started: map[string]leanAuditStart{}, active: map[string]bool{}}
+	r := &leanReviewTurn{scope: s, ctx: turnCtx, cancel: cancel, slot: slot, workNode: workNode, turnStart: time.Now(), started: map[string]leanAuditStart{}, active: map[string]bool{}}
+	r.onMissing = func() {
+		m.emit(p.RunID, protocol.OrchestrationEventPayload{Kind: "bridge.note", TurnID: turnID, Role: role, Source: "bridge", Content: "独立审核采纳未生效，当前源码没有可采纳的原生提交终审记录。需要在当前项目运行提交终审。", BridgeNoteData: &protocol.BridgeNoteData{Category: "verification-receipt-unavailable"}})
+	}
 	if inputs, ok := s.current(ctx, time.Time{}); ok {
 		r.initial = inputs.Digest
 	}
@@ -462,6 +574,20 @@ func (m *OrchestrationManager) reviewedRelayTurn(ctx context.Context, s *leanAud
 	m.mu.Unlock()
 	defer func() { m.mu.Lock(); delete(m.leanReviewers, turnID); m.mu.Unlock() }()
 	record, status, err := m.runRelayTurnWithContinuations(turnCtx, p, turnID, role, cli, slot, prompt, state, root)
+	if workNode {
+		return record, status, err
+	}
+	r.mu.Lock()
+	missed := r.adoptionUnavailable && r.failure == nil && !r.accepted
+	r.mu.Unlock()
+	if missed && err == nil && ctx.Err() == nil && !reviewerHasOutstandingWork(record.Relay) {
+		// The ':' builtin itself always returns zero. If the underlying evidence
+		// disappeared, recover once in the same assigned native reviewer turn.
+		next := "Your previous request to adopt a submission audit was not accepted by Bridge. Continue only independent verification. " + s.turnGuidance(ctx, role, slot)
+		follow, followStatus, followErr := m.runRelayTurnWithContinuations(turnCtx, p, turnID, role, cli, slot, next, state, root)
+		record = mergeOrchestrationTurnAttempts(record, follow)
+		status, err = followStatus, followErr
+	}
 	r.mu.Lock()
 	accepted, receipt, failed, failedDigest, active := r.accepted, r.receipt, r.failure, r.failureDigest, len(r.active)
 	r.mu.Unlock()
@@ -485,14 +611,13 @@ func (m *OrchestrationManager) reviewedRelayTurn(ctx context.Context, s *leanAud
 		// receipt across nodes or a Bridge restart. Log names are irrelevant.
 		if confirm && receipt.Digest == "" && record.Relay.Status == "resolved" {
 			in, ok := s.current(ctx, time.Time{})
-			if ok && s.path != "" {
-				var saved leanReceipt
-				if readLeanAuditState(filepath.Join(s.path, "receipt.json"), &saved) && saved.Reviewer != "" && saved.Digest == in.Digest {
+			if ok {
+				if saved, found := s.availableReceipt(in.Digest, slot, false); found {
 					receipt = saved
 				}
 			}
 		}
-		if receipt.Digest != "" && (accepted || confirm) {
+		if receipt.Reviewer != "" && !receipt.ReviewFailed && receipt.Digest != "" && (accepted || confirm) {
 			record.LeanReceipt = &receipt
 		}
 	}

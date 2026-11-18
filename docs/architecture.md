@@ -303,8 +303,11 @@ execution permissions or verifier quorum. Bridge
 stops at the first valid independent pass, preserving concrete conflicts already
 observed, and emits a visible `verifier.verdict`; any
 passing Agent Verifier without a concrete evidence conflict ends unused rounds
-with `verified-early`. A submission evaluator selected by the independent Lean
-reviewer can settle the current task directly from its native command receipt.
+with `verified-early`. For a Lean submission, Bridge records the native
+evaluator command, its real exit status and the matching proof inputs. The
+designated reviewer can complete the task by running the final evaluator or
+explicitly adopting a current result observed on another worker slot. Bridge
+rechecks the input digest at that decision and records the reviewer identity.
 Audit attempts get a 24-hour deadline and one retry of the same reviewer when
 the process is killed, times out or returns an unusable verdict. Exhaustion
 records incomplete verification. Hub also recognizes older endpoints whose

@@ -380,6 +380,7 @@ func (r *CodexExecRunner) scanJSONL(stdout io.Reader, fallbackThreadID string, o
 			itemType, _ := item["type"].(string)
 			if itemType == "command_execution" || itemType == "commandExecution" {
 				if tool := commandExecutionEvent(item); tool != nil {
+					markNativeCommandStarted(tool)
 					onUpdate(RunnerUpdate{Tool: tool})
 				}
 			}
@@ -428,6 +429,14 @@ func readJSONLLine(reader *bufio.Reader, maxBytes int) ([]byte, error) {
 			return line, nil
 		}
 		return nil, err
+	}
+}
+
+// Older native items can omit status even though their envelope explicitly
+// identifies a start. A start can never certify command completion.
+func markNativeCommandStarted(tool *RunnerToolEvent) {
+	if tool != nil && !isRunningToolStatus(tool.Status) {
+		tool.Status = "running"
 	}
 }
 

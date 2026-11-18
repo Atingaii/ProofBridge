@@ -1030,9 +1030,7 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 			taskScope = &durableTaskPromptScope{Name: task.Name, Role: task.Role, Round: payload.TaskGraph.Round, MaxRounds: payload.TaskGraph.MaxRounds}
 		}
 		prompt := composeRelayPromptWithTaskScope(mode, firstCLI, profile, payload.Prompt, payload.Context, payload.Resume, role, cli, workerSlot, turn, maxTurns, history, taskScope)
-		if leanAudit != nil && role == store.TaskRoleReviewer {
-			prompt = prompt + fmt.Sprintf(leanReviewerGuidance, "'"+strings.ReplaceAll(runCWD, "'", "'\"'\"'")+"'")
-		}
+		prompt += leanAudit.turnGuidance(ctx, role, workerSlot)
 		resumeMode := plannedRelayResumeMode(cli, workerSlot, sessionState)
 		turnStartedAt := time.Now()
 		m.emit(payload.RunID, protocol.OrchestrationEventPayload{

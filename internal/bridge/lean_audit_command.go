@@ -15,7 +15,7 @@ const leanFinalDeclaration = "env PROOFBRIDGE_FINAL_REVIEW=1 "
 const leanAdoptDeclaration = ": PROOFBRIDGE_FINAL_REVIEW"
 
 const leanAuditProgram = `(?:timeout (?:--kill-after=[0-9]+[smhd]? )?[0-9]+[smhd]? )?make (?:-j ?1 )?final-audit`
-const leanLogPath = `(?:/tmp/|(?:\./)?validation/)?[A-Za-z0-9_.-]+\.log`
+const leanLogPath = `(?:/tmp/|(?:\./)?(?:validation|\.lake)/)?[A-Za-z0-9_.-]+\.log`
 const leanDate = `\$\(date -u \+(?:%Y%m%dT%H%M%SZ|%Y-%m-%dT%H:%M:%SZ)\)`
 const leanLogArg = `(?:` + leanLogPath + `|"\$(?:LOG|log)")`
 
@@ -30,13 +30,14 @@ var (
 	leanPrintPipelineExit = regexp.MustCompile(`^echo "(AUDIT_EXIT|EXIT)=\$\{PIPESTATUS\[0\]\}"(?: \| tee -a (` + leanLogArg + `))?$`)
 	leanAssignExit        = regexp.MustCompile(`^([a-zA-Z_][a-zA-Z_0-9]*)=\$\?$`)
 	leanPrintExit         = regexp.MustCompile(`^echo "([A-Za-z_]+)=\$([a-zA-Z_][a-zA-Z_0-9]*)"$`)
+	leanSavedStatusPrint  = regexp.MustCompile(`^printf '([^'%\\\r\n]{0,128})%s([^'%\\\r\n]{0,128})\\n' "\$([a-zA-Z_][a-zA-Z_0-9]*)"$`)
 	leanTailLog           = regexp.MustCompile(`^tail (?:-n |-)[0-9]+ (` + leanLogPath + `)$`)
 )
 
 type leanAuditCommand struct {
 	final, adopt bool
 	directory    string
-	statusLabel  string
+	statusLine   string
 	// A redirected audit prints its status first and then reads its own log.
 	statusFirst bool
 }
@@ -186,7 +187,7 @@ audit:
 	if m := leanRedirectAudit.FindStringSubmatch(s); m != nil && len(tail) == 3 {
 		save, show, read := leanAssignExit.FindStringSubmatch(tail[0]), leanPrintExit.FindStringSubmatch(tail[1]), leanTailLog.FindStringSubmatch(tail[2])
 		if save != nil && show != nil && read != nil && save[1] == show[2] && read[1] == m[2] {
-			c.statusLabel = show[1]
+			c.statusLine = show[1] + "=0"
 			c.statusFirst = true
 			return c, true
 		}
@@ -206,12 +207,22 @@ audit:
 	case 1:
 		show := leanPrintPipelineExit.FindStringSubmatch(tail[0])
 		if show != nil && (show[2] == "" || show[2] == log) {
-			c.statusLabel = show[1]
+			c.statusLine = show[1] + "=0"
 			return c, true
 		}
 	case 3:
+		// With pipefail enabled the saved $? covers both make and tee. The
+		// final exit must propagate precisely that variable. Only a literal
+		// one-line printf format may appear between the save and the exit.
+		if pipefail {
+			save, show := leanAssignExit.FindStringSubmatch(tail[0]), leanSavedStatusPrint.FindStringSubmatch(tail[1])
+			if save != nil && show != nil && save[1] == show[3] && tail[2] == `exit "$`+save[1]+`"` {
+				c.statusLine = show[1] + "0" + show[2]
+				return c, true
+			}
+		}
 		if tail[0] == `status=${PIPESTATUS[0]}` && leanPrintEnd.MatchString(tail[1]) && tail[2] == `exit "$status"` && log == `"$log"` {
-			c.statusLabel = "EXIT"
+			c.statusLine = "EXIT=0"
 			return c, true
 		}
 	}
@@ -231,8 +242,8 @@ func (c leanAuditCommand) passed(tool RunnerToolEvent) bool {
 	// Every permitted postlude can emit a status and optional timestamp only.
 	// A copied pass line earlier in a failing or baseline log cannot qualify.
 	markerIndex := len(lines) - 1
-	if c.statusLabel != "" {
-		eq := c.statusLabel + "=0"
+	if c.statusLine != "" {
+		eq := c.statusLine
 		if c.statusFirst {
 			if lines[0] != eq {
 				return false
