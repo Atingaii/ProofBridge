@@ -71,6 +71,12 @@ supports review-required or auto-execute; strict-workspace requires Linux. See
 [Linux ARM64 installation](features/linux-arm64-installation.md) and
 [deployment instructions](deployment.md#linux-arm64-endpoints).
 
+For managed endpoints, `make managed-bridge-release` builds and signs the
+selected platform and updates its bootstrap download. The signing key and
+sequence are release inputs. The endpoint waits for idle admission and checks
+registration before adopting the new executable.
+[Release build and migration](features/managed-bridge-updates.md)
+
 This table is the single detailed source for environment variables. README files
 should list names and point here for detail.
 

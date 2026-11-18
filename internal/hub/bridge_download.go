@@ -3,6 +3,8 @@ package hub
 import (
 	"debug/elf"
 	"debug/macho"
+	"errors"
+	"github.com/tencent/codex-bridge/internal/bridgeupdate"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -31,9 +33,16 @@ func serveBridgePlatformBinary(w http.ResponseWriter, r *http.Request, executabl
 		return
 	}
 	name := "codex-bridge-" + platform + "-" + arch
-	path := executable
-	if runtime.GOOS != platform || runtime.GOARCH != arch {
-		path = filepath.Join(filepath.Dir(executable), "downloads", name)
+	downloads := filepath.Join(filepath.Dir(executable), "downloads")
+	path, err := bridgeupdate.PublishedArtifact(filepath.Join(downloads, "releases"), platform+"-"+arch)
+	if errors.Is(err, os.ErrNotExist) {
+		path = executable
+		if runtime.GOOS != platform || runtime.GOARCH != arch {
+			path = filepath.Join(downloads, name)
+		}
+	} else if err != nil {
+		serverutil.WriteError(w, http.StatusServiceUnavailable, "INVALID_RELEASE", "the published Bridge release is unavailable")
+		return
 	}
 	f, err := os.Open(path)
 	if err != nil {

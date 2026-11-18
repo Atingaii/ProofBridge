@@ -295,7 +295,11 @@ Manual Android CI uses private `ANDROID_RELEASE_KEYSTORE_BASE64`, `ANDROID_RELEA
 
 Android 7.0+ online client: [download signed APK](https://codex.sparkon.cn/android/codex-bridge-1.1.0.apk) (18,408 bytes), [SHA256](https://codex.sparkon.cn/android/codex-bridge-1.1.0.apk.sha256). Installed footprint and host plus WebView renderer memory still require device measurement.
 
-Website deployment does **not** upgrade or restart connected Bridges. Native
+Operators can publish a signed Bridge release for automatic installation when
+managed endpoints are idle. Older installations need a one-time bootstrap.
+[Managed Bridge updates](docs/features/managed-bridge-updates.md)
+
+Website deployment alone updates the site. Native
 questions and runtime instructions require compatible Hub, frontend, Bridge,
 CLI, and rollout settings. Consult [native questions](docs/features/native-structured-user-input.md)
 and [dynamic input](docs/features/dynamic-orchestration-input.md) for the current

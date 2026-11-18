@@ -8,6 +8,7 @@ import (
 
 const (
 	TypeRegister                      = "register"
+	TypeReleaseHandoff                = "release_handoff"
 	TypeRegistered                    = "registered"
 	TypeHeartbeat                     = "heartbeat"
 	TypeOpenSession                   = "open_session"
@@ -79,18 +80,24 @@ func Decode[T any](env Envelope) (T, error) {
 	return out, nil
 }
 
+type ReleaseHandoffPayload struct {
+	Action string `json:"action"`
+}
+
 type RegisterPayload struct {
-	Name         string              `json:"name"`
-	MachineID    string              `json:"machineId"`
-	Hostname     string              `json:"hostname"`
-	Version      string              `json:"version"`
-	Instance     string              `json:"instance,omitempty"`
-	WorkingDirs  []string            `json:"workingDirs,omitempty"`
-	Capabilities *BridgeCapabilities `json:"capabilities,omitempty"`
+	ManagedStartup bool                `json:"managedStartup,omitempty"`
+	Name           string              `json:"name"`
+	MachineID      string              `json:"machineId"`
+	Hostname       string              `json:"hostname"`
+	Version        string              `json:"version"`
+	Instance       string              `json:"instance,omitempty"`
+	WorkingDirs    []string            `json:"workingDirs,omitempty"`
+	Capabilities   *BridgeCapabilities `json:"capabilities,omitempty"`
 }
 
 type RegisteredPayload struct {
-	AgentID string `json:"agentId"`
+	ManagedHandoff bool   `json:"managedHandoff,omitempty"`
+	AgentID        string `json:"agentId"`
 }
 
 type HeartbeatPayload struct {

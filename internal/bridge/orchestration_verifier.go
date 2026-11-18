@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -123,7 +124,7 @@ func (m *OrchestrationManager) evaluateAgentVerifierQuorum(ctx context.Context, 
 		// An authoritative independent pass ends verification immediately.
 		// Preserve concrete conflicts already observed, but do not launch a
 		// second workspace audit merely to reconfirm an established pass.
-		if verdict := aggregateAgentVerifierQuorum(results); verdict.Status == verifierVerdictPass || ctx.Err() != nil {
+		if verdict := aggregateAgentVerifierQuorum(results); verdict.Status == verifierVerdictPass || auditIncomplete(results[len(results)-1]) || ctx.Err() != nil {
 			return verdict, results
 		}
 	}
@@ -235,6 +236,9 @@ func (m *OrchestrationManager) runAgentVerifierAttempt(ctx context.Context, payl
 	}
 	result.Status, result.Reason, result.Checks = response.Status, response.Reason, response.Checks
 	result.TimedOut = reportedAuditTimeout(result)
+	if result.Status == verifierVerdictContinue && !auditIncomplete(result) && leanSubmissionTask(payload, cwd) && !slices.ContainsFunc(result.Checks, concreteVerifierBlocker) {
+		result.Error = "independent Lean audit returned no evidenced proof defect: " + result.Reason
+	}
 	return result
 }
 

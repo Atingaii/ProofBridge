@@ -32,6 +32,8 @@ then update only the target Hub during its maintenance window. Connected Bridges
 a website update does not restart or upgrade them. Cross-platform downloads and Android APKs are explicit targets,
 not prerequisites for a website update. The maintainer's hosted-site policy remains in AGENTS.md R9.
 
+When endpoint updates are requested, the signed publication target updates enrolled managed Bridge installations as they become idle. See the [operator procedure and bootstrap migration](features/managed-bridge-updates.md#publishing-and-bootstrapping).
+
 ## Prerequisites
 
 | Component | Requirement |

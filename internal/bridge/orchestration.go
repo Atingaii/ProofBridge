@@ -51,6 +51,7 @@ type OrchestrationManager struct {
 	executions              map[string]orchestrationExecution
 	progress                map[commandProgressKey]*pendingCommandProgress
 	progressSeq             uint64
+	leanReviewers           map[string]*leanReviewTurn
 	// modelCapacityRetryWaits is intentionally kept on the manager rather than
 	// as global mutable test state. Production uses the default schedule; focused
 	// tests can shorten it without changing other concurrently running managers.
@@ -827,6 +828,7 @@ func (m *OrchestrationManager) cancelApprovals(runID string) {
 
 func (m *OrchestrationManager) run(ctx context.Context, payload protocol.OrchestrationStartPayload) {
 	runCWD := m.cwd(payload)
+	leanAudit := m.leanSubmissionScope(ctx, payload, runCWD)
 	profile := normalizeOrchestrationProfile(payload.Profile)
 	verificationMode := protocol.NormalizeVerificationMode(payload.VerificationMode)
 	if verificationMode != protocol.VerificationModeAgent {
@@ -1028,6 +1030,9 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 			taskScope = &durableTaskPromptScope{Name: task.Name, Role: task.Role, Round: payload.TaskGraph.Round, MaxRounds: payload.TaskGraph.MaxRounds}
 		}
 		prompt := composeRelayPromptWithTaskScope(mode, firstCLI, profile, payload.Prompt, payload.Context, payload.Resume, role, cli, workerSlot, turn, maxTurns, history, taskScope)
+		if leanAudit != nil && role == store.TaskRoleReviewer {
+			prompt = prompt + fmt.Sprintf(leanReviewerGuidance, "'"+strings.ReplaceAll(runCWD, "'", "'\"'\"'")+"'")
+		}
 		resumeMode := plannedRelayResumeMode(cli, workerSlot, sessionState)
 		turnStartedAt := time.Now()
 		m.emit(payload.RunID, protocol.OrchestrationEventPayload{
@@ -1086,7 +1091,7 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 				"resumeMode": resumeMode,
 			},
 		})
-		record, turnStatus, err := m.runRelayTurnWithContinuations(ctx, payload, turnID, role, cli, workerSlot, prompt, &sessionState, runCWD)
+		record, turnStatus, err := m.reviewedRelayTurn(ctx, leanAudit, payload, turnID, role, cli, workerSlot, prompt, &sessionState, runCWD)
 		turnCompletedAt := time.Now()
 		turnEndData := &protocol.TurnEndData{
 			StartedAt:   turnStartedAt.UnixMilli(),
@@ -1150,9 +1155,9 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 			Data:        relayTurnEndData(cli, workerSlot, sessionState),
 		})
 		reviewerBoundary := shouldRunAgentVerifier(payload)
-		shouldRunVerifier := turnStatus == "success" && (reviewerBoundary || completionCandidate(payload, record))
+		shouldRunVerifier := turnStatus == "success" && (reviewerBoundary || (leanAudit == nil && completionCandidate(payload, record)))
 		if shouldRunVerifier {
-			sourceBefore := completionSourceDigest(ctx, runCWD)
+			sourceBefore := verificationSourceDigest(ctx, runCWD, leanAudit)
 			sample := completionSample(payload, record, sourceBefore)
 			sample.Plateau = reviewerBoundary && completionPlateau(payload.CompletionHistory, sample)
 			if sample.Plateau {
@@ -1161,13 +1166,13 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 			var verdict protocol.VerifierVerdict
 			var verifierAgents []agentVerifierResult
 			verdictRecord := record
-			if auditVerdict, ok := reviewerFinalAuditVerdict(ctx, payload, record); ok {
+			if auditVerdict, ok := reviewerCompletionAudit(ctx, payload, record, leanAudit); ok {
 				verdict = auditVerdict
 			} else {
 				verdict, verifierAgents = m.evaluateAgentVerifierQuorum(ctx, payload, mode, profile, workerPair, firstCLI, history)
 			}
-			sourceAfter := completionSourceDigest(ctx, runCWD)
-			if sourceBefore != "" && sourceAfter != "" && sourceBefore != sourceAfter {
+			sourceAfter := verificationSourceDigest(ctx, runCWD, leanAudit)
+			if (leanAudit != nil && (sourceBefore == "" || sourceAfter == "")) || (sourceBefore != "" && sourceAfter != "" && sourceBefore != sourceAfter) {
 				verdict = protocol.VerifierVerdict{Status: verifierVerdictContinue, Reason: "source changed during independent verification; rerun verification on the final source", Checkers: []protocol.VerifierCheck{verifierCheckContinue("source-integrity", "source changed during verification")}}
 			}
 			sample.SourceDigest = sourceAfter
@@ -1190,12 +1195,16 @@ func (m *OrchestrationManager) run(ctx context.Context, payload protocol.Orchest
 				m.emit(payload.RunID, protocol.OrchestrationEventPayload{Kind: "run.cancelled", Status: store.OrchestrationCanceled, Error: "canceled"})
 				return
 			}
-			if verdict.Status != verifierVerdictPass && verifierTimeoutExhausted(verifierAgents) {
+			if terminal, detail := incompleteAuditReason(verifierAgents); terminal != "" && verdict.Status != verifierVerdictPass {
+				reason := "Independent audit did not complete after its audit-only retry: " + detail
+				verdict.Reason = reason
+				conclusion := verifiedRunConclusion(content, history, &verdict)
+				conclusion.VerificationStatus = "unknown"
 				m.emit(payload.RunID, protocol.OrchestrationEventPayload{
 					Kind: "run.error", Status: store.OrchestrationFailed,
-					Error:         "Independent audit timeout exhausted; verification is incomplete. No source-editing round was started.",
-					RunEndData:    &protocol.RunEndData{TerminalReason: "verification-timeout", VerifierVerdict: &verdict},
-					RunConclusion: verifiedRunConclusion(content, history, &verdict),
+					Error: reason, Content: reason,
+					RunEndData:    &protocol.RunEndData{TerminalReason: terminal, VerifierVerdict: &verdict},
+					RunConclusion: conclusion,
 				})
 				return
 			}

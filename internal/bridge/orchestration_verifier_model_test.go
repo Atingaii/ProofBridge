@@ -47,7 +47,11 @@ print(json.dumps({"type":"turn.completed","usage":{"input_tokens":100,"cached_in
 		m := NewOrchestrationManager(&cfg)
 		result := m.runAgentVerifier(context.Background(), protocol.OrchestrationStartPayload{RunID: "model-test", CWD: cfg.Bridge.CWD}, orchestrationTurnAssignment{CLI: "codex", WorkerSlot: "codex-a"}, 1, "verify")
 		m.CloseAll()
-		if result.Model != "native-default" || result.Usage.Model != "native-default" || !result.Usage.Native || result.Usage.InputTokens != 100 || result.Usage.CacheReadTokens != 20 || result.Usage.OutputTokens != 10 {
+		wantAttempts := int64(1)
+		if failed {
+			wantAttempts = 2
+		}
+		if int64(result.Attempts) != wantAttempts || result.Model != "native-default" || result.Usage.Model != "native-default" || !result.Usage.Native || result.Usage.InputTokens != 100*wantAttempts || result.Usage.CacheReadTokens != 20*wantAttempts || result.Usage.OutputTokens != 10*wantAttempts {
 			t.Fatalf("lost model/usage: %+v", result)
 		}
 		if failed != (result.Error != "") {

@@ -133,6 +133,7 @@ func NewServer(cfg *config.Config, st *store.Store, build BuildInfo) *Server {
 	mux.HandleFunc("POST /api/agents/{agentID}/cli-config/official-reset", s.withAuth(s.handleResetCLIConfig))
 	mux.HandleFunc("GET /api/agents/{agentID}/cli-config/official-models", s.withAuth(s.handleOfficialCLIModels))
 	mux.HandleFunc("POST /api/bridge-tokens", s.withAuth(s.handleCreateBridgeToken))
+	mux.HandleFunc("GET /downloads/releases/{name}", s.handleManagedDownload)
 	mux.HandleFunc("GET /install.sh", s.handleInstallScript)
 	mux.HandleFunc("GET /downloads/codex-bridge-linux-amd64", s.handleBridgeBinaryDownload)
 	mux.HandleFunc("GET /downloads/codex-bridge-linux-arm64", s.handleBridgeBinaryDownload)
@@ -274,7 +275,7 @@ func (s *Server) recoverInterruptedRuns(ctx context.Context) {
 		return
 	}
 	for _, agentID := range agentIDs {
-		if s.pool.AgentOnline(agentID) {
+		if s.pool.agentConnected(agentID) {
 			slog.Info("[hub] preserved active work for reconnected Bridge", "agent_id", agentID)
 			continue
 		}

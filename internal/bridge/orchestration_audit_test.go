@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,8 +75,74 @@ func TestReportedAuditTimeoutNeverStartsNextWorkerRound(t *testing.T) {
 			t.Fatalf("timeout became a round completion: %#v", e)
 		}
 	}
-	if starts != 1 || retries != 2 || failures != 1 {
+	if starts != 1 || retries != 1 || failures != 1 {
 		t.Fatalf("starts=%d retries=%d failures=%d", starts, retries, failures)
+	}
+}
+
+func TestKilledVerifierRetriesOnlyAuditThenEndsInconclusive(t *testing.T) {
+	script := strings.Replace(fakeCodexExecScript("交接总结：等待审核。"), `if "PROOFBRIDGE_AGENT_VERIFIER_V1" in prompt:`, `if "PROOFBRIDGE_AGENT_VERIFIER_V1" in prompt:
+    import os,signal
+    with open("audit-invocations","a") as f: f.write("attempt\n")
+    os.kill(os.getpid(),signal.SIGKILL)`, 1)
+	m, cwd, out := auditTestManager(t, script)
+	m.run(context.Background(), auditTestPayload(cwd))
+	calls, err := os.ReadFile(filepath.Join(cwd, "audit-invocations"))
+	if err != nil || string(calls) != "attempt\nattempt\n" {
+		t.Fatalf("verifier calls %q: %v", calls, err)
+	}
+	var ended, retried int
+	for _, e := range drainOrchestrationEvents(t, out) {
+		if e.BridgeNoteData != nil && e.BridgeNoteData.Category == "verification-incomplete-retry" {
+			retried++
+		}
+		if e.Kind == "run.end" || e.Kind == "run.cancelled" {
+			t.Fatalf("infrastructure error accepted as a proof round: %#v", e)
+		}
+		if e.Kind == "run.error" && e.RunEndData != nil && e.RunEndData.TerminalReason == "verification-incomplete" && e.RunConclusion.VerificationStatus == "unknown" {
+			ended++
+		}
+	}
+	if ended != 1 || retried != 1 {
+		t.Fatalf("terminal=%d retried=%d", ended, retried)
+	}
+}
+
+func TestTimeoutLauncherDoesNotHideSubmissionFailure(t *testing.T) {
+	result := agentVerifierResult{Status: verifierVerdictContinue, Reason: "submission contains an unfinished proof", Checks: []protocol.VerifierCheck{
+		{Name: "verification", Status: verifierVerdictContinue, Code: "proof-incomplete", Target: "Submission.lean:10", Reason: "source check rejected sorry", Evidence: "timeout --kill-after=10s 24h make final-audit: proof hole is not allowed here: sorry"},
+	}}
+	if reportedAuditTimeout(result) {
+		t.Fatal("the audit command wrapper was mistaken for a timeout")
+	}
+	result.Checks = append(result.Checks, protocol.VerifierCheck{Status: verifierVerdictContinue, Code: "environment-unavailable"})
+	if auditIncomplete(result) {
+		t.Fatal("an unavailable check hid a real proof defect")
+	}
+}
+
+func TestLeanAuditRequiresConcreteEvidenceToSendWorkBack(t *testing.T) {
+	for _, concrete := range []bool{false, true} {
+		checks := []protocol.VerifierCheck{
+			{Name: "task", Status: "pass", Reason: "scope read"},
+			{Name: "workspace", Status: "continue", Code: "unknown", Reason: "needs review"},
+			{Name: "verification", Status: "continue", Code: "proof-incomplete", Reason: "needs review"},
+		}
+		if concrete {
+			checks[2].Target, checks[2].Evidence = "Submission.lean:10", "submission checker rejected sorry"
+		}
+		verdict, _ := json.Marshal(agentVerifierResponse{Status: "continue", Reason: "checking proof", Checks: checks})
+		line, _ := json.Marshal(map[string]any{"type": "item.completed", "item": map[string]any{"type": "agent_message", "text": string(verdict)}})
+		m, cwd, _ := auditTestManager(t, "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '"+string(line)+"'\n")
+		if err := os.WriteFile(filepath.Join(cwd, "lakefile.toml"), []byte("name = 'submission'\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		p := auditTestPayload(cwd)
+		p.Profile, p.TaskPrompt = "formal-proof", "prove the theorem and run make final-audit"
+		result := m.runAgentVerifier(context.Background(), p, orchestrationTurnAssignment{CLI: "codex", WorkerSlot: orchestrationCodexSlotB}, 1, "verify")
+		if concrete && (auditIncomplete(result) || result.Attempts != 1) || !concrete && (!auditIncomplete(result) || result.Attempts != 2) {
+			t.Fatalf("concrete=%t attempts=%d result=%+v", concrete, result.Attempts, result)
+		}
 	}
 }
 

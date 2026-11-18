@@ -303,11 +303,15 @@ execution permissions or verifier quorum. Bridge
 stops at the first valid independent pass, preserving concrete conflicts already
 observed, and emits a visible `verifier.verdict`; any
 passing Agent Verifier without a concrete evidence conflict ends unused rounds
-with `verified-early`, while the Hub
-dispatches the next configured round when both verifiers continue and budget
-remains. Audits start with a 24-hour deadline and allow one audit-only retry at
-the same cap; exhaustion emits a terminal verification-timeout error rather than
-advancing the source-editing round. See [ADR-032](adr/032-audit-timeout-and-reuse.md).
+with `verified-early`. A submission evaluator selected by the independent Lean
+reviewer can settle the current task directly from its native command receipt.
+Audit attempts get a 24-hour deadline and one retry of the same reviewer when
+the process is killed, times out or returns an unusable verdict. Exhaustion
+records incomplete verification. Hub also recognizes older endpoints whose
+round contains only verifier invocation errors. A newer user instruction is
+evaluated under its own input version. See
+[the audit contract](features/audit-timeout-and-final-evidence.md) and
+[ADR-032](adr/032-audit-timeout-and-reuse.md).
 Final rounds still verify; budget exhaustion is `max-turns` with a
 blocked conclusion unless independently verified. Bounded source/usage/blocker
 observations persist in graph JSON across internal rounds, reset on a new user
@@ -318,6 +322,12 @@ Plan output, progress and checkboxes never enter completion adjudication.
 Verified execution candidates atomically cancel undispatched graph successors;
 only reviewer samples count toward stagnation. Task identity prevents reuse across
 follow-up tasks. Independent agent checks are serialized across runs.
+
+Managed Bridge endpoints trust the release key in their installed bootstrap.
+Hub serves signed platform manifests and grants handoff to an idle endpoint.
+Its launcher commits a verified release after the candidate registers. A failed
+trial restores its previous working binary. See
+[managed endpoint releases](adr/033-managed-endpoint-releases.md).
 See [ADR-020](adr/020-independent-early-run-completion.md) and
 [independent early completion](features/independent-early-run-completion.md).
 Formal-proof guidance is opt-in

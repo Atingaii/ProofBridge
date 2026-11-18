@@ -21,6 +21,7 @@ import (
 )
 
 type Client struct {
+	release        *managedRelease
 	usageScanMu    sync.Mutex
 	cfg            *config.Config
 	version        string
@@ -57,6 +58,9 @@ func (c *Client) Run(ctx context.Context) error {
 	c.machineID = machineID
 	c.hostname = hostname
 	c.instance = store.NewID("bin")
+	if c.release != nil {
+		c.instance = c.release.instance
+	}
 	c.cliConfig, err = newCLIConfigManager(c.cfg)
 	if err != nil {
 		return fmt.Errorf("initialize CLI configuration switcher: %w", err)
@@ -81,6 +85,9 @@ func (c *Client) Run(ctx context.Context) error {
 			return nil
 		}
 		err := c.connectOnce(ctx, token)
+		if err == ErrReleaseDrained {
+			return err
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -170,13 +177,14 @@ func (c *Client) connectOnce(ctx context.Context, token string) error {
 	capabilities := BridgeCapabilities(c.cfg)
 	capabilities.ConfigSwitcher = c.cliConfig.capability()
 	reg := protocol.RegisterPayload{
-		Name:         c.cfg.Bridge.Name,
-		MachineID:    c.machineID,
-		Hostname:     c.hostname,
-		Version:      c.version,
-		Instance:     c.instance,
-		WorkingDirs:  DiscoverWorkingDirs(c.cfg),
-		Capabilities: capabilities,
+		ManagedStartup: c.release != nil,
+		Name:           c.cfg.Bridge.Name,
+		MachineID:      c.machineID,
+		Hostname:       c.hostname,
+		Version:        c.version,
+		Instance:       c.instance,
+		WorkingDirs:    DiscoverWorkingDirs(c.cfg),
+		Capabilities:   capabilities,
 	}
 	if err := ws.WriteJSON(protocol.MustEnvelope(protocol.TypeRegister, "", reg)); err != nil {
 		return err
@@ -195,6 +203,37 @@ func (c *Client) connectOnce(ctx context.Context, token string) error {
 	registered, err := protocol.Decode[protocol.RegisteredPayload](ack)
 	if err != nil {
 		return err
+	}
+	var releaseRequests <-chan struct{}
+	if c.release != nil {
+		if err := c.release.registered(); err != nil {
+			return err
+		}
+		if registered.ManagedHandoff {
+			_ = ws.SetReadDeadline(time.Now().Add(15 * time.Second))
+			if err := ws.WriteJSON(protocol.MustEnvelope(protocol.TypeReleaseHandoff, "", protocol.ReleaseHandoffPayload{Action: "ready"})); err != nil {
+				return err
+			}
+			var reply protocol.Envelope
+			if err := ws.ReadJSON(&reply); err != nil {
+				return err
+			}
+			permit, err := protocol.Decode[protocol.ReleaseHandoffPayload](reply)
+			if err != nil || reply.Type != protocol.TypeReleaseHandoff || permit.Action != "ready" {
+				return fmt.Errorf("release registration did not obtain a serving permit")
+			}
+		}
+		if err := c.release.confirmed(); err != nil {
+			return err
+		}
+		if registered.ManagedHandoff {
+			if err := ws.WriteJSON(protocol.MustEnvelope(protocol.TypeReleaseHandoff, "", protocol.ReleaseHandoffPayload{Action: "serving"})); err != nil {
+				return err
+			}
+		}
+		if registered.ManagedHandoff {
+			releaseRequests = c.release.requests
+		}
 	}
 	slog.Info("[bridge] connected", "agent_id", registered.AgentID, "hub", c.cfg.Bridge.HubURL, "runner", c.cfg.Bridge.Runner)
 	c.connectedAt = time.Now()
@@ -234,6 +273,9 @@ func (c *Client) connectOnce(ctx context.Context, token string) error {
 	// must already have an active consumer.
 	c.sessions.AttachOut(writec)
 	c.orchestrations.AttachOut(writec)
+	releaseReplies := make(chan string, 1)
+	readStop := make(chan struct{})
+	defer close(readStop)
 	go func() {
 		for {
 			var env protocol.Envelope
@@ -242,6 +284,17 @@ func (c *Client) connectOnce(ctx context.Context, token string) error {
 				return
 			}
 			_ = ws.SetReadDeadline(time.Now().Add(readTimeout))
+			if env.Type == protocol.TypeReleaseHandoff {
+				h, err := protocol.Decode[protocol.ReleaseHandoffPayload](env)
+				if c.release != nil && err == nil && (h.Action == "busy" || h.Action == "granted") {
+					select {
+					case releaseReplies <- h.Action:
+					case <-readStop:
+						return
+					}
+				}
+				continue
+			}
 			c.handleEnvelope(ctx, env, writec)
 		}
 	}()
@@ -257,8 +310,35 @@ func (c *Client) connectOnce(ctx context.Context, token string) error {
 	// Detach before CloseAll on every exit path: the cancellation events that
 	// CloseAll triggers must land in the managers' pending buffers (flushed on
 	// reconnect), not in a write channel whose writer goroutine already died.
+	var drainRequestedAt time.Time
 	for {
 		select {
+		case <-releaseRequests:
+			if (drainRequestedAt.IsZero() || time.Since(drainRequestedAt) >= 90*time.Second) && c.releaseIdle() {
+				select {
+				case writec <- protocol.MustEnvelope(protocol.TypeReleaseHandoff, "", protocol.ReleaseHandoffPayload{Action: "request"}):
+					drainRequestedAt = time.Now()
+				default:
+				}
+			}
+		case action := <-releaseReplies:
+			if !drainRequestedAt.IsZero() && action == "granted" {
+				if c.releaseIdle() {
+					c.sessions.DetachOut(writec)
+					c.orchestrations.DetachOut(writec)
+					c.sessions.CloseAll()
+					c.orchestrations.CloseAll()
+					return ErrReleaseDrained
+				}
+				select {
+				case writec <- protocol.MustEnvelope(protocol.TypeReleaseHandoff, "", protocol.ReleaseHandoffPayload{Action: "resume"}):
+				case <-ctx.Done():
+					return ctx.Err()
+				case err := <-done:
+					return err
+				}
+			}
+			drainRequestedAt = time.Time{}
 		case <-ctx.Done():
 			c.sessions.DetachOut(writec)
 			c.orchestrations.DetachOut(writec)

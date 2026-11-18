@@ -66,6 +66,9 @@ func (s *Server) handleBridgeWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	conn := NewBridgeConn(agent.ID, ws, s.cfg.Hub.MaxBridgeSendQueue, reg.Capabilities, strings.TrimSpace(reg.Version))
+	if reg.ManagedStartup {
+		conn.releasePhase = "starting"
+	}
 	s.pool.RegisterAgent(conn)
 	disconnectReason := "bridge reverse WebSocket closed"
 	defer func() {
@@ -75,15 +78,17 @@ func (s *Server) handleBridgeWS(w http.ResponseWriter, r *http.Request) {
 	go conn.WriteLoop(s.websocketPingInterval())
 	defer conn.Close()
 
-	if err := conn.Send(protocol.MustEnvelope(protocol.TypeRegistered, "", protocol.RegisteredPayload{AgentID: agent.ID})); err != nil {
+	if err := conn.wsSender.Send(protocol.MustEnvelope(protocol.TypeRegistered, "", protocol.RegisteredPayload{AgentID: agent.ID, ManagedHandoff: reg.ManagedStartup})); err != nil {
 		return
 	}
 	// Registration acknowledgement must be the first outbound frame. The
 	// Bridge waits for it before starting its normal reader, so reconnect work
 	// queued earlier would be mistaken for a failed handshake.
-	s.dispatchReadyTaskGraphsForAgent(r.Context(), agent.ID)
+	if !reg.ManagedStartup {
+		s.dispatchReadyTaskGraphsForAgent(r.Context(), agent.ID)
+		s.scheduleHistoricalUsageBackfill(agent.ID)
+	}
 	slog.Info("[hub] bridge connected", "agent_id", agent.ID, "machine_id", agent.MachineID, "name", agent.Name)
-	s.scheduleHistoricalUsageBackfill(agent.ID)
 
 	ticker := time.NewTicker(s.websocketPingInterval())
 	defer ticker.Stop()
@@ -101,6 +106,10 @@ func (s *Server) handleBridgeWS(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			_ = ws.SetReadDeadline(time.Now().Add(s.bridgeReadTimeout()))
+			if env.Type == protocol.TypeReleaseHandoff {
+				s.handleReleaseHandoff(r.Context(), conn, env)
+				continue
+			}
 			s.handleBridgeEnvelope(r.Context(), agent.ID, env)
 		}
 	}()
@@ -228,7 +237,7 @@ func (s *Server) scheduleAgentRunFailure(agentID, instance string, delay time.Du
 		if delay > 0 {
 			time.Sleep(delay)
 		}
-		if delay > 0 && s.pool.AgentOnline(agentID) {
+		if delay > 0 && s.pool.agentConnected(agentID) {
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

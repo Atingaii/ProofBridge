@@ -2,15 +2,21 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/tencent/codex-bridge/internal/bridge"
+	"github.com/tencent/codex-bridge/internal/bridgeupdate"
 	"github.com/tencent/codex-bridge/internal/config"
 	"github.com/tencent/codex-bridge/internal/hub"
 	"github.com/tencent/codex-bridge/internal/logger"
@@ -18,12 +24,17 @@ import (
 )
 
 var (
-	Version   = "dev"
-	BuildTime = "unknown"
+	Version                = "dev"
+	BuildTime              = "unknown"
+	BridgeReleasePublicKey = ""
+	BridgeReleaseSequence  = "0"
 )
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
+		if errors.Is(err, bridge.ErrReleaseDrained) {
+			os.Exit(bridgeupdate.DrainedExit)
+		}
 		_, _ = fmt.Fprintf(os.Stderr, "[fatal] %v\n", err)
 		os.Exit(1)
 	}
@@ -34,6 +45,10 @@ func run(args []string) error {
 	if len(args) > 0 {
 		cmd = args[0]
 		args = args[1:]
+	}
+
+	if cmd == "release-info" {
+		return json.NewEncoder(os.Stdout).Encode(managedIdentity())
 	}
 
 	cfg, err := config.Load("configs")
@@ -56,6 +71,11 @@ func run(args []string) error {
 		return bridge.RunStrictWorkspaceSandbox(args)
 	case "connect":
 		return runConnect(cfg, args)
+	case "managed-connect":
+		if len(args) < 2 {
+			return errors.New("managed worker needs its supervisor")
+		}
+		return runConnectMode(cfg, args[1:], args[0])
 	case "link":
 		return runLink(cfg, args)
 	case "user":
@@ -80,8 +100,16 @@ func runClaudeApprovalMCP(args []string) error {
 	return bridge.RunClaudeApprovalMCPFromEnv(*socketPath)
 }
 
-func runConnect(cfg *config.Config, args []string) error {
+func managedIdentity() bridgeupdate.Identity {
+	seq, _ := strconv.ParseInt(BridgeReleaseSequence, 10, 64)
+	return bridgeupdate.Identity{Sequence: seq, Version: Version, Platform: runtime.GOOS + "-" + runtime.GOARCH, PublicKey: BridgeReleasePublicKey}
+}
+
+func runConnect(cfg *config.Config, args []string) error { return runConnectMode(cfg, args, "") }
+
+func runConnectMode(cfg *config.Config, args []string, instance string) error {
 	fs := flag.NewFlagSet("connect", flag.ContinueOnError)
+	updates := fs.Bool("managed-updates", true, "adopt signed releases when idle")
 	hubURL := fs.String("hub", cfg.Bridge.HubURL, "hub URL")
 	name := fs.String("name", "", "CLI endpoint name")
 	cwd := fs.String("cwd", "", "workspace directory")
@@ -151,7 +179,31 @@ func runConnect(cfg *config.Config, args []string) error {
 	if err := preflightRunner(cfg); err != nil {
 		return err
 	}
-	return bridge.NewClient(cfg, Version).Run(context.Background())
+	client := bridge.NewClient(cfg, Version)
+	if instance != "" {
+		control := bridgeupdate.OpenChild()
+		client.ConfigureManagedRelease(instance, control.Registered, control.Confirmed, control.Requests())
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			select {
+			case <-control.Done():
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		return client.Run(ctx)
+	}
+	if *updates && BridgeReleasePublicKey != "" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		err := bridgeupdate.Run(ctx, managedIdentity(), *hubURL, expandUserPath(*machineIDFile), *cwd, args)
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return err
+	}
+	return client.Run(context.Background())
 }
 
 // preflightRunner verifies that an opt-in runner's external dependencies exist
@@ -246,7 +298,7 @@ func normalizeConnectArgs(args []string) (string, []string, error) {
 }
 
 func isBoolConnectFlag(arg string) bool {
-	return arg == "-h" || arg == "--help" || arg == "--strict-workspace"
+	return arg == "-h" || arg == "--help" || arg == "--strict-workspace" || arg == "--managed-updates"
 }
 
 func runHub(cfg *config.Config) error {

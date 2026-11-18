@@ -44,21 +44,49 @@ func (m *OrchestrationManager) runAgentVerifier(ctx context.Context, payload pro
 		result.Usage = combineModelUsage(usage)
 		result.Attempts = attempt + 1
 		result.TimeoutSeconds = int(limit.Seconds())
-		if !result.TimedOut || ctx.Err() != nil {
+		if !auditIncomplete(result) || ctx.Err() != nil {
 			return result
 		}
 		if attempt+1 < len(limits) {
-			m.emit(payload.RunID, protocol.OrchestrationEventPayload{Kind: "bridge.note", Source: "bridge", Role: "verifier", Content: fmt.Sprintf("独立审核超时（%s），仅重试同一审核，下一次时限为 %s；不进入代码修改轮。", limit, limits[attempt+1]), BridgeNoteData: &protocol.BridgeNoteData{Category: "verification-timeout-retry"}})
+			category := "verification-incomplete-retry"
+			if result.TimedOut {
+				category = "verification-timeout-retry"
+			}
+			m.emit(payload.RunID, protocol.OrchestrationEventPayload{Kind: "bridge.note", Source: "bridge", Role: "verifier", Content: fmt.Sprintf("独立审核未完成（%s）。正在重试同一次审核，时限 %s。", firstNonEmpty(result.Error, result.Reason), limits[attempt+1]), BridgeNoteData: &protocol.BridgeNoteData{Category: category}})
 		}
 	}
-	result.Reason = "independent audit exhausted its maximum timeout; verification is incomplete"
-	result.Error = result.Reason
 	return result
 }
 
+// A failed invocation (including SIGKILL without a context deadline), malformed
+// response or unavailable checker is evidence about the audit, not the source.
+func auditIncomplete(result agentVerifierResult) bool {
+	if result.Status == verifierVerdictPass {
+		return false
+	}
+	if result.Error != "" || result.TimedOut {
+		return true
+	}
+	unavailable := false
+	for _, check := range result.Checks {
+		if check.Status != verifierVerdictPass {
+			if check.Code != "environment-unavailable" {
+				return false
+			}
+			unavailable = true
+		}
+	}
+	return unavailable
+}
+
 func auditTimeoutText(s string) bool {
-	lower := strings.ToLower(s)
-	for _, token := range []string{"timeout", "timed out", "deadline exceeded", "超时", "exit status 124", "exit code 124", "exit_code=124"} {
+	lower := strings.TrimSpace(strings.ToLower(s))
+	if lower == "timeout" || strings.HasSuffix(lower, " timeout") {
+		return true
+	}
+	// The command name in e.g. "timeout 24h make final-audit" says
+	// nothing about why the evaluator exited.
+	for _, token := range []string{"timed out", "etimedout", "timeout after", "timeout exceeded", "timeout expired", "deadline exceeded", "超时", "exit status 124", "exit code 124", "exit_code=124"} {
 		if strings.Contains(lower, token) {
 			return true
 		}
@@ -86,13 +114,22 @@ func reportedAuditTimeout(result agentVerifierResult) bool {
 	return timeout || auditTimeoutText(result.Reason)
 }
 
-func verifierTimeoutExhausted(results []agentVerifierResult) bool {
+func incompleteAuditReason(results []agentVerifierResult) (terminal, detail string) {
 	for _, result := range results {
-		if result.TimedOut {
-			return true
+		for _, check := range result.Checks {
+			if concreteVerifierBlocker(check) && !result.TimedOut {
+				return "", ""
+			}
+		}
+		if auditIncomplete(result) {
+			terminal = "verification-incomplete"
+			if result.TimedOut {
+				terminal = "verification-timeout"
+			}
+			detail = firstNonEmpty(result.Error, result.Reason)
 		}
 	}
-	return false
+	return terminal, detail
 }
 
 var finalAuditMarker = regexp.MustCompile(`(?m)^FINAL AUDIT PASSED(?:[ (:].*)?\.?\r?$`)
@@ -112,6 +149,9 @@ func reviewerFinalAuditVerdict(ctx context.Context, payload protocol.Orchestrati
 		return protocol.VerifierVerdict{}, false
 	}
 	cwd := firstNonEmpty(payload.RunCWD, payload.CWD)
+	if isLakeProject(cwd) {
+		return protocol.VerifierVerdict{}, false
+	}
 	for i := len(record.Tools) - 1; i >= 0; i-- {
 		tool := record.Tools[i]
 		tool.Command = auditCommandText(tool.Command)

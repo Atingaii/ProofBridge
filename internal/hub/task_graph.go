@@ -425,6 +425,55 @@ func verifiedEarly(payload protocol.OrchestrationEventPayload) bool {
 		payload.RunEndData.VerifierVerdict != nil && payload.RunEndData.VerifierVerdict.Status == "pass"
 }
 
+// Older Bridges returned a successful round with only per-verifier execution
+// errors. There is no proof obligation in that verdict to send to an editor.
+func legacyAuditIncomplete(verdict *protocol.VerifierVerdict) bool {
+	if verdict == nil || verdict.Status != "continue" || len(verdict.Checkers) == 0 {
+		return false
+	}
+	for _, c := range verdict.Checkers {
+		if (c.Name != "agent-1/execution" && c.Name != "agent-2/execution") || c.Status != "continue" || c.Target != "" || c.Code != "" {
+			return false
+		}
+		switch c.Reason {
+		case "verifier model call failed", "verifier returned an invalid structured verdict", "verifier project workspace is unavailable":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) normalizeIncompleteReview(ctx context.Context, graph store.OrchestrationTaskGraph, event *protocol.OrchestrationEventPayload) error {
+	end := event.RunEndData
+	if event.Task.Role != store.TaskRoleReviewer || end == nil {
+		return nil
+	}
+	legacy := event.Kind == "run.end" && end.TerminalReason == "max-turns" && legacyAuditIncomplete(end.VerifierVerdict)
+	if !legacy && !(event.Kind == "run.error" && (end.TerminalReason == "verification-timeout" || end.TerminalReason == "verification-incomplete")) {
+		return nil
+	}
+	var accepted protocol.OrchestrationStartPayload
+	if err := json.Unmarshal([]byte(graph.PayloadJSON), &accepted); err != nil {
+		return err
+	}
+	version, err := s.orchestrationInputVersion(ctx, event.RunID)
+	if err != nil {
+		return err
+	}
+	if version != accepted.InputVersion {
+		// A newer instruction owns the next phase. The normal graph advance
+		// clears the old verification history while holding orchestrationInputMu.
+		event.Kind, event.Error, event.RunEndData, event.RunConclusion = "run.end", "", nil, nil
+	} else if legacy {
+		reason := "独立审核未完成。执行端的审核调用未返回有效结论，已停止派发证明轮次。"
+		event.Kind, event.Error, event.Content = "run.error", reason, reason
+		end.TerminalReason = "verification-incomplete"
+		event.RunConclusion = &protocol.RunConclusion{Outcome: "blocked", VerificationStatus: "unknown", Summary: reason}
+	}
+	return nil
+}
+
 type orchestrationTaskInstruction struct {
 	Instruction string `json:"instruction"`
 }
@@ -814,6 +863,9 @@ func (s *Server) handleTaskGraphEvent(ctx context.Context, payload protocol.Orch
 	}
 	if graph.ID != payload.Task.GraphID {
 		return true, errors.New("stale orchestration task graph event")
+	}
+	if err := s.normalizeIncompleteReview(ctx, graph, &payload); err != nil {
+		return true, err
 	}
 	status := ""
 	if payload.Kind == "run.start" {

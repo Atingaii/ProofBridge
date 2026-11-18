@@ -264,7 +264,9 @@ flowchart LR
 
 Android 7.0+ 在线客户端：[下载签名 APK](https://codex.sparkon.cn/android/codex-bridge-1.1.0.apk)（18,408 bytes），[SHA256](https://codex.sparkon.cn/android/codex-bridge-1.1.0.apk.sha256)。安装实际占用和宿主加 WebView renderer 的运行内存仍需真机测量。
 
-网站部署**不会**升级或重启已连接的 Bridge。原生问答与运行中追加指令需要匹配的
+运维发布签名版 Bridge 后，已启用托管更新的端点会在空闲时自动升级。旧端点首次需要安装带发布公钥的版本。[托管更新说明](docs/features/managed-bridge-updates.md)
+
+单独部署网站时只更新站点。原生问答与运行中追加指令需要匹配的
 Hub、前端、Bridge、CLI 和功能开放策略。具体门禁见
 [原生问答](docs/features/native-structured-user-input.md)和
 [动态输入](docs/features/dynamic-orchestration-input.md)；满足 CLI 最低版本不代表

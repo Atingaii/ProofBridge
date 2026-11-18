@@ -1213,7 +1213,7 @@ func appServerToolEvent(item map[string]any) *RunnerToolEvent {
 	if itemType != "commandExecution" {
 		return nil
 	}
-	tool := &RunnerToolEvent{}
+	tool := &RunnerToolEvent{CWD: firstString(item, "cwd", "workingDirectory")}
 	tool.ID, _ = item["id"].(string)
 	tool.Command, _ = item["command"].(string)
 	tool.Status, _ = item["status"].(string)

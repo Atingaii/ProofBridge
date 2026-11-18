@@ -94,6 +94,21 @@ func TestIndependentCompletionIgnoresPlanning(t *testing.T) {
 	}
 }
 
+func TestCompletionIdentitySurvivesAttemptChangesButNotNewInput(t *testing.T) {
+	p := protocol.OrchestrationStartPayload{RunID: "run:attempt-A", TaskPrompt: "prove", CWD: "/src", TaskGraph: &protocol.TaskGraphPayload{Tasks: []protocol.TaskPayload{{AttemptID: "attempt-A"}}}}
+	sample := func() string { return completionSample(p, orchestrationTurn{}, "proof").TaskDigest }
+	original := sample()
+	p.RunID = "run:attempt-B"
+	p.TaskGraph.Tasks[0].AttemptID = "attempt-B"
+	if sample() != original {
+		t.Fatal("a new reviewer attempt changed the task identity")
+	}
+	p.InputVersion++
+	if sample() == original {
+		t.Fatal("an instruction change reused an old review")
+	}
+}
+
 func TestConcreteVerifierConflictAndStableIdentity(t *testing.T) {
 	pass := agentVerifierResult{Agent: "a", Status: "pass", Checks: []protocol.VerifierCheck{{Name: "task", Status: "pass"}}}
 	fail := agentVerifierResult{Agent: "b", Status: "continue", Checks: []protocol.VerifierCheck{{Name: "verification", Status: "continue", Code: "proof-incomplete", Target: "Sort.sort_correct", Evidence: "Print Assumptions Sort.sort_correct: sort_correct", Reason: "sort_correct unproved"}}}

@@ -4896,6 +4896,13 @@ import json
 import pathlib
 import sys
 
+if sys.argv[1:2] == ["exec"]:
+    prompt = sys.stdin.read()
+    assert "PROOFBRIDGE_AGENT_VERIFIER_V1" in prompt
+    verdict = {"status":"pass","reason":"checked","checks":[{"name":name,"status":"pass","reason":"checked"} for name in ("task","workspace","verification")]}
+    print(json.dumps({"type":"item.completed","item":{"type":"agent_message","text":json.dumps(verdict)}}))
+    raise SystemExit(0)
+
 state_path = pathlib.Path(` + string(stateRaw) + `)
 reject_count = ` + strconv.Itoa(rejectCount) + `
 state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {"processes": 0, "turnStarts": 0, "prompts": []}

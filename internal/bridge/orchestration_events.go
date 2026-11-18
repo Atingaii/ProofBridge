@@ -216,6 +216,14 @@ func (m *OrchestrationManager) emitTool(runID, turnID, role, cli string, tool *R
 		m.flushCommandProgressKey(key, nil)
 	}
 	m.emit(runID, event)
+	if !tool.Progress && role == store.TaskRoleReviewer {
+		m.mu.Lock()
+		reviewer := m.leanReviewers[turnID]
+		m.mu.Unlock()
+		if reviewer != nil {
+			reviewer.observe(*tool, turnID)
+		}
+	}
 }
 
 func (m *OrchestrationManager) queueCommandProgress(key commandProgressKey, event protocol.OrchestrationEventPayload) {

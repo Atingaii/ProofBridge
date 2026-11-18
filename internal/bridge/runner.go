@@ -132,6 +132,7 @@ type RunnerNotice struct {
 }
 
 type RunnerToolEvent struct {
+	CWD                   string
 	ID                    string
 	Status                string
 	Command               string
@@ -447,7 +448,7 @@ func commandExecutionEvent(item map[string]any) *RunnerToolEvent {
 	if command == "" && output == "" && status == "" && id == "" {
 		return nil
 	}
-	return &RunnerToolEvent{ID: id, Status: status, Command: command, Output: output, ExitCode: exitCode}
+	return &RunnerToolEvent{CWD: firstString(item, "cwd", "working_directory"), ID: id, Status: status, Command: command, Output: output, ExitCode: exitCode}
 }
 
 func commandString(item map[string]any) string {

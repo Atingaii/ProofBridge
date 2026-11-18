@@ -2,10 +2,11 @@ GO ?= go
 BINARY ?= bin/codex-bridge
 PREFIX ?= /usr/local
 DOWNLOAD_DIR ?= bin/downloads
+RELEASE_PLATFORM ?= $(shell $(GO) env GOOS)-$(shell $(GO) env GOARCH)
 VERSION ?= dev
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
-.PHONY: help tidy frontend frontend-8088 build build-all bridge-downloads portable-package test benchmark-formal-proof doc-lint run-hub run-bridge install clean docker
+.PHONY: help tidy frontend frontend-8088 build build-all bridge-downloads managed-bridge-release portable-package test benchmark-formal-proof doc-lint run-hub run-bridge install clean docker
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -32,6 +33,12 @@ bridge-downloads: ## Build Linux and macOS amd64/arm64 endpoint binaries sequent
 			-ldflags "-s -w -X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME)" \
 			-o "$(DOWNLOAD_DIR)/codex-bridge-$$platform-$$arch" . || exit $$?; \
 	done; done
+
+managed-bridge-release: ## Build and publish a signed platform release for managed endpoints
+	@test -n "$(RELEASE_SIGNING_KEY)" && test -n "$(RELEASE_SEQUENCE)" || { echo 'Set RELEASE_SIGNING_KEY and RELEASE_SEQUENCE'; exit 2; }
+	python3 scripts/publish-bridge-release.py build --go "$(GO)" --key "$(RELEASE_SIGNING_KEY)" \
+		--directory "$(DOWNLOAD_DIR)/releases" --bootstrap-directory "$(DOWNLOAD_DIR)" \
+		--platform "$(RELEASE_PLATFORM)" --version "$(VERSION)" --sequence "$(RELEASE_SEQUENCE)"
 
 portable-package: ## Build a self-contained Linux amd64 tar.gz under dist/
 	./scripts/build-portable-package.sh

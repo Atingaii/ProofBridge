@@ -773,10 +773,27 @@ func TestSparseProgressPreservesReviewBoundaryAndPlan(t *testing.T) {
 }
 
 func TestAuditTimeoutStopsDurableGraphWithoutAnotherEditingRound(t *testing.T) {
+	assertAuditStopsGraph(t, "run.error", "verification-timeout", protocol.VerifierVerdict{Status: "continue", Reason: "audit timed out"}, "verification-timeout")
+}
+
+func TestLegacyKilledVerifiersStopDynamicGraph(t *testing.T) {
+	verdict := protocol.VerifierVerdict{Status: "continue", Reason: "neither Agent Verifier confirmed completion", Checkers: []protocol.VerifierCheck{
+		{Name: "agent-1/execution", Status: "continue", Reason: "verifier model call failed"},
+		{Name: "agent-2/execution", Status: "continue", Reason: "verifier model call failed"},
+	}}
+	assertAuditStopsGraph(t, "run.end", "max-turns", verdict, "verification-incomplete")
+	verdict.Checkers[1] = protocol.VerifierCheck{Name: "agent-2/verification", Status: "continue", Code: "proof-incomplete", Target: "Submission.lean", Evidence: "sorry"}
+	if legacyAuditIncomplete(&verdict) {
+		t.Fatal("a real proof defect was lost while handling an infrastructure failure")
+	}
+}
+
+func assertAuditStopsGraph(t *testing.T, kind, terminal string, verdict protocol.VerifierVerdict, want string) {
+	t.Helper()
 	s, st, userID, agentID := newOrchestrationTestServer(t)
 	ctx := context.Background()
 	run := createOrchestrationRun(t, st, userID, agentID)
-	payload := protocol.OrchestrationStartPayload{RunID: run.ID, Mode: "collaboration", WorkerPair: protocol.WorkerPairCodexCodex, Prompt: "verify", Round: 1, MaxRounds: 4, MaxTurnsRequested: 4, MaxTurns: 1, CWD: t.TempDir()}
+	payload := protocol.OrchestrationStartPayload{RunID: run.ID, Mode: "collaboration", ExecutionMode: "dynamic", WorkerPair: protocol.WorkerPairCodexCodex, Prompt: "verify", Round: 1, MaxTurns: 1, CWD: t.TempDir()}
 	raw, _ := json.Marshal(payload)
 	digest := taskPayloadDigest(string(raw))
 	graph, err := st.CreateOrchestrationTaskGraph(ctx, run.ID, string(raw), digest, orchestrationTaskSpecs(digest, payload.WorkerPair, payload.Mode))
@@ -800,7 +817,7 @@ func TestAuditTimeoutStopsDurableGraphWithoutAnotherEditingRound(t *testing.T) {
 	if ref.Role != store.TaskRoleReviewer {
 		t.Fatal("reviewer not reached")
 	}
-	s.handleOrchestrationEvent(ctx, protocol.MustEnvelope(protocol.TypeOrchestrationEvent, "", protocol.OrchestrationEventPayload{RunID: run.ID, Task: &ref, Kind: "run.error", Status: store.OrchestrationFailed, Error: "independent audit timeout exhausted", RunEndData: &protocol.RunEndData{TerminalReason: "verification-timeout", VerifierVerdict: &protocol.VerifierVerdict{Status: "continue", Reason: "audit timed out"}}}))
+	s.handleOrchestrationEvent(ctx, protocol.MustEnvelope(protocol.TypeOrchestrationEvent, "", protocol.OrchestrationEventPayload{RunID: run.ID, Task: &ref, Kind: kind, RunEndData: &protocol.RunEndData{TerminalReason: terminal, VerifierVerdict: &verdict}}))
 	loaded, err := st.OrchestrationRunByID(ctx, run.ID, userID)
 	if err != nil || loaded.Status != store.OrchestrationFailed {
 		t.Fatalf("timeout outcome: %#v %v", loaded, err)
@@ -816,7 +833,7 @@ func TestAuditTimeoutStopsDurableGraphWithoutAnotherEditingRound(t *testing.T) {
 	}
 	found := false
 	for _, e := range events {
-		if e.Kind == "run.error" && e.RunEndData != nil && e.RunEndData.TerminalReason == "verification-timeout" {
+		if e.Kind == "run.error" && e.RunEndData != nil && e.RunEndData.TerminalReason == want {
 			found = true
 		}
 	}

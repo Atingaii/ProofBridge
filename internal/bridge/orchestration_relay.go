@@ -15,16 +15,18 @@ import (
 )
 
 type orchestrationTurn struct {
-	TurnID     string
-	Role       string
-	CLI        string
-	WorkerSlot string
-	Content    string
-	Handoff    string
-	Relay      orchestrationRelayPacket
-	Err        string
-	Tools      []RunnerToolEvent
-	Usage      orchestrationUsage
+	TurnID      string
+	Role        string
+	CLI         string
+	WorkerSlot  string
+	Content     string
+	Handoff     string
+	Relay       orchestrationRelayPacket
+	Err         string
+	Tools       []RunnerToolEvent
+	Usage       orchestrationUsage
+	LeanReceipt *leanReceipt
+	LeanFailure *protocol.VerifierCheck
 }
 
 func (m *OrchestrationManager) emitTurnUsage(runID string, record orchestrationTurn) {

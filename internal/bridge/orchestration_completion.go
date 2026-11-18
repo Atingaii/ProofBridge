@@ -91,7 +91,11 @@ func completionSourceDigestBefore(ctx context.Context, root string, notAfter tim
 }
 
 func completionSample(payload protocol.OrchestrationStartPayload, record orchestrationTurn, digest string) protocol.CompletionObservation {
-	identity := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%s\x00%s", payload.RunID, payload.PromptSeq, firstNonEmpty(payload.TaskPrompt, payload.Prompt), firstNonEmpty(payload.RunCWD, payload.CWD))))
+	runID := payload.RunID
+	if graph := payload.TaskGraph; graph != nil && len(graph.Tasks) == 1 && graph.Tasks[0].AttemptID != "" {
+		runID = strings.TrimSuffix(runID, ":"+graph.Tasks[0].AttemptID)
+	}
+	identity := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%d\x00%s\x00%s", runID, payload.PromptSeq, payload.InputVersion, firstNonEmpty(payload.TaskPrompt, payload.Prompt), firstNonEmpty(payload.RunCWD, payload.CWD))))
 	sample := protocol.CompletionObservation{SourceDigest: digest, TaskDigest: hex.EncodeToString(identity[:])}
 	if payload.TaskGraph != nil {
 		sample.Round = payload.TaskGraph.Round

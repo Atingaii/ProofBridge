@@ -44,10 +44,19 @@ func (p *Pool) UnregisterAgent(agentID string, conn *BridgeConn) {
 	}
 }
 
-func (p *Pool) AgentOnline(agentID string) bool {
+// An attached worker in registration or handoff remains connected for
+// disconnect recovery, while its admission gate can temporarily reject work.
+func (p *Pool) agentConnected(agentID string) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.agents[agentID] != nil
+}
+
+func (p *Pool) AgentOnline(agentID string) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	conn := p.agents[agentID]
+	return conn != nil && conn.acceptingWork()
 }
 
 func (p *Pool) CurrentAgent(agentID string, conn *BridgeConn) bool {
@@ -89,7 +98,7 @@ func (p *Pool) ShutdownAgentWithGrace(agentID, reason string, grace time.Duratio
 	if conn == nil {
 		return ErrAgentOffline
 	}
-	if err := conn.Send(protocol.MustEnvelope(protocol.TypeAgentShutdown, "", protocol.AgentShutdownPayload{Reason: reason})); err != nil {
+	if err := conn.wsSender.Send(protocol.MustEnvelope(protocol.TypeAgentShutdown, "", protocol.AgentShutdownPayload{Reason: reason})); err != nil {
 		conn.Close()
 		return err
 	}
@@ -276,6 +285,9 @@ func (s *wsSender) Close() {
 }
 
 type BridgeConn struct {
+	admission    sync.Mutex
+	releasePhase string // protected by admission; empty while serving
+
 	agentID      string
 	capabilities *protocol.BridgeCapabilities
 	version      string
@@ -303,7 +315,7 @@ func (p *Pool) AgentConnectionInfo(agentID string) (AgentConnectionInfo, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	conn := p.agents[agentID]
-	if conn == nil {
+	if conn == nil || !conn.acceptingWork() {
 		return AgentConnectionInfo{}, false
 	}
 	return AgentConnectionInfo{

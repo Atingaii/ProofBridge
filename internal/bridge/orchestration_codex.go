@@ -116,6 +116,22 @@ func (m *OrchestrationManager) runCodexInteractive(ctx context.Context, payload 
 	done := make(chan appServerTurnResult, 1)
 	runner := NewCodexAppServerRunner(m.cfg)
 	scope := newAppServerTurnScope(codex.threadID)
+	defer func() {
+		if !errors.Is(context.Cause(ctx), errLeanAuditAccepted) {
+			return
+		}
+		// The parent run stays live. Stop this exact native turn before an
+		// autonomous model can schedule another command. Some CLIs run behind
+		// a container transport, so just closing the local reader is insufficient.
+		thread, turn := scope.current()
+		if turn != "" {
+			interrupt, done := context.WithTimeout(context.Background(), appServerThreadUnsubscribeTimeout)
+			_, _ = codex.client.request(interrupt, "turn/interrupt", map[string]string{"threadId": thread, "turnId": turn})
+			done()
+		}
+		codex.client.closeWithTimeout(appServerPrepareCloseTimeout)
+		session.setCodexSessionLocked(workerSlot, nil)
+	}()
 	// The reader goroutine must not outlive this turn: without the turn-scoped
 	// cancel, a failed turn/start would leave it emitting deltas for a turn
 	// that already ended. The mutex covers tools/toolStarts, which the reader
@@ -166,6 +182,14 @@ func (m *OrchestrationManager) runCodexInteractive(ctx context.Context, payload 
 		}
 		return strings.TrimSpace(result.result.Content), snapshotTools(), codex.threadID, resumeMode, result.err
 	case <-ctx.Done():
+		if errors.Is(context.Cause(ctx), errLeanAuditAccepted) {
+			cancelTurn()
+			result := <-done
+			if len(result.result.Usage) > 0 {
+				m.recordNativeUsage(turnID, "codex", firstNonEmpty(codex.client.resolvedModel, runtime.model, codexBridgeModel(m.cfg)), result.result.Usage)
+			}
+			return strings.TrimSpace(result.result.Content), snapshotTools(), codex.threadID, resumeMode, ctx.Err()
+		}
 		return "", snapshotTools(), codex.threadID, resumeMode, ctx.Err()
 	}
 }

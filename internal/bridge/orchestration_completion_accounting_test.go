@@ -77,11 +77,8 @@ func TestIntermediateCompletionAndVerifierUsageBothModes(t *testing.T) {
 				verifiers := 0
 				verifierSlots := map[string]bool{}
 				for _, event := range events {
-					if event.Kind == "run.end" {
+					if event.Kind == "run.end" || event.Kind == "run.error" {
 						end = event
-					}
-					if event.Kind == "run.error" {
-						t.Fatalf("unexpected run error: %#v", event)
 					}
 					if event.Kind == "turn.usage" && event.Role == "verifier" {
 						verifiers++
@@ -95,11 +92,16 @@ func TestIntermediateCompletionAndVerifierUsageBothModes(t *testing.T) {
 				if verdict == "pass" && (end.RunConclusion == nil || end.RunConclusion.Outcome != "satisfied" || len(end.RunConclusion.UnmetObligations) > 0) {
 					t.Fatalf("passed verdict displayed blocked: %#v", end)
 				}
-				wantVerifiers := 2
+				wantUsageEvents := 2
 				if verdict == "pass" {
-					wantVerifiers = 1
+					wantUsageEvents = 1
 				}
-				if verifiers != wantVerifiers || verifierTokens != int64(wantVerifiers*15) || !verifierSlots["codex-a"] || (wantVerifiers == 2 && !verifierSlots["codex-b"]) {
+				if (end.Kind == "run.error") != (verdict == "invalid") || (end.RunEndData.TerminalReason == "verification-incomplete") != (verdict == "invalid") {
+					t.Fatalf("unexpected terminal state: %#v", end)
+				}
+				// Only a substantive continue needs the second slot. An invalid
+				// verdict consumes two attempts from the same verifier.
+				if verifiers != wantUsageEvents || verifierTokens != int64(wantUsageEvents*15) || !verifierSlots["codex-a"] || verifierSlots["codex-b"] != (verdict == "continue") {
 					t.Fatalf("lost verifier usage: %d events %d tokens", verifiers, verifierTokens)
 				}
 			})

@@ -28,12 +28,41 @@ work, risks and blocked handoffs still prevent direct closure. Later successful
 read-only commands preserve the result; writes and failed commands invalidate it. Existing logs may be inspected by
 independent verifiers; their provenance, current sources, full task scope and
 successful exit must be confirmed before accepting them without a rerun.
-Standalone log reuse recognizes a successful `cat` or native `Read` of a regular
+For projects without the Lean submission contract, standalone log reuse recognizes a successful `cat` or native `Read` of a regular
 workspace `.log` whose basename contains `final`, `audit`, and one of `review`,
 `independent`, or `verifier`, such as `ReviewerIndependentFinalAudit.log`.
 Conventional native `bash -lc` / `sh -c` wrappers are normalized before these
 checks. The file must contain the pass marker, predate the read completion, and be at
 least as new as every source file in the existing bounded source scan.
+
+## Lean submission evidence
+
+For a Lake project whose task calls for `make final-audit`, the designated
+independent reviewer owns the final decision. A worker's candidate still goes
+to that reviewer. Bridge registers the task revision, workspace and frozen
+evaluator inputs before editing begins under the service user’s local state directory. These records survive reconnection and a Bridge restart. It observes the reviewer's native tool
+events and binds a completed submission audit to the digest of the source files,
+build configuration, evaluator and frozen specification. Report and build output
+can change without changing that identity.
+
+After checking requirements outside the evaluator, the reviewer can use the
+ordinary native shell invocation `cd <project> && env PROOFBRIDGE_FINAL_REVIEW=1 timeout
+--kill-after=10s 24h make -j1 final-audit`. This declaration designates the
+command as its final decision. A native zero exit and the submission pass line
+immediately settle the reviewer turn. Bridge closes the native turn and
+publishes the normal verified run outcome. User cancellation and newer inputs
+retain their normal precedence. An ordinary independent final audit can also
+supply evidence for the reviewer's final handoff when the native event identifies this workspace. The fixed directory prefix on the designated command also supports CLIs that omit the native working directory. A reviewer with an already
+observed successful audit for the same task and source can use
+`: PROOFBRIDGE_FINAL_REVIEW` to adopt it without executing the evaluator again.
+
+The command observer accepts an audit through a terminal `pipefail` pipeline
+or a checked capture of the evaluator's actual status. A plain `tee` exit, a
+baseline audit, copied file, fabricated pass line or subsequent shell command
+cannot provide the required exit status. Lean log reuse requires Bridge's record
+of the independent execution, bound to the same scope and proof inputs.
+Source changes, changes to the evaluator, or a conflicting reviewer handoff
+invalidate the previous decision.
 
 ## Implementation
 
@@ -54,7 +83,7 @@ least as new as every source file in the existing bounded source scan.
 Deterministic CLI tests: timeout then success, capped repeated timeout with no new
 worker round, cancellation, retry usage, successful reviewer final audit with zero
 extra verifier invocations, relaxed handoff formats, safe read follow-ups, fresh independent log reads, and
-rejected prose/echo/failed/source-write/stale-log evidence.
+rejected prose/echo/failed/source-write/stale-log evidence. Replay the real masked pipeline, captured child status and logged `PIPESTATUS` forms. Exercise an unresponsive native reviewer after a successful submission, cancellation, backdated writes, source changes, frozen evaluator changes and restart reuse.
 Run Go suite, documentation lint, and build. Deploy the 8088 shared Hub and affected
 local Bridge only after checking active work; verify service health and versions.
 

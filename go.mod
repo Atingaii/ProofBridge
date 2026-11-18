@@ -11,6 +11,7 @@ require (
 	golang.org/x/sys v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.50.1
+	mvdan.cc/sh/v3 v3.12.0
 )
 
 require (
